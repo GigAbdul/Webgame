@@ -1,0 +1,145 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum LevelStatus {
+  DRAFT
+  SUBMITTED
+  OFFICIAL
+  ARCHIVED
+}
+
+enum LevelSourceType {
+  USER_CREATED
+  ADMIN_CREATED
+}
+
+enum Difficulty {
+  EASY
+  NORMAL
+  HARD
+  HARDER
+  INSANE
+  DEMON
+}
+
+enum GameSessionStatus {
+  STARTED
+  FAILED
+  COMPLETED
+  ABANDONED
+}
+
+enum AttemptResult {
+  FAILED
+  COMPLETED
+}
+
+model User {
+  id                      String         @id @default(cuid())
+  username                String         @unique
+  email                   String         @unique
+  passwordHash            String
+  role                    Role           @default(USER)
+  totalStars              Int            @default(0)
+  completedOfficialLevels Int            @default(0)
+  createdAt               DateTime       @default(now())
+  updatedAt               DateTime       @updatedAt
+  levels                  Level[]        @relation("AuthorLevels")
+  publishedLevels         Level[]        @relation("PublishedLevels")
+  sessions                GameSession[]
+  attempts                LevelAttempt[]
+  rewards                 LevelReward[]
+}
+
+model Level {
+  id              String          @id @default(cuid())
+  slug            String          @unique
+  title           String
+  description     String          @default("")
+  authorId        String
+  publishedById   String?
+  sourceType      LevelSourceType @default(USER_CREATED)
+  status          LevelStatus     @default(DRAFT)
+  difficulty      Difficulty?
+  starsReward     Int             @default(0)
+  isOfficial      Boolean         @default(false)
+  featured        Boolean         @default(false)
+  isVisible       Boolean         @default(true)
+  theme           String          @default("neon-grid")
+  dataJson        Json
+  versionNumber   Int             @default(1)
+  previewImageUrl String?
+  publishedAt     DateTime?
+  archivedAt      DateTime?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  author          User            @relation("AuthorLevels", fields: [authorId], references: [id], onDelete: Cascade)
+  publishedBy     User?           @relation("PublishedLevels", fields: [publishedById], references: [id], onDelete: SetNull)
+  sessions        GameSession[]
+  attempts        LevelAttempt[]
+  rewards         LevelReward[]
+
+  @@index([status, isOfficial, createdAt])
+  @@index([authorId, status])
+}
+
+model GameSession {
+  id               String            @id @default(cuid())
+  userId           String?
+  levelId          String
+  status           GameSessionStatus @default(STARTED)
+  startedAt        DateTime          @default(now())
+  endedAt          DateTime?
+  clientVersion    String?
+  progressPercent  Int?
+  completionTimeMs Int?
+  rewardGranted    Boolean           @default(false)
+  user             User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  level            Level             @relation(fields: [levelId], references: [id], onDelete: Cascade)
+  attempts         LevelAttempt[]
+
+  @@index([userId, levelId])
+}
+
+model LevelAttempt {
+  id               String        @id @default(cuid())
+  userId           String
+  levelId          String
+  gameSessionId    String?
+  result           AttemptResult
+  bestPercent      Int           @default(0)
+  completionTimeMs Int?
+  createdAt        DateTime      @default(now())
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  level            Level         @relation(fields: [levelId], references: [id], onDelete: Cascade)
+  gameSession      GameSession?  @relation(fields: [gameSessionId], references: [id], onDelete: SetNull)
+  reward           LevelReward?
+
+  @@index([userId, levelId, createdAt])
+}
+
+model LevelReward {
+  id                  String       @id @default(cuid())
+  userId              String
+  levelId             String
+  starsAwarded        Int
+  awardedAt           DateTime     @default(now())
+  createdFromAttemptId String?      @unique
+  user                User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  level               Level        @relation(fields: [levelId], references: [id], onDelete: Cascade)
+  createdFromAttempt  LevelAttempt? @relation(fields: [createdFromAttemptId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, levelId])
+  @@index([levelId])
+}
