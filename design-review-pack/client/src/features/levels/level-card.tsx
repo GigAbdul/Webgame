@@ -62,22 +62,6 @@ export function LevelCard({ level, index, selected }: LevelCardProps) {
           </div>
         </div>
 
-        <div className="gd-level-selector-preview">
-          <div className="gd-level-selector-preview-copy">
-            <span>Route Preview</span>
-            <span>{selected ? 'Selected Lane' : 'In Queue'}</span>
-          </div>
-
-          <div className="gd-level-selector-preview-window">
-            <div className="gd-level-selector-preview-ground" />
-            <div className="gd-level-selector-preview-cube" />
-            <div className="gd-level-selector-preview-block is-short" />
-            <div className="gd-level-selector-preview-block is-tall" />
-            <div className="gd-level-selector-preview-spike" />
-            <div className="gd-level-selector-preview-portal" />
-          </div>
-        </div>
-
         <div className="gd-level-selector-bars">
           <SelectorBar label="Official Reward" value={`${rewardStars} Stars`} percent={rewardPercent} />
           <SelectorBar label="Route Pressure" value={difficulty.label} percent={intensityPercent} />

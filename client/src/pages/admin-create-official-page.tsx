@@ -20,7 +20,6 @@ export function AdminCreateOfficialPage() {
         body: JSON.stringify({
           ...payload,
           publishNow: false,
-          starsReward: 0,
           featured: false,
           isVisible: true,
         }),
@@ -42,8 +41,8 @@ export function AdminCreateOfficialPage() {
               Official
             </h2>
             <p className="max-w-2xl text-sm leading-8 text-white/82">
-              Новый official stage сначала создаётся как admin draft, а уже потом получает difficulty, stars reward и
-              publish status.
+              A new official stage starts as an admin draft, then receives its difficulty icon, automatic star reward,
+              and final publish status.
             </p>
           </div>
 
@@ -68,8 +67,8 @@ export function AdminCreateOfficialPage() {
             <div className="space-y-3">
               <h3 className="font-display text-2xl text-white">Admin Workflow</h3>
               <p className="text-sm leading-7 text-white/78">
-                После первого сохранения ты попадёшь на detail screen, где уже настраиваются stars reward, featured flag
-                и публикация.
+                After the first save you land on the detail screen, where difficulty, featured state, and publishing are
+                tuned. The star reward is calculated automatically there.
               </p>
             </div>
           </Panel>

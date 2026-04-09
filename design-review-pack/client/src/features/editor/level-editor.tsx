@@ -1,5 +1,5 @@
-import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { PointerEvent as ReactPointerEvent, ReactNode, WheelEvent as ReactWheelEvent } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Level, LevelData, LevelObject, LevelObjectType } from '../../types/models';
 import { Badge, Button, FieldLabel, Input, Panel, Textarea } from '../../components/ui';
 import { GameCanvas } from '../game/game-canvas';
@@ -76,12 +76,6 @@ const toolDescriptions: Record<EditorTool, string> = {
   START_MARKER: 'Player spawn point',
 };
 
-const EDITOR_CANVAS_WIDTH = 1180;
-const EDITOR_CANVAS_HEIGHT = 560;
-const EDITOR_DEFAULT_PAN_X = 60;
-const EDITOR_DEFAULT_PAN_Y = 80;
-const EDITOR_SCROLL_PADDING_UNITS = 6;
-
 function syncDerivedLevelData(next: LevelData) {
   const maxX = Math.max(next.finish.x + 16, ...next.objects.map((object) => object.x + object.w + 12));
   next.meta.lengthUnits = Math.max(60, Math.ceil(maxX));
@@ -107,14 +101,13 @@ export function LevelEditor({
   const [selectedTool, setSelectedTool] = useState<EditorTool>('select');
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
-  const [pan, setPan] = useState({ x: EDITOR_DEFAULT_PAN_X, y: EDITOR_DEFAULT_PAN_Y });
+  const [pan, setPan] = useState({ x: 60, y: 80 });
   const [cursorWorld, setCursorWorld] = useState({ x: 0, y: 0 });
   const [showPreview, setShowPreview] = useState(false);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [message, setMessage] = useState<string>('');
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const stageFrameRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<DragState>(null);
   const isSpacePressedRef = useRef(false);
   const liveLevelDataRef = useRef(levelData);
@@ -152,14 +145,6 @@ export function LevelEditor({
   const canUndo = historyIndex > 0;
   const canRedo = historyIndex < history.length - 1;
   const historyPosition = `${historyIndex + 1}/${history.length}`;
-  const selectionSummary = selectedObject
-    ? `${selectedDefinition?.label ?? selectedObject.type} at ${selectedObject.x}, ${selectedObject.y}`
-    : 'No object selected';
-  const objectCount = String(levelData.objects.length);
-  const stageCell = levelData.meta.gridSize * zoom;
-  const visibleStageUnits = EDITOR_CANVAS_WIDTH / stageCell;
-  const horizontalScrollMax = Math.max(0, levelData.meta.lengthUnits + EDITOR_SCROLL_PADDING_UNITS - visibleStageUnits);
-  const horizontalScrollValue = clamp((EDITOR_DEFAULT_PAN_X - pan.x) / stageCell, 0, horizontalScrollMax);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -302,8 +287,8 @@ export function LevelEditor({
       return;
     }
 
-    const width = EDITOR_CANVAS_WIDTH;
-    const height = EDITOR_CANVAS_HEIGHT;
+    const width = 1180;
+    const height = 560;
     canvas.width = width;
     canvas.height = height;
 
@@ -485,25 +470,6 @@ export function LevelEditor({
 
     setCursorWorld(world);
 
-    if (event.button === 2) {
-      return;
-    }
-
-    event.currentTarget.setPointerCapture(event.pointerId);
-
-    if (event.button === 1) {
-      event.preventDefault();
-      event.stopPropagation();
-      dragRef.current = {
-        mode: 'pan',
-        originX: event.clientX,
-        originY: event.clientY,
-        startPanX: pan.x,
-        startPanY: pan.y,
-      };
-      return;
-    }
-
     if (selectedTool === 'pan' || isSpacePressedRef.current) {
       dragRef.current = {
         mode: 'pan',
@@ -556,25 +522,6 @@ export function LevelEditor({
 
     const dragState = dragRef.current;
 
-    if (event.buttons & 4) {
-      if (!dragState || dragState.mode !== 'pan') {
-        dragRef.current = {
-          mode: 'pan',
-          originX: event.clientX,
-          originY: event.clientY,
-          startPanX: pan.x,
-          startPanY: pan.y,
-        };
-        return;
-      }
-
-      setPan({
-        x: dragState.startPanX + (event.clientX - dragState.originX),
-        y: dragState.startPanY + (event.clientY - dragState.originY),
-      });
-      return;
-    }
-
     if (!dragState) {
       return;
     }
@@ -614,7 +561,7 @@ export function LevelEditor({
     }
   };
 
-  const handlePointerUp = (event?: ReactPointerEvent<HTMLCanvasElement>) => {
+  const handlePointerUp = () => {
     if (dragRef.current?.mode === 'move') {
       const next = syncDerivedLevelData(structuredClone(liveLevelDataRef.current));
       const trimmedHistory = history.slice(0, historyIndex + 1);
@@ -623,57 +570,13 @@ export function LevelEditor({
       setHistoryIndex(nextHistory.length - 1);
     }
 
-    if (event && event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-
     dragRef.current = null;
   };
 
-  const applyWheelZoom = (deltaY: number) => {
-    setZoom((current) => Math.min(2.4, Math.max(0.45, current + (deltaY < 0 ? 0.1 : -0.1))));
+  const handleWheel = (event: ReactWheelEvent<HTMLCanvasElement>) => {
+    event.preventDefault();
+    setZoom((current) => Math.min(2.4, Math.max(0.45, current + (event.deltaY < 0 ? 0.1 : -0.1))));
   };
-
-  const setHorizontalScrollPosition = useCallback((nextScroll: number) => {
-    const clampedScroll = clamp(nextScroll, 0, horizontalScrollMax);
-    setPan((current) => ({
-      ...current,
-      x: EDITOR_DEFAULT_PAN_X - clampedScroll * stageCell,
-    }));
-  }, [horizontalScrollMax, stageCell]);
-
-  useEffect(() => {
-    const stageFrame = stageFrameRef.current;
-
-    if (!stageFrame) {
-      return;
-    }
-
-    const handleStageWheel = (event: WheelEvent) => {
-      const target = event.target;
-
-      if (!(target instanceof Node) || !stageFrame.contains(target)) {
-        return;
-      }
-
-      event.preventDefault();
-      event.stopPropagation();
-
-      if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
-        const delta = event.deltaX !== 0 ? event.deltaX : event.deltaY;
-        setHorizontalScrollPosition(horizontalScrollValue + delta / stageCell);
-        return;
-      }
-
-      applyWheelZoom(event.deltaY);
-    };
-
-    stageFrame.addEventListener('wheel', handleStageWheel, { passive: false, capture: true });
-
-    return () => {
-      stageFrame.removeEventListener('wheel', handleStageWheel, true);
-    };
-  }, [horizontalScrollValue, setHorizontalScrollPosition, stageCell]);
 
   const handleObjectField = (field: keyof LevelObject, value: string | number) => {
     if (!selectedObjectId) {
@@ -757,59 +660,45 @@ export function LevelEditor({
   };
 
   return (
-    <div className="arcade-editor-workstation flex h-full min-h-0 flex-col space-y-6">
+    <div className="arcade-editor-workstation space-y-6">
       <Panel className="arcade-editor-topbar game-screen bg-transparent">
-        <div className="space-y-4">
-          <div className="editor-command-main">
-            <div>
-              <p className="font-display text-[11px] tracking-[0.26em] text-[#ffd44a]">Forge Workstation</p>
-              <h3 className="mt-2 font-display text-3xl text-white">{title}</h3>
-              <p className="mt-2 max-w-2xl text-sm leading-7 text-white/72">
-                Choose a tool on the left, build in the center, and tune on the right. The stage is the main focus and the
-                primary actions stay visible up here.
-              </p>
-            </div>
-
-            <div className="editor-primary-actions">
-              <Button onClick={handleSave} disabled={saveState === 'saving'}>
-                {saveState === 'saving' ? 'Saving...' : saveLabel}
-              </Button>
-              {onSubmit ? (
-                <Button variant="secondary" onClick={handleSubmit}>
-                  Submit for Review
-                </Button>
-              ) : null}
-              <Button variant="ghost" onClick={() => setShowPreview((current) => !current)}>
-                {showPreview ? 'Hide Preview' : 'Open Preview'}
-              </Button>
-            </div>
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="font-display text-[11px] tracking-[0.26em] text-[#ffd44a]">Forge Workstation</p>
+            <h3 className="mt-2 font-display text-3xl text-white">{title}</h3>
+            <p className="mt-2 max-w-2xl text-sm leading-7 text-white/72">
+              Build the route on the center stage, use the left rail to swap tools, and use the right drawer for
+              metadata plus detailed object tuning.
+            </p>
           </div>
-
-          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-            {quickStartSteps.map((step, index) => (
-              <HintChip key={step} label={`Step ${index + 1}`} value={step} />
-            ))}
-          </div>
-
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
             <HintChip label="Tool" value={activeToolLabel} />
             <HintChip label="Selected" value={selectionLabel} />
             <HintChip label="History" value={historyPosition} />
             <HintChip label="Theme" value={theme} />
-            <HintChip label="Objects" value={objectCount} />
+            <HintChip label="Preview" value={showPreview ? 'Dock Open' : 'Dock Closed'} />
           </div>
         </div>
       </Panel>
 
-      <div className="grid min-h-0 flex-1 gap-6 xl:grid-cols-[240px_minmax(0,1fr)_360px]">
-        <div className="arcade-tool-rail space-y-4 xl:overflow-y-auto xl:pr-1">
+      <div className="grid gap-6 xl:grid-cols-[220px_minmax(0,1fr)_340px]">
+        <div className="arcade-tool-rail space-y-4">
           <Panel className="game-screen space-y-4 bg-transparent">
             <div className="flex items-center justify-between">
-              <div>
-                <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Step 1</p>
-                <h3 className="font-display text-2xl text-white">Toolbox</h3>
-              </div>
-              <Badge tone="accent">Build</Badge>
+              <h3 className="font-display text-2xl text-white">Quick Start</h3>
+              <Badge tone="success">4 Steps</Badge>
+            </div>
+            <div className="space-y-3">
+              {quickStartSteps.map((step, index) => (
+                <GuideStep key={step} index={index + 1} text={step} />
+              ))}
+            </div>
+          </Panel>
+
+          <Panel className="game-screen space-y-4 bg-transparent">
+            <div className="flex items-center justify-between">
+              <h3 className="font-display text-2xl text-white">Palette</h3>
+              <Badge tone="accent">Grid Snapping</Badge>
             </div>
 
             <div className="space-y-4">
@@ -831,7 +720,7 @@ export function LevelEditor({
               ))}
             </div>
 
-            <div className="editor-note-box text-sm leading-6 text-white/72">
+            <div className="rounded-[18px] border border-white/10 bg-white/5 px-4 py-3 text-sm leading-6 text-white/72">
               <p className="font-display mb-1 text-[10px] tracking-[0.18em] text-[#ffd44a]">Active Tool</p>
               <p className="text-white">{activeToolLabel}</p>
               <p>{activeToolDescription}</p>
@@ -839,16 +728,13 @@ export function LevelEditor({
           </Panel>
 
           <Panel className="game-screen space-y-3 bg-transparent">
-            <div>
-              <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Step 2</p>
-              <h3 className="font-display text-2xl text-white">Quick Actions</h3>
-            </div>
+            <h3 className="font-display text-2xl text-white">Actions</h3>
             <div className="grid grid-cols-2 gap-2">
               <Button variant="ghost" onClick={performUndo} disabled={!canUndo}>
-                Undo
+                Undo Edit
               </Button>
               <Button variant="ghost" onClick={performRedo} disabled={!canRedo}>
-                Redo
+                Redo Edit
               </Button>
               <Button variant="ghost" onClick={duplicateSelected} disabled={!selectedObject}>
                 Clone
@@ -858,7 +744,7 @@ export function LevelEditor({
               </Button>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
-              <HintChip label="Pan" value="Space or middle drag" />
+              <HintChip label="Pan" value="Space + drag" />
               <HintChip label="Move" value="Arrow keys" />
               <HintChip label="Undo" value="Ctrl/Cmd + Z" />
               <HintChip label="Redo" value="Ctrl/Cmd + Shift + Z" />
@@ -867,131 +753,73 @@ export function LevelEditor({
           </Panel>
         </div>
 
-        <div className="min-h-0 space-y-4 xl:overflow-y-auto xl:pr-1">
+        <div className="space-y-4">
           <Panel className="arcade-editor-stage-panel game-screen space-y-4 bg-transparent">
-            <div className="editor-stage-header">
-              <div>
-                <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Step 3</p>
-                <h3 className="font-display text-2xl text-white">Stage Canvas</h3>
-                <p className="mt-2 max-w-2xl text-sm leading-7 text-white/72">
-                  Build the route here. Place pieces with the active tool, switch to Select when you want to adjust geometry,
-                  and use the inspector on the right for precise tuning.
-                </p>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={handleSave} disabled={saveState === 'saving'}>
+                  {saveState === 'saving' ? 'Saving...' : saveLabel}
+                </Button>
+                {onSubmit ? (
+                  <Button variant="secondary" onClick={handleSubmit}>
+                    Submit for Review
+                  </Button>
+                ) : null}
+                <Button variant="ghost" onClick={() => setShowPreview((current) => !current)}>
+                  {showPreview ? 'Hide Test Play' : 'Test Play'}
+                </Button>
               </div>
-
-              <div className="editor-stage-actions">
+              <div className="flex flex-wrap gap-2">
                 <Button variant="ghost" onClick={() => setZoom((current) => Math.max(0.45, current - 0.1))}>
                   Zoom -
                 </Button>
                 <Button variant="ghost" onClick={() => setZoom((current) => Math.min(2.4, current + 0.1))}>
                   Zoom +
                 </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => {
-                    setPan({ x: EDITOR_DEFAULT_PAN_X, y: EDITOR_DEFAULT_PAN_Y });
-                    setZoom(1);
-                  }}
-                >
-                  Reset View
-                </Button>
               </div>
             </div>
 
-            <div className="editor-stage-status-grid">
-              <HintChip label="Active Tool" value={activeToolLabel} />
-              <HintChip label="Selected" value={selectionSummary} />
-              <HintChip label="Camera" value={`${zoom.toFixed(2)}x zoom`} />
-              <HintChip label="Cursor" value={`${cursorWorld.x}, ${cursorWorld.y}`} />
-              <HintChip label="Place / Select" value="Left click on stage" />
-              <HintChip label="Pan / Zoom" value="Middle drag, wheel, Shift + wheel" />
+            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+              <HintChip label="Stage Mode" value={activeToolLabel} />
+              <HintChip label="Selection" value={selectionLabel} />
+              <HintChip label="Left Click" value="Place or select" />
+              <HintChip label="Camera" value="Wheel to zoom" />
             </div>
 
-            <div ref={stageFrameRef} className="editor-canvas-frame">
-              <canvas
-                ref={canvasRef}
-                className="w-full cursor-crosshair border-[4px] border-[#39105f] bg-[#130326]"
-                aria-label="Level editor stage"
-                onPointerDown={handlePointerDown}
-                onPointerMove={handlePointerMove}
-                onPointerUp={handlePointerUp}
-                onPointerLeave={handlePointerUp}
-                onAuxClick={(event) => {
-                  if (event.button === 1) {
-                    event.preventDefault();
-                  }
-                }}
-              />
-            </div>
+            <canvas
+              ref={canvasRef}
+              className="w-full cursor-crosshair border-[4px] border-[#39105f] bg-[#130326]"
+              aria-label="Level editor stage"
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerLeave={handlePointerUp}
+              onWheel={handleWheel}
+            />
 
-            <div className="editor-stage-footer">
-              <div className="editor-stage-scrollbar-row">
-                <Button
-                  variant="ghost"
-                  onClick={() => setHorizontalScrollPosition(horizontalScrollValue - 8)}
-                  disabled={horizontalScrollMax <= 0}
-                >
-                  Left
-                </Button>
-
-                <div className="editor-stage-scrollbar-track">
-                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-white/72">
-                    <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Stage Scroll</p>
-                    <p>
-                      X: <span className="text-white">{Math.round(horizontalScrollValue)}</span> /{' '}
-                      <span className="text-white">{Math.max(0, Math.round(horizontalScrollMax))}</span>
-                    </p>
-                  </div>
-
-                  <input
-                    type="range"
-                    min={0}
-                    max={Math.max(horizontalScrollMax, 0)}
-                    step={1}
-                    value={horizontalScrollValue}
-                    disabled={horizontalScrollMax <= 0}
-                    className="editor-horizontal-scroll"
-                    aria-label="Horizontal stage scroll"
-                    onChange={(event) => setHorizontalScrollPosition(Number(event.target.value))}
-                  />
-                </div>
-
-                <Button
-                  variant="ghost"
-                  onClick={() => setHorizontalScrollPosition(horizontalScrollValue + 8)}
-                  disabled={horizontalScrollMax <= 0}
-                >
-                  Right
-                </Button>
-              </div>
-
-              <div className="editor-stage-meta">
-                <p>
-                  Tool: <span className="text-white">{activeToolLabel}</span>
-                </p>
-                <p>
-                  Selected: <span className="text-white">{selectionLabel}</span>
-                </p>
-                <p>
-                  Cursor: <span className="text-white">{cursorWorld.x}, {cursorWorld.y}</span>
-                </p>
-                <p>
-                  Zoom: <span className="text-white">{zoom.toFixed(2)}x</span>
-                </p>
-                <p>
-                  Objects: <span className="text-white">{levelData.objects.length}</span>
-                </p>
-                <p>
-                  History: <span className="text-white">{historyPosition}</span>
-                </p>
-              </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-white/72">
+              <p>
+                Tool: <span className="text-white">{selectedTool}</span>
+              </p>
+              <p>
+                Selected: <span className="text-white">{selectionLabel}</span>
+              </p>
+              <p>
+                Cursor: <span className="text-white">{cursorWorld.x}, {cursorWorld.y}</span>
+              </p>
+              <p>
+                Zoom: <span className="text-white">{zoom.toFixed(2)}x</span>
+              </p>
+              <p>
+                History: <span className="text-white">{historyPosition}</span>
+              </p>
             </div>
 
             {message ? (
               <div
                 className={cn(
-                  'editor-note-box px-4 py-3 text-sm',
-                  saveState === 'error' ? 'text-[#ff8aa1]' : 'text-[#82f6ff]',
+                  'arcade-button px-4 py-3 text-sm',
+                  saveState === 'error' ? 'bg-magmarose/15 text-magmarose' : 'bg-cyanpulse/10 text-cyanpulse',
                 )}
               >
                 {message}
@@ -999,62 +827,134 @@ export function LevelEditor({
             ) : null}
           </Panel>
 
-          <Panel className="arcade-preview-dock game-screen space-y-4 bg-transparent">
-            <div className="editor-stage-header">
+          <Panel className="arcade-preview-dock game-screen bg-transparent">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Step 4</p>
-                <h3 className="font-display text-2xl text-white">Test Lane</h3>
-                <p className="mt-2 text-sm leading-7 text-white/72">
-                  Check feel and timing without leaving the editor. Open the live preview when you want to test jumps,
-                  speed portals, and readability.
+                <p className="font-display text-[10px] tracking-[0.22em] text-[#ffd44a]">Preview Dock</p>
+                <p className="text-sm text-white/78">
+                  {showPreview ? 'Runtime preview is active below.' : 'Open Test Play to dock a live runtime preview here.'}
                 </p>
               </div>
-              <div className="editor-stage-actions">
-                <Button variant="ghost" onClick={() => setShowPreview((current) => !current)}>
-                  {showPreview ? 'Hide Preview' : 'Open Preview'}
-                </Button>
-              </div>
+              <Button variant="ghost" onClick={() => setShowPreview((current) => !current)}>
+                {showPreview ? 'Hide Dock' : 'Open Dock'}
+              </Button>
             </div>
 
             {showPreview ? (
-              <div className="space-y-3">
-                <div className="grid gap-2 md:grid-cols-3">
-                  <HintChip label="Attempt" value="Runtime test" />
-                  <HintChip label="Restart" value="Auto after fail" />
-                  <HintChip label="Goal" value="Check timing and flow" />
-                </div>
+              <div className="mt-4">
                 <GameCanvas levelData={levelData} attemptNumber={1} autoRestartOnFail />
               </div>
             ) : (
-              <div className="editor-note-box text-sm leading-7 text-white/68">
-                Keep this dock closed while building, then open it once a route segment feels ready. That way the center
-                stage stays clean and the preview still lives one step below.
+              <div className="mt-4 rounded-[18px] border border-white/10 bg-white/5 px-4 py-6 text-sm leading-7 text-white/68">
+                Build a route, hit save, and open the preview dock when you want to test timing and readability without leaving
+                the workstation.
               </div>
             )}
           </Panel>
         </div>
 
-        <div className="arcade-editor-drawer space-y-4 xl:overflow-y-auto xl:pr-1">
+        <div className="arcade-editor-drawer space-y-4">
           <Panel className="game-screen space-y-4 bg-transparent">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Step 5</p>
-                <h3 className="font-display text-2xl text-white">Inspector</h3>
+            <h3 className="font-display text-2xl text-white">Level Metadata</h3>
+            <div>
+              <FieldLabel>Title</FieldLabel>
+              <Input value={title} onChange={(event) => setTitle(event.target.value)} />
+            </div>
+            <div>
+              <FieldLabel>Description</FieldLabel>
+              <Textarea rows={4} value={description} onChange={(event) => setDescription(event.target.value)} />
+            </div>
+            <div>
+              <FieldLabel>Theme</FieldLabel>
+              <div className="grid grid-cols-2 gap-2">
+                {themePresets.map((preset) => (
+                  <button
+                    key={preset.value}
+                    type="button"
+                    onClick={() => applyThemePreset(preset.value)}
+                    className={cn(
+                      'tool-tile px-3 py-3 text-left transition',
+                      theme === preset.value ? 'tool-tile-active text-[#173300]' : 'text-white hover:brightness-110',
+                    )}
+                  >
+                    <span className="font-display block text-[10px] tracking-[0.18em] uppercase">{preset.label}</span>
+                    <span
+                      className={cn(
+                        'mt-1 block text-[10px] normal-case',
+                        theme === preset.value ? 'text-[#173300]/80' : 'text-white/60',
+                      )}
+                    >
+                      {preset.value}
+                    </span>
+                  </button>
+                ))}
               </div>
-              {selectedObject ? <Badge tone="accent">{selectedObject.type}</Badge> : <Badge tone="default">Nothing Selected</Badge>}
+              <Input
+                className="mt-3"
+                value={theme}
+                onChange={(event) => {
+                  applyThemePreset(event.target.value);
+                }}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <FieldLabel>Length Units</FieldLabel>
+                <Input
+                  type="number"
+                  value={levelData.meta.lengthUnits}
+                  onChange={(event) =>
+                    updateLevelData((draft) => {
+                      draft.meta.lengthUnits = Number(event.target.value);
+                    })
+                  }
+                />
+              </div>
+              <div>
+                <FieldLabel>Base Speed</FieldLabel>
+                <Input
+                  type="number"
+                  step="0.1"
+                  value={levelData.player.baseSpeed}
+                  onChange={(event) =>
+                    updateLevelData((draft) => {
+                      draft.player.baseSpeed = Number(event.target.value);
+                    })
+                  }
+                />
+              </div>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <HintChip label="Objects" value={String(levelData.objects.length)} />
+              <HintChip label="Base Speed" value={levelData.player.baseSpeed.toFixed(1)} />
+            </div>
+          </Panel>
+
+          <Panel className="game-screen space-y-4 bg-transparent">
+            <div className="flex items-center justify-between">
+              <h3 className="font-display text-2xl text-white">Editor Guide</h3>
+              <Badge tone="accent">Live</Badge>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <HintChip label="Place" value="Choose tool, then click stage" />
+              <HintChip label="Inspect" value="Select object to edit size and props" />
+              <HintChip label="Preview" value="Use Test Play before saving" />
+              <HintChip label="Submit" value="Only when route feels clean" />
+            </div>
+          </Panel>
+
+          <Panel className="game-screen space-y-4 bg-transparent">
+            <div className="flex items-center justify-between">
+              <h3 className="font-display text-2xl text-white">Inspector</h3>
+              {selectedObject ? <Badge tone="accent">{selectedObject.type}</Badge> : null}
             </div>
 
             {selectedObject ? (
               <>
-                <div className="editor-note-box text-sm leading-6 text-white/72">
-                  <p className="font-display mb-1 text-[10px] tracking-[0.18em] text-[#ffd44a]">Selected Object</p>
+                <div className="rounded-[18px] border border-white/10 bg-white/5 px-4 py-3 text-sm leading-6 text-white/72">
+                  <p className="font-display mb-1 text-[10px] tracking-[0.18em] text-[#ffd44a]">Selected</p>
                   <p className="text-white">{selectedDefinition?.label}</p>
                   <p>{toolDescriptions[selectedObject.type]}</p>
-                </div>
-
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <HintChip label="Position" value={`${selectedObject.x}, ${selectedObject.y}`} />
-                  <HintChip label="Size" value={`${selectedObject.w} x ${selectedObject.h}`} />
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
@@ -1135,114 +1035,10 @@ export function LevelEditor({
                 </div>
               </>
             ) : (
-              <div className="editor-note-box text-sm leading-7 text-white/68">
-                Select an object on the stage and this drawer will switch into tuning mode. Position, size, trigger values,
-                and advanced props all live here so the canvas stays visually clean.
-              </div>
+              <p className="text-sm text-white/60">
+                Pick an object on the canvas to edit its geometry and effect props.
+              </p>
             )}
-          </Panel>
-
-          <Panel className="game-screen space-y-4 bg-transparent">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Step 6</p>
-                <h3 className="font-display text-2xl text-white">Level Settings</h3>
-              </div>
-              <Badge tone="accent">{themePresets.find((preset) => preset.value === theme)?.label ?? 'Custom'}</Badge>
-            </div>
-
-            <div>
-              <FieldLabel>Title</FieldLabel>
-              <Input value={title} onChange={(event) => setTitle(event.target.value)} />
-            </div>
-            <div>
-              <FieldLabel>Description</FieldLabel>
-              <Textarea rows={4} value={description} onChange={(event) => setDescription(event.target.value)} />
-            </div>
-
-            <div className="space-y-3">
-              <FieldLabel>Theme Preset</FieldLabel>
-              <div className="grid grid-cols-2 gap-2">
-                {themePresets.map((preset) => (
-                  <button
-                    key={preset.value}
-                    type="button"
-                    onClick={() => applyThemePreset(preset.value)}
-                    className={cn(
-                      'tool-tile px-3 py-3 text-left transition',
-                      theme === preset.value ? 'tool-tile-active text-[#173300]' : 'text-white hover:brightness-110',
-                    )}
-                  >
-                    <span className="font-display block text-[10px] tracking-[0.18em] uppercase">{preset.label}</span>
-                    <span
-                      className={cn(
-                        'mt-1 block text-[10px] normal-case',
-                        theme === preset.value ? 'text-[#173300]/80' : 'text-white/60',
-                      )}
-                    >
-                      {preset.value}
-                    </span>
-                  </button>
-                ))}
-              </div>
-              <Input
-                value={theme}
-                onChange={(event) => {
-                  applyThemePreset(event.target.value);
-                }}
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <FieldLabel>Length Units</FieldLabel>
-                <Input
-                  type="number"
-                  value={levelData.meta.lengthUnits}
-                  onChange={(event) =>
-                    updateLevelData((draft) => {
-                      draft.meta.lengthUnits = Number(event.target.value);
-                    })
-                  }
-                />
-              </div>
-              <div>
-                <FieldLabel>Base Speed</FieldLabel>
-                <Input
-                  type="number"
-                  step="0.1"
-                  value={levelData.player.baseSpeed}
-                  onChange={(event) =>
-                    updateLevelData((draft) => {
-                      draft.player.baseSpeed = Number(event.target.value);
-                    })
-                  }
-                />
-              </div>
-            </div>
-
-            <div className="grid gap-2 sm:grid-cols-2">
-              <HintChip label="Objects" value={String(levelData.objects.length)} />
-              <HintChip label="Length" value={`${levelData.meta.lengthUnits} units`} />
-              <HintChip label="Base Speed" value={levelData.player.baseSpeed.toFixed(1)} />
-              <HintChip label="Theme" value={theme} />
-            </div>
-          </Panel>
-
-          <Panel className="game-screen space-y-4 bg-transparent">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Quick Guide</p>
-                <h3 className="font-display text-2xl text-white">Creator Flow</h3>
-              </div>
-              <Badge tone="accent">Live</Badge>
-            </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <HintChip label="Build" value="Pick tool, then click stage" />
-              <HintChip label="Adjust" value="Select object, edit in inspector" />
-              <HintChip label="Navigate" value="Wheel zoom, middle drag pan" />
-              <HintChip label="Validate" value="Use preview before submit" />
-            </div>
           </Panel>
 
           {sidebarSlot}
@@ -1269,7 +1065,9 @@ function ToolButton({
       onClick={onClick}
       className={cn(
         'tool-tile px-3 py-3 text-left transition',
-        active ? 'tool-tile-active text-[#173300]' : 'text-white hover:brightness-110',
+        active
+          ? 'tool-tile-active text-[#173300]'
+          : 'text-white hover:brightness-110',
       )}
     >
       <span className="font-display block text-[10px] tracking-[0.18em] uppercase">{label}</span>
@@ -1282,9 +1080,18 @@ function ToolButton({
   );
 }
 
+function GuideStep({ index, text }: { index: number; text: string }) {
+  return (
+    <div className="rounded-[18px] border border-white/10 bg-white/5 px-4 py-3">
+      <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Step {index}</p>
+      <p className="mt-1 text-sm leading-6 text-white/78">{text}</p>
+    </div>
+  );
+}
+
 function HintChip({ label, value }: { label: string; value: string }) {
   return (
-    <div className="editor-hint-box">
+    <div className="rounded-[16px] border border-white/10 bg-white/5 px-3 py-2">
       <p className="font-display text-[9px] tracking-[0.16em] text-[#ffd44a]">{label}</p>
       <p className="mt-1 text-[11px] leading-5 text-white/78">{value}</p>
     </div>
@@ -1333,10 +1140,6 @@ function worldToScreen(x: number, y: number, panX: number, panY: number, cell: n
     x: x * cell + panX,
     y: y * cell + panY,
   };
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
 }
 
 function pointInsideObject(x: number, y: number, object: LevelObject) {

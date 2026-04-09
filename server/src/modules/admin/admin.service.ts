@@ -3,6 +3,7 @@ import { prisma } from '../../lib/prisma';
 import { ApiError } from '../../utils/api-error';
 import { slugifyValue, withSlugSuffix } from '../../utils/slugify';
 import { gameService } from '../game/game.service';
+import { getStarsForDifficulty } from '../levels/difficulty';
 import type { CreateLevelInput } from '../levels/levels.schemas';
 import { assertOfficialSettings } from './admin.schemas';
 
@@ -21,7 +22,6 @@ type OfficialSettingsPatch = {
   title?: string;
   description?: string;
   difficulty?: Difficulty;
-  starsReward?: number;
   status?: LevelStatus;
   featured?: boolean;
   isVisible?: boolean;
@@ -78,7 +78,6 @@ export const adminService = {
     adminUserId: string,
     input: CreateLevelInput & {
       difficulty?: Difficulty;
-      starsReward: number;
       publishNow: boolean;
       featured: boolean;
       isVisible: boolean;
@@ -91,9 +90,10 @@ export const adminService = {
         assertOfficialSettings({
           currentStatus: 'OFFICIAL',
           difficulty: input.difficulty ?? null,
-          starsReward: input.starsReward,
         });
       }
+
+      const starsReward = input.difficulty ? getStarsForDifficulty(input.difficulty) : 0;
 
       return tx.level.create({
         data: {
@@ -104,8 +104,8 @@ export const adminService = {
           publishedById: input.publishNow ? adminUserId : null,
           sourceType: 'ADMIN_CREATED',
           status: input.publishNow ? 'OFFICIAL' : 'DRAFT',
-          difficulty: input.publishNow ? input.difficulty : null,
-          starsReward: input.publishNow ? input.starsReward : 0,
+          difficulty: input.difficulty ?? null,
+          starsReward,
           isOfficial: input.publishNow,
           featured: input.featured,
           isVisible: input.isVisible,
@@ -129,13 +129,12 @@ export const adminService = {
 
       const nextStatus = patch.status ?? level.status;
       const nextDifficulty = patch.difficulty ?? level.difficulty;
-      const nextStarsReward = patch.starsReward ?? level.starsReward;
+      const nextStarsReward = nextDifficulty ? getStarsForDifficulty(nextDifficulty) : 0;
 
       try {
         assertOfficialSettings({
           currentStatus: nextStatus,
           difficulty: nextDifficulty,
-          starsReward: nextStarsReward,
         });
       } catch (error) {
         throw new ApiError(400, error instanceof Error ? error.message : 'Invalid official settings');
@@ -146,8 +145,8 @@ export const adminService = {
         data: {
           title: patch.title,
           description: patch.description,
-          difficulty: nextStatus === 'OFFICIAL' ? nextDifficulty : null,
-          starsReward: nextStatus === 'OFFICIAL' ? nextStarsReward : 0,
+          difficulty: nextDifficulty,
+          starsReward: nextStarsReward,
           status: nextStatus,
           isOfficial: nextStatus === 'OFFICIAL',
           featured: patch.featured,
@@ -159,10 +158,10 @@ export const adminService = {
         },
       });
 
-      if (level.status === 'OFFICIAL' && patch.starsReward && patch.starsReward !== level.starsReward) {
+      if (level.publishedAt && nextStarsReward !== level.starsReward) {
         await tx.levelReward.updateMany({
           where: { levelId },
-          data: { starsAwarded: patch.starsReward },
+          data: { starsAwarded: nextStarsReward },
         });
 
         const rewards = await tx.levelReward.findMany({
@@ -183,12 +182,11 @@ export const adminService = {
   async publishLevel(
     adminUserId: string,
     levelId: string,
-    input: { starsReward: number; difficulty: Difficulty },
+    difficulty: Difficulty,
   ) {
     return this.updateOfficialSettings(adminUserId, levelId, {
       status: 'OFFICIAL',
-      starsReward: input.starsReward,
-      difficulty: input.difficulty,
+      difficulty,
     });
   },
 
@@ -205,10 +203,6 @@ export const adminService = {
     return this.updateOfficialSettings(adminUserId, levelId, {
       status: 'ARCHIVED',
     });
-  },
-
-  async patchStars(adminUserId: string, levelId: string, starsReward: number) {
-    return this.updateOfficialSettings(adminUserId, levelId, { starsReward });
   },
 
   async patchDifficulty(adminUserId: string, levelId: string, difficulty: Difficulty) {

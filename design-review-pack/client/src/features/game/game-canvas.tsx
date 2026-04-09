@@ -61,8 +61,6 @@ export function GameCanvas({
     status: 'running' as 'running' | 'failed' | 'completed',
     elapsedMs: 0,
   });
-  const statusLabel =
-    hud.status === 'completed' ? 'Stage Clear' : hud.status === 'failed' ? 'Attempt Lost' : 'In Run';
 
   const levelBounds = useMemo(() => {
     const maxY = Math.max(
@@ -520,13 +518,10 @@ export function GameCanvas({
                     : 'bg-[linear-gradient(180deg,#7e2ae6,#5910be)] text-white',
               )}
             >
-              {statusLabel}
+              {hud.status}
             </span>
           </div>
-          <div>
-            <h3 className="font-display text-2xl text-[#caff45]">{levelData.meta.theme}</h3>
-            <p className="text-sm text-white/72">Cube mode / buffered jump / snap landing</p>
-          </div>
+          <h3 className="font-display text-2xl text-[#caff45]">{levelData.meta.theme}</h3>
         </div>
         <div className="flex gap-3 text-sm">
           <HudStat label="Attempt" value={attemptNumber} />
@@ -558,7 +553,7 @@ export function GameCanvas({
             <span className="text-white">R</span> restarts instantly.
           </>
         ) : null}{' '}
-        Jump inputs are buffered briefly, spikes use a fairer hitbox, and side collisions still punish sloppy routing.
+        Jump inputs are buffered briefly, spikes use a fairer hitbox, and block side hits now count as a fail.
       </p>
     </Panel>
   );

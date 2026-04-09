@@ -7,7 +7,6 @@ import {
   difficultySchema,
   officialSettingsSchema,
   publishLevelSchema,
-  starsSchema,
 } from './admin.schemas';
 import { adminService } from './admin.service';
 
@@ -48,10 +47,7 @@ adminRouter.patch(
     const level = await adminService.publishLevel(
       request.authUser!.id,
       getSingleParam(request.params.id, 'id'),
-      {
-        difficulty: payload.difficulty,
-        starsReward: payload.starsReward,
-      },
+      payload.difficulty,
     );
 
     response.json({ level });
@@ -77,19 +73,6 @@ adminRouter.patch(
       request.authUser!.id,
       getSingleParam(request.params.id, 'id'),
       payload,
-    );
-    response.json({ level });
-  }),
-);
-
-adminRouter.patch(
-  '/levels/:id/stars',
-  asyncHandler(async (request, response) => {
-    const payload = starsSchema.parse(request.body);
-    const level = await adminService.patchStars(
-      request.authUser!.id,
-      getSingleParam(request.params.id, 'id'),
-      payload.starsReward,
     );
     response.json({ level });
   }),

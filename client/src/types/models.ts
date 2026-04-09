@@ -1,6 +1,17 @@
 export type Role = 'USER' | 'ADMIN';
 export type LevelStatus = 'DRAFT' | 'SUBMITTED' | 'OFFICIAL' | 'ARCHIVED';
-export type Difficulty = 'EASY' | 'NORMAL' | 'HARD' | 'HARDER' | 'INSANE' | 'DEMON';
+export type Difficulty =
+  | 'EASY'
+  | 'NORMAL'
+  | 'HARD'
+  | 'HARDER'
+  | 'INSANE'
+  | 'DEMON'
+  | 'EASY_DEMON'
+  | 'MEDIUM_DEMON'
+  | 'HARD_DEMON'
+  | 'INSANE_DEMON'
+  | 'EXTREME_DEMON';
 export type LevelObjectType =
   | 'GROUND_BLOCK'
   | 'PLATFORM_BLOCK'

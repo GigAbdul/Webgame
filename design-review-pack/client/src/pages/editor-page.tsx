@@ -1,4 +1,3 @@
-import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Panel } from '../components/ui';
@@ -55,14 +54,6 @@ export function EditorPage() {
     },
   });
 
-  useEffect(() => {
-    document.body.classList.add('editor-route-active');
-
-    return () => {
-      document.body.classList.remove('editor-route-active');
-    };
-  }, []);
-
   if (id && levelQuery.isLoading) {
     return <p className="text-white/70">Loading level editor...</p>;
   }
@@ -70,7 +61,33 @@ export function EditorPage() {
   const level = levelQuery.data?.level ?? null;
 
   return (
-    <div className="editor-page-shell">
+    <div className="space-y-6">
+      <Panel className="game-screen bg-transparent p-0">
+        <div className="grid gap-6 px-5 py-6 lg:grid-cols-[1.1fr_0.9fr] lg:px-8 lg:py-8">
+          <div className="space-y-4">
+            <p className="font-display text-[11px] tracking-[0.3em] text-[#ffd44a]">Forge Workshop</p>
+            <h2 className="font-display text-4xl leading-[0.9] text-[#caff45] drop-shadow-[0_4px_0_rgba(0,0,0,0.35)] md:text-6xl">
+              {id ? 'Edit Level' : 'Create Level'}
+            </h2>
+            <p className="max-w-2xl text-sm leading-8 text-white/82">
+              The editor should feel like a real arcade workstation: tools on the left, a large stage in the center,
+              settings on the right, and preview in its own dock.
+            </p>
+          </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="game-stat px-4 py-4">
+                <p className="font-display text-[10px] tracking-[0.22em] text-[#ffd44a]">Save Flow</p>
+                <p className="mt-2 font-display text-xl text-white">Draft -&gt; Test</p>
+              </div>
+              <div className="game-stat px-4 py-4">
+                <p className="font-display text-[10px] tracking-[0.22em] text-[#ffd44a]">Publish Flow</p>
+                <p className="mt-2 font-display text-xl text-white">Submit -&gt; Review</p>
+              </div>
+            </div>
+        </div>
+      </Panel>
+
       <LevelEditor
         initialLevel={level}
         onSave={(payload) => saveMutation.mutateAsync(payload).then(() => undefined)}
@@ -82,11 +99,10 @@ export function EditorPage() {
         sidebarSlot={
           <Panel className="game-screen bg-transparent">
             <div className="space-y-3">
-              <p className="arcade-eyebrow">Workshop Notes</p>
-              <h3 className="font-display text-2xl text-white">Moderation Ready</h3>
+              <h3 className="font-display text-2xl text-white">Workflow Notes</h3>
               <p className="text-sm leading-7 text-white/78">
-                Stars are derived from difficulty during admin review. Creator focus stays on route quality, gameplay
-                readability, and whether the run feels clean in preview.
+                Stars are not entered by hand anymore. Admin moderation derives them from difficulty, while players just
+                build the route, save a draft, and submit it for review.
               </p>
               {level ? (
                 <p className="font-display text-[11px] tracking-[0.22em] text-[#ffd44a]">Current status: {level.status}</p>

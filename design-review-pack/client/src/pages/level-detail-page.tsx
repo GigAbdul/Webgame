@@ -50,7 +50,7 @@ export function LevelDetailPage() {
     <div className="mx-auto max-w-6xl space-y-6">
       <article className="gd-stage-briefing-card" style={detailStyle}>
         <div className="gd-stage-briefing-grid">
-          <div className="space-y-6">
+          <div className="space-y-5">
             <div className="flex flex-wrap items-center gap-2">
               <Badge tone="default">Official Briefing</Badge>
               <Badge tone="accent">{difficulty.label}</Badge>
@@ -58,88 +58,61 @@ export function LevelDetailPage() {
               {level.featured ? <Badge tone="success">Featured</Badge> : null}
             </div>
 
-            <div className="flex flex-col gap-6 md:flex-row md:items-start">
+            <div className="flex flex-col gap-5 md:flex-row md:items-start">
               <DifficultyIcon difficulty={level.difficulty} size="lg" showStars />
 
-              <div className="space-y-4">
-                <p className="gd-stage-eyebrow">Stage Launch Brief</p>
-                <h2 className="font-display text-4xl leading-[0.9] text-white drop-shadow-[0_5px_0_rgba(0,0,0,0.35)] md:text-6xl">
+              <div className="space-y-3">
+                <p className="gd-stage-eyebrow">DashForge Route</p>
+                <h2 className="font-display text-4xl leading-[0.92] text-white drop-shadow-[0_5px_0_rgba(0,0,0,0.35)] md:text-6xl">
                   {level.title}
                 </h2>
-                <p className="max-w-3xl text-sm leading-8 text-white/82">
-                  {level.description?.trim() ||
-                    'No extra briefing copy yet. Read the route through its layout, timing, and difficulty rhythm.'}
+                <p className="max-w-3xl text-sm leading-8 text-white/80">
+                  {level.description?.trim() || 'No extra briefing text yet. Open the route and read the stage through its gameplay language.'}
                 </p>
-
-                <div className="gd-stage-meta">
+                <div className="flex flex-wrap gap-2 text-[10px] uppercase tracking-[0.22em] text-white/72">
                   <span className="gd-stage-meta-pill">{formatThemeName(level.theme)}</span>
                   <span className="gd-stage-meta-pill">Builder {level.author?.username ?? 'Unknown'}</span>
-                  <span className="gd-stage-meta-pill">Reward pays on first clear</span>
+                  <span className="gd-stage-meta-pill">First clear pays once</span>
                 </div>
               </div>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-3">
-              <BriefChip label="Difficulty" value={difficulty.label} />
-              <BriefChip label="Reward" value={`${rewardStars} Stars`} />
-              <BriefChip label="Theme" value={formatThemeName(level.theme)} />
             </div>
           </div>
 
           <div className="gd-stage-briefing-actions">
             <div className="gd-stage-reward gd-stage-reward-large">
               <span className="gd-stage-reward-value">{rewardStars}</span>
-              <span className="gd-stage-reward-label">Official Reward</span>
+              <span className="gd-stage-reward-label">Star Reward</span>
             </div>
 
-            <Panel className="game-screen bg-transparent">
-              <div className="space-y-4">
-                <div>
-                  <p className="arcade-eyebrow">Launch Window</p>
-                  <h3 className="font-display text-3xl text-white">Ready To Run</h3>
-                </div>
+            <div className="space-y-3">
+              {user ? (
+                <Link to={`/play/${level.slug}`}>
+                  <Button className="w-full">Launch Official Run</Button>
+                </Link>
+              ) : (
+                <Link to="/login">
+                  <Button className="w-full">Login To Launch</Button>
+                </Link>
+              )}
 
-                <p className="text-sm leading-7 text-white/80">
-                  The live run uses the same runtime as the official play screen. Every attempt opens a tracked session and
-                  reports the result back to the server.
-                </p>
-
-                <div className="grid gap-3">
-                  {user ? (
-                    <Link to={`/play/${level.slug}`}>
-                      <Button className="w-full">Launch Official Run</Button>
-                    </Link>
-                  ) : (
-                    <Link to="/login">
-                      <Button className="w-full">Login To Launch</Button>
-                    </Link>
-                  )}
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <Link to="/levels">
-                      <Button variant="ghost" className="w-full">
-                        Back To Select
-                      </Button>
-                    </Link>
-                    <Link to="/leaderboard">
-                      <Button variant="secondary" className="w-full">
-                        Leaderboard
-                      </Button>
-                    </Link>
-                  </div>
-                </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Link to="/levels">
+                  <Button variant="ghost" className="w-full">
+                    Back To Select
+                  </Button>
+                </Link>
+                <Link to="/leaderboard">
+                  <Button variant="secondary" className="w-full">
+                    Leaderboard
+                  </Button>
+                </Link>
               </div>
-            </Panel>
+            </div>
 
-            <Panel className="game-screen bg-transparent">
-              <div className="space-y-3">
-                <p className="arcade-eyebrow">Clear Rules</p>
-                <p className="text-sm leading-7 text-white/78">
-                  Stars are granted only on the first successful official clear. Replays still matter for routing, timing,
-                  and learning the lane.
-                </p>
-              </div>
-            </Panel>
+            <div className="space-y-2 text-sm leading-7 text-white/74">
+              <p>Normal mode uses the same runtime as the official play screen.</p>
+              <p>Stars are granted only on the first successful clear of this official route.</p>
+            </div>
           </div>
         </div>
       </article>
@@ -151,30 +124,30 @@ export function LevelDetailPage() {
           <Panel className="game-screen bg-transparent">
             <div className="space-y-4">
               <div>
-                <p className="arcade-eyebrow">Route Brief</p>
-                <h3 className="font-display text-3xl text-white">What To Expect</h3>
+                <p className="font-display text-[11px] tracking-[0.24em] text-[#ffd44a]">Run Brief</p>
+                <h3 className="mt-2 font-display text-3xl text-white">What To Expect</h3>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <BriefChip label="Difficulty" value={difficulty.label} />
+                <BriefChip label="Theme" value={formatThemeName(level.theme)} />
+                <BriefChip label="Reward" value={`${rewardStars} Stars`} />
+                <BriefChip label="Builder" value={level.author?.username ?? 'Unknown'} />
               </div>
 
               <p className="text-sm leading-7 text-white/78">
-                Use this screen as your launch pad: preview the route, check its reward band, and get a feel for the stage
-                before entering the official session wrapper.
+                Use this screen as your launch pad: preview the route, check its difficulty and reward, then jump into
+                the official run when the rhythm feels right.
               </p>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <BriefChip label="Builder" value={level.author?.username ?? 'Unknown'} />
-                <BriefChip label="Featured" value={level.featured ? 'Yes' : 'No'} />
-                <BriefChip label="Session" value="Server Backed" />
-                <BriefChip label="Restart" value="Instant Retry" />
-              </div>
             </div>
           </Panel>
 
           <Panel className="game-screen bg-transparent">
             <div className="space-y-3">
-              <p className="arcade-eyebrow">Why This Screen Exists</p>
+              <p className="font-display text-[11px] tracking-[0.24em] text-[#ffd44a]">Clear Rules</p>
               <p className="text-sm leading-7 text-white/78">
-                The goal is to make stage launch feel deliberate: one clean briefing card, a readable live preview, and a
-                strong launch button instead of raw metadata blocks.
+                Completion rewards are tracked on the server, official stages pay out only once, and replaying the route
+                is still useful for timing, routing, and score-chasing.
               </p>
             </div>
           </Panel>

@@ -5,63 +5,75 @@ import { Button } from './ui';
 export function ArcadeScreenLayout() {
   const location = useLocation();
   const { user, clearAuth } = useAuthStore();
-  const isHomeRoute = location.pathname === '/';
   const routeMode = location.pathname.startsWith('/editor')
     ? 'Forge Mode'
     : location.pathname.startsWith('/play')
       ? 'Run Mode'
-      : 'Menu';
+      : 'Menu Mode';
+  const routeHint = location.pathname.startsWith('/editor')
+    ? 'Creator workshop and live preview'
+    : location.pathname.startsWith('/play')
+      ? 'Official run wrapper with session HUD'
+      : 'Main menu launch scene';
 
   return (
-    <div className="min-h-screen text-white">
-      <div className="relative mx-auto flex min-h-screen max-w-[1600px] flex-col px-3 pb-4 pt-3 md:px-5">
-        <div className="immersive-shell-bar mb-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <NavLink to="/" className="immersive-brand">
-              <span className="immersive-brand-mark">D</span>
-              <span className="font-display text-[11px] tracking-[0.26em] text-white/92">DashForge</span>
+    <div className="app-root">
+      <div className="app-shell">
+        <div className="mode-header">
+          <div className="mode-header-main">
+            <NavLink to="/" className="app-brand-lockup">
+              <div className="app-brand-mark">D</div>
+              <div className="app-brand-copy">
+                <p className="app-brand-eyebrow">Arcade Route</p>
+                <h1 className="app-brand-title">DashForge</h1>
+              </div>
             </NavLink>
 
-            <div className="game-chip-gold px-4 py-2 font-display text-[10px] tracking-[0.22em] text-[#734700]">
-              {routeMode}
-            </div>
+            <div className="mode-header-right">
+              <div className="mode-chip-cluster">
+                <span className="mode-chip">{routeMode}</span>
+                <span className="mode-chip mode-chip--ghost">{routeHint}</span>
+              </div>
 
-            {!isHomeRoute ? (
-              <NavLink to="/levels">
-                <Button variant="ghost">Back To Levels</Button>
-              </NavLink>
-            ) : null}
+              <div className="flex flex-wrap items-center gap-3">
+                {!location.pathname.startsWith('/levels') && !location.pathname.startsWith('/play') ? null : (
+                  <NavLink to="/levels">
+                    <Button variant="secondary">Back To Levels</Button>
+                  </NavLink>
+                )}
+
+                {user ? (
+                  <>
+                    <NavLink to="/profile" className="app-user-card">
+                      <span className="app-user-label">Pilot</span>
+                      <span className="app-user-name">{user.username}</span>
+                    </NavLink>
+                    <Button variant="ghost" onClick={() => clearAuth()}>
+                      Log Out
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <NavLink to="/login">
+                      <Button variant="ghost">Login</Button>
+                    </NavLink>
+                    <NavLink to="/register">
+                      <Button>Register</Button>
+                    </NavLink>
+                  </>
+                )}
+              </div>
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            {user ? (
-              <>
-                <NavLink to="/profile" className="game-chip-purple px-4 py-2">
-                  <p className="font-display text-[10px] tracking-[0.2em] text-white/68">Pilot</p>
-                  <p className="font-display text-sm text-white">{user.username}</p>
-                </NavLink>
-                <button
-                  type="button"
-                  onClick={() => clearAuth()}
-                  className="game-chip-purple px-4 py-2 font-display text-[10px] tracking-[0.22em] text-white"
-                >
-                  Logout
-                </button>
-              </>
-            ) : (
-              <>
-                <NavLink to="/login">
-                  <Button variant="ghost">Login</Button>
-                </NavLink>
-                <NavLink to="/register">
-                  <Button>Register</Button>
-                </NavLink>
-              </>
-            )}
+          <div className="mode-header-lane">
+            <span>Neon arcade framing</span>
+            <span>Fast readable UI</span>
+            <span>Gameplay logic preserved</span>
           </div>
         </div>
 
-        <main className="flex-1">
+        <main className="app-main">
           <Outlet />
         </main>
       </div>

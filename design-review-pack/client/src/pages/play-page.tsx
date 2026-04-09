@@ -98,17 +98,17 @@ export function PlayPage() {
   const rewardStars = getDisplayedStars(level);
 
   return (
-    <div className="play-screen">
+    <div className="space-y-6">
       <Panel className="game-screen bg-transparent p-0">
-        <div className="grid gap-6 px-5 py-6 lg:grid-cols-[1.08fr_0.92fr] lg:px-8 lg:py-8">
-          <div className="play-hero">
-            <p className="arcade-eyebrow">Official Run Mode</p>
+        <div className="grid gap-6 px-5 py-6 lg:grid-cols-[1.05fr_0.95fr] lg:px-8 lg:py-8">
+          <div className="space-y-4">
+            <p className="font-display text-[11px] tracking-[0.3em] text-[#ffd44a]">Official Run</p>
             <h2 className="font-display text-4xl leading-[0.9] text-[#caff45] drop-shadow-[0_4px_0_rgba(0,0,0,0.35)] md:text-6xl">
               {level.title}
             </h2>
-            <p className="text-sm leading-8 text-white/82">
-              A live server-backed run wrapper around the same gameplay canvas. Each attempt starts a tracked session, and
-              the surrounding chrome now behaves like a real gameplay screen instead of a plain page.
+            <p className="max-w-2xl text-sm leading-8 text-white/82">
+              Every attempt opens a fresh server-backed run session, so this screen now behaves like a real gameplay
+              launch instead of a static preview.
             </p>
           </div>
 
@@ -130,15 +130,13 @@ export function PlayPage() {
       </Panel>
 
       {resultMessage ? (
-        <Panel className="game-screen bg-transparent">
-          <div className="play-result-banner">
-            <p className="play-result-copy">{resultMessage}</p>
-            <div className="flex flex-wrap gap-3">
-              <Button onClick={restartRun}>Run Again</Button>
-              <Link to="/leaderboard">
-                <Button variant="secondary">View Rank</Button>
-              </Link>
-            </div>
+        <Panel className="game-screen flex flex-wrap items-center justify-between gap-4 bg-transparent">
+          <p className="text-sm text-white/86">{resultMessage}</p>
+          <div className="flex gap-3">
+            <Button onClick={restartRun}>Run Again</Button>
+            <Link to="/leaderboard">
+              <Button variant="secondary">View Rank</Button>
+            </Link>
           </div>
         </Panel>
       ) : null}
@@ -170,16 +168,18 @@ export function PlayPage() {
         />
       ) : (
         <Panel className="arcade-runtime-frame game-screen bg-transparent">
-          <div className="play-placeholder">
+          <div className="space-y-4">
             <div className="arcade-runtime-bar flex flex-wrap items-center justify-between gap-3">
               <div className="space-y-2">
                 <div className="flex flex-wrap items-center gap-2">
                   <p className="font-display text-[11px] tracking-[0.24em] text-[#ffd44a]">Runtime</p>
-                  <span className="arcade-badge arcade-badge--default">Syncing</span>
+                  <span className="arcade-button inline-flex items-center bg-[linear-gradient(180deg,#7e2ae6,#5910be)] px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-white">
+                    syncing
+                  </span>
                 </div>
                 <h3 className="font-display text-2xl text-[#caff45]">{level.dataJson.meta.theme}</h3>
               </div>
-              <div className="flex flex-wrap gap-3 text-sm">
+              <div className="flex gap-3 text-sm">
                 <div className="hud-pill px-4 py-2">
                   <p className="font-display text-[10px] uppercase tracking-[0.2em] text-[#ffd44a]">Attempt</p>
                   <p className="font-display text-sm text-white">{attemptNumber}</p>
@@ -202,19 +202,21 @@ export function PlayPage() {
               <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] uppercase tracking-[0.14em] text-white/70">
                 <span>Secure run session</span>
                 <span>Retry handshake</span>
-                <span>Stage height preserved</span>
+                <span>Stage preserved</span>
               </div>
             </div>
 
             <div className="arcade-runtime-stage">
-              <div className="play-placeholder-stage">
-                <p className="font-display text-sm tracking-[0.24em] text-white/78">Preparing secure gameplay session...</p>
+              <div className="flex aspect-video min-h-[320px] w-full items-center justify-center border-[4px] border-white/8 bg-[#130326] px-6 text-center md:min-h-[420px]">
+                <p className="font-display text-sm tracking-[0.24em] text-white/78">
+                  Preparing secure gameplay session...
+                </p>
               </div>
             </div>
 
             <p className="arcade-runtime-footer text-xs leading-6 text-white/72">
-              The next official attempt is being created on the server. The stage keeps its full height here so the page
-              does not jump between retries.
+              The next official attempt is being created on the server. The stage keeps its full height here so the
+              page does not jump between retries.
             </p>
           </div>
         </Panel>

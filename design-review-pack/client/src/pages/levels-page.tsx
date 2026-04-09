@@ -2,12 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { EmptyState, Panel } from '../components/ui';
 import { LevelCard } from '../features/levels/level-card';
-import {
-  formatStageNumber,
-  formatThemeName,
-  getDifficultyPresentation,
-  getDisplayedStars,
-} from '../features/levels/level-presentation';
+import { formatStageNumber } from '../features/levels/level-presentation';
 import { apiRequest } from '../services/api';
 import type { Level } from '../types/models';
 
@@ -24,7 +19,6 @@ export function LevelsPage() {
   const stripRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const initializedRef = useRef(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const selectedLevel = levelList[selectedIndex];
 
   useEffect(() => {
     if (!levels?.length) {
@@ -134,27 +128,6 @@ export function LevelsPage() {
 
         {levelList.length ? (
           <div className="gd-level-select-layout">
-            {selectedLevel ? (
-              <div className="gd-level-select-head">
-                <div className="gd-level-select-copy">
-                  <p className="arcade-eyebrow">Official Stage Select</p>
-                  <h2 className="arcade-heading text-[clamp(2.8rem,5vw,4.8rem)] text-[#caff45]">Launch Corridor</h2>
-                  <p>Scroll horizontally, center a route, then hit briefing or launch when the stage rhythm feels right.</p>
-                </div>
-
-                <div className="gd-level-select-current">
-                  <span className="arcade-eyebrow">Selected Stage</span>
-                  <strong className="font-display text-2xl text-white">
-                    {formatStageNumber(selectedIndex)} / {selectedLevel.title}
-                  </strong>
-                  <span className="text-sm text-white/76">
-                    {getDifficultyPresentation(selectedLevel.difficulty).label} / {formatThemeName(selectedLevel.theme)} /{' '}
-                    {getDisplayedStars(selectedLevel)} Stars
-                  </span>
-                </div>
-              </div>
-            ) : null}
-
             <div className="gd-level-select-frame">
               <button
                 type="button"

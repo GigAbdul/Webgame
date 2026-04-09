@@ -6,6 +6,7 @@ import {
   createSampleLevelDataOne,
   createSampleLevelDataTwo,
 } from '../server/src/modules/levels/level-data';
+import { getStarsForDifficulty } from '../server/src/modules/levels/difficulty';
 
 config();
 
@@ -91,7 +92,7 @@ async function main() {
       sourceType: 'ADMIN_CREATED',
       status: 'OFFICIAL',
       difficulty: 'NORMAL',
-      starsReward: 5,
+      starsReward: getStarsForDifficulty('NORMAL'),
       isOfficial: true,
       theme: 'aurora-grid',
       featured: true,
@@ -108,7 +109,7 @@ async function main() {
       sourceType: 'ADMIN_CREATED',
       status: 'OFFICIAL',
       difficulty: 'NORMAL',
-      starsReward: 5,
+      starsReward: getStarsForDifficulty('NORMAL'),
       isOfficial: true,
       theme: 'aurora-grid',
       featured: true,
@@ -128,7 +129,7 @@ async function main() {
       sourceType: 'ADMIN_CREATED',
       status: 'OFFICIAL',
       difficulty: 'HARD',
-      starsReward: 8,
+      starsReward: getStarsForDifficulty('HARD'),
       isOfficial: true,
       theme: 'molten-sunset',
       featured: false,
@@ -145,7 +146,7 @@ async function main() {
       sourceType: 'ADMIN_CREATED',
       status: 'OFFICIAL',
       difficulty: 'HARD',
-      starsReward: 8,
+      starsReward: getStarsForDifficulty('HARD'),
       isOfficial: true,
       theme: 'molten-sunset',
       featured: false,

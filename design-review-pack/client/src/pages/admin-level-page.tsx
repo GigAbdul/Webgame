@@ -118,9 +118,9 @@ export function AdminLevelPage() {
   return (
     <div className="space-y-6">
       <Panel className="game-screen bg-transparent p-0">
-        <div className="grid gap-6 px-5 py-6 lg:grid-cols-[1.08fr_0.92fr] lg:px-8 lg:py-8">
-          <div className="admin-hero">
-            <p className="arcade-eyebrow">Control Room</p>
+        <div className="grid gap-6 px-5 py-6 lg:grid-cols-[1.05fr_0.95fr] lg:px-8 lg:py-8">
+          <div className="space-y-4">
+            <p className="font-display text-[11px] tracking-[0.3em] text-[#ffd44a]">Admin Detail</p>
 
             <div className="flex flex-col gap-5 md:flex-row md:items-start">
               <DifficultyIcon difficulty={activeDifficulty} size="lg" showStars />
@@ -132,7 +132,7 @@ export function AdminLevelPage() {
                 <p className="max-w-2xl text-sm leading-8 text-white/82">{level.description}</p>
                 <div className="flex flex-wrap gap-2">
                   <Badge tone={level.isOfficial ? 'success' : 'default'}>{level.status}</Badge>
-                  <Badge tone="accent">{level.author?.username ?? 'Unknown Author'}</Badge>
+                  <Badge tone="accent">{level.author?.username ?? 'unknown author'}</Badge>
                   <Badge>{difficultyPreview.label}</Badge>
                 </div>
               </div>
@@ -156,116 +156,102 @@ export function AdminLevelPage() {
         </div>
       </Panel>
 
-      <div className="grid gap-6 xl:grid-cols-[1.08fr_0.92fr]">
+      <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <GameCanvas levelData={level.dataJson} attemptNumber={1} autoRestartOnFail className="h-fit" />
 
-        <div className="control-room-grid">
-          <Panel className="game-screen bg-transparent">
-            <div className="space-y-4">
+        <div className="space-y-4">
+          <Panel className="game-screen space-y-4 bg-transparent">
+            <h3 className="font-display text-2xl text-white">Official Settings</h3>
+            <div>
+              <FieldLabel>Title</FieldLabel>
+              <Input value={form.title} onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))} />
+            </div>
+            <div>
+              <FieldLabel>Description</FieldLabel>
+              <Textarea
+                rows={4}
+                value={form.description}
+                onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
               <div>
-                <p className="arcade-eyebrow">Official Settings</p>
-                <h3 className="font-display text-3xl text-white">Moderation Controls</h3>
+                <FieldLabel>Difficulty</FieldLabel>
+                <Select
+                  value={form.difficulty}
+                  onChange={(event) => setForm((current) => ({ ...current, difficulty: event.target.value as Difficulty }))}
+                >
+                  {difficultyOptions.map((difficulty) => (
+                    <option key={difficulty} value={difficulty}>
+                      {getDifficultyPresentation(difficulty).label}
+                    </option>
+                  ))}
+                </Select>
               </div>
-
               <div>
-                <FieldLabel>Title</FieldLabel>
-                <Input value={form.title} onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))} />
+                <FieldLabel>Stars Reward</FieldLabel>
+                <div className="game-stat min-h-[48px] px-4 py-3">
+                  <p className="font-display text-2xl text-white">{previewStars}</p>
+                </div>
               </div>
-
+            </div>
+            <div className="grid grid-cols-2 gap-3">
               <div>
-                <FieldLabel>Description</FieldLabel>
-                <Textarea
-                  rows={4}
-                  value={form.description}
-                  onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
-                />
+                <FieldLabel>Status</FieldLabel>
+                <Select
+                  value={form.status}
+                  onChange={(event) => setForm((current) => ({ ...current, status: event.target.value as LevelStatus }))}
+                >
+                  {statuses.map((status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </Select>
               </div>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <FieldLabel>Difficulty</FieldLabel>
-                  <Select
-                    value={form.difficulty}
-                    onChange={(event) => setForm((current) => ({ ...current, difficulty: event.target.value as Difficulty }))}
-                  >
-                    {difficultyOptions.map((difficulty) => (
-                      <option key={difficulty} value={difficulty}>
-                        {getDifficultyPresentation(difficulty).label}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-
-                <div>
-                  <FieldLabel>Stars Reward</FieldLabel>
-                  <div className="game-stat min-h-[56px] px-4 py-3">
-                    <p className="font-display text-2xl text-white">{previewStars}</p>
-                  </div>
-                </div>
+              <div className="grid gap-2 pt-7 text-sm text-white/80">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={form.featured}
+                    onChange={(event) => setForm((current) => ({ ...current, featured: event.target.checked }))}
+                  />
+                  Featured
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={form.isVisible}
+                    onChange={(event) => setForm((current) => ({ ...current, isVisible: event.target.checked }))}
+                  />
+                  Visible in public catalog
+                </label>
               </div>
+            </div>
 
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <FieldLabel>Status</FieldLabel>
-                  <Select
-                    value={form.status}
-                    onChange={(event) => setForm((current) => ({ ...current, status: event.target.value as LevelStatus }))}
-                  >
-                    {statuses.map((status) => (
-                      <option key={status} value={status}>
-                        {status}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-
-                <div className="toggle-row pt-7">
-                  <label className="toggle-box">
-                    <input
-                      type="checkbox"
-                      checked={form.featured}
-                      onChange={(event) => setForm((current) => ({ ...current, featured: event.target.checked }))}
-                    />
-                    <span className="text-sm text-white/82">Featured slot</span>
-                  </label>
-
-                  <label className="toggle-box">
-                    <input
-                      type="checkbox"
-                      checked={form.isVisible}
-                      onChange={(event) => setForm((current) => ({ ...current, isVisible: event.target.checked }))}
-                    />
-                    <span className="text-sm text-white/82">Visible in catalog</span>
-                  </label>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap gap-3">
-                <Button onClick={() => saveSettingsMutation.mutate()}>Save Settings</Button>
-                <Button variant="secondary" onClick={() => publishMutation.mutate()}>
-                  Publish Official
-                </Button>
-                <Button variant="danger" onClick={() => archiveMutation.mutate()}>
-                  Archive
-                </Button>
-                <Button variant="ghost" onClick={() => recalcMutation.mutate()}>
-                  Recalculate Stars
-                </Button>
-              </div>
+            <div className="flex flex-wrap gap-3">
+              <Button onClick={() => saveSettingsMutation.mutate()}>Save Settings</Button>
+              <Button variant="secondary" onClick={() => publishMutation.mutate()}>
+                Publish Official
+              </Button>
+              <Button variant="danger" onClick={() => archiveMutation.mutate()}>
+                Archive
+              </Button>
+              <Button variant="ghost" onClick={() => recalcMutation.mutate()}>
+                Recalculate Stars
+              </Button>
             </div>
           </Panel>
 
-          <Panel className="game-screen bg-transparent">
-            <div className="space-y-3">
-              <p className="arcade-eyebrow">Moderation Notes</p>
-              <p className="text-sm leading-7 text-white/78">
-                Reward is derived from the selected difficulty icon. Every demon rank pays 10 stars, and recalculation syncs
-                stored rewards plus total leaderboard values.
-              </p>
-              <Link to={`/editor/${level.id}`} className="font-display text-[10px] tracking-[0.22em] text-[#ffd44a] hover:text-white">
-                Open Level In Editor
-              </Link>
-            </div>
+          <Panel className="game-screen space-y-3 bg-transparent">
+            <h3 className="font-display text-2xl text-white">Moderation Notes</h3>
+            <p className="text-sm leading-7 text-white/78">
+              Reward is now derived from the difficulty icon. Every demon rank pays 10 stars, and changing difficulty
+              triggers a backend sync for stored rewards and leaderboard totals.
+            </p>
+            <Link to={`/editor/${level.id}`} className="font-display text-[10px] tracking-[0.22em] text-[#ffd44a] hover:text-white">
+              Open Level In Editor
+            </Link>
           </Panel>
         </div>
       </div>
