@@ -11,7 +11,9 @@ SET "starsReward" = CASE
   WHEN "difficulty" = 'HARD' THEN 6
   WHEN "difficulty" = 'HARDER' THEN 8
   WHEN "difficulty" = 'INSANE' THEN 10
-  WHEN "difficulty" IN ('DEMON', 'EASY_DEMON', 'MEDIUM_DEMON', 'HARD_DEMON', 'INSANE_DEMON', 'EXTREME_DEMON') THEN 10
+  -- Existing rows before this migration can only contain the old enum values.
+  -- Referencing the newly-added enum variants in the same migration can fail on PostgreSQL.
+  WHEN "difficulty" = 'DEMON' THEN 10
   ELSE 0
 END
 WHERE "difficulty" IS NOT NULL;

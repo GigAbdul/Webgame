@@ -1,13 +1,16 @@
+import path from 'node:path';
 import { config } from 'dotenv';
 import { z } from 'zod';
 
-config();
+const rootEnvPath = path.resolve(__dirname, '../../../.env');
+
+config({ path: rootEnvPath });
 
 const envSchema = z.object({
   DATABASE_URL: z
     .string()
     .min(1)
-    .default('postgresql://postgres:postgres@localhost:5432/dashforge?schema=public'),
+    .default('postgresql://postgres:postgres@localhost:5433/dashforge?schema=public'),
   JWT_SECRET: z.string().min(12).default('local-demo-secret'),
   PORT: z.coerce.number().default(4000),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -18,3 +21,5 @@ const envSchema = z.object({
 });
 
 export const env = envSchema.parse(process.env);
+
+process.env.DATABASE_URL ??= env.DATABASE_URL;

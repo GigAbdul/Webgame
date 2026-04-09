@@ -24,12 +24,12 @@ const router = createBrowserRouter([
     element: <ArcadeScreenLayout />,
     children: [
       { index: true, element: <HomePage /> },
+      { path: 'play/:slugOrId', element: <PlayPage /> },
       {
         element: <ProtectedRoute />,
         children: [
           { path: 'editor/new', element: <EditorPage /> },
           { path: 'editor/:id', element: <EditorPage /> },
-          { path: 'play/:slugOrId', element: <PlayPage /> },
         ],
       },
     ],

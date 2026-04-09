@@ -4,15 +4,19 @@ import { Link, useParams } from 'react-router-dom';
 import { Button, Panel } from '../components/ui';
 import { GameCanvas } from '../features/game/game-canvas';
 import { getDifficultyPresentation, getDisplayedStars } from '../features/levels/level-presentation';
-import { apiRequest } from '../services/api';
+import { apiRequest, ApiClientError } from '../services/api';
+import { useAuthStore } from '../store/auth-store';
 import type { Level } from '../types/models';
 
 export function PlayPage() {
   const { slugOrId = '' } = useParams();
   const queryClient = useQueryClient();
+  const user = useAuthStore((state) => state.user);
+  const isAuthenticated = Boolean(user);
   const [runId, setRunId] = useState(0);
   const [attemptNumber, setAttemptNumber] = useState(1);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [sessionSyncFailed, setSessionSyncFailed] = useState(false);
   const [resultMessage, setResultMessage] = useState<string>('');
 
   const levelQuery = useQuery({
@@ -28,7 +32,19 @@ export function PlayPage() {
         body: JSON.stringify({ levelId, clientVersion: 'dashforge-web-1' }),
       }),
     onSuccess: (payload) => {
+      setSessionSyncFailed(false);
       setActiveSessionId(payload.session.id);
+    },
+    onError: (error) => {
+      setActiveSessionId(null);
+      setSessionSyncFailed(true);
+
+      if (error instanceof ApiClientError && error.statusCode === 401) {
+        setResultMessage('Guest mode active. Sign in if you want stars and leaderboard progress.');
+        return;
+      }
+
+      setResultMessage('Server sync is unavailable. You can still play locally, but this run will not count.');
     },
   });
 
@@ -67,19 +83,38 @@ export function PlayPage() {
       void queryClient.invalidateQueries({ queryKey: ['leaderboard-me'] });
       void queryClient.invalidateQueries({ queryKey: ['profile'] });
     },
+    onError: () => {
+      setResultMessage('Run cleared locally, but reward sync failed. Retry after signing in again if needed.');
+    },
   });
 
   const startSession = startSessionMutation.mutate;
+  const guestPlayable = !isAuthenticated || sessionSyncFailed;
 
   useEffect(() => {
-    if (levelQuery.data?.level.id) {
-      startSession(levelQuery.data.level.id);
+    setActiveSessionId(null);
+    setSessionSyncFailed(false);
+    setResultMessage('');
+  }, [isAuthenticated, slugOrId]);
+
+  useEffect(() => {
+    if (!levelQuery.data?.level.id) {
+      return;
     }
-  }, [levelQuery.data?.level.id, runId, startSession]);
+
+    if (!isAuthenticated) {
+      setActiveSessionId(null);
+      setSessionSyncFailed(false);
+      return;
+    }
+
+    startSession(levelQuery.data.level.id);
+  }, [levelQuery.data?.level.id, isAuthenticated, runId, startSession]);
 
   const restartRun = () => {
     setResultMessage('');
     setActiveSessionId(null);
+    setSessionSyncFailed(false);
     setAttemptNumber((current) => current + 1);
     setRunId((current) => current + 1);
   };
@@ -96,19 +131,22 @@ export function PlayPage() {
 
   const difficulty = getDifficultyPresentation(level.difficulty);
   const rewardStars = getDisplayedStars(level);
+  const isTrackedRun = isAuthenticated && Boolean(activeSessionId);
+  const runtimeStatusLabel = isTrackedRun ? 'Tracked Run' : 'Guest Run';
 
   return (
     <div className="play-screen">
       <Panel className="game-screen bg-transparent p-0">
         <div className="grid gap-6 px-5 py-6 lg:grid-cols-[1.08fr_0.92fr] lg:px-8 lg:py-8">
           <div className="play-hero">
-            <p className="arcade-eyebrow">Official Run Mode</p>
+            <p className="arcade-eyebrow">{isTrackedRun ? 'Official Run Mode' : 'Guest Practice Mode'}</p>
             <h2 className="font-display text-4xl leading-[0.9] text-[#caff45] drop-shadow-[0_4px_0_rgba(0,0,0,0.35)] md:text-6xl">
               {level.title}
             </h2>
             <p className="text-sm leading-8 text-white/82">
-              A live server-backed run wrapper around the same gameplay canvas. Each attempt starts a tracked session, and
-              the surrounding chrome now behaves like a real gameplay screen instead of a plain page.
+              {isAuthenticated
+                ? 'Signed-in runs sync with the server for official completion rewards and leaderboard progress.'
+                : 'You can play without an account. Guest clears are local practice only and do not enter the leaderboard.'}
             </p>
           </div>
 
@@ -122,8 +160,8 @@ export function PlayPage() {
               <p className="mt-2 font-display text-4xl text-white">{rewardStars}</p>
             </div>
             <div className="game-stat px-4 py-4">
-              <p className="font-display text-[10px] tracking-[0.22em] text-[#ffd44a]">Attempt</p>
-              <p className="mt-2 font-display text-4xl text-white">{attemptNumber}</p>
+              <p className="font-display text-[10px] tracking-[0.22em] text-[#ffd44a]">Mode</p>
+              <p className="mt-2 font-display text-xl text-white">{runtimeStatusLabel}</p>
             </div>
           </div>
         </div>
@@ -135,19 +173,25 @@ export function PlayPage() {
             <p className="play-result-copy">{resultMessage}</p>
             <div className="flex flex-wrap gap-3">
               <Button onClick={restartRun}>Run Again</Button>
-              <Link to="/leaderboard">
-                <Button variant="secondary">View Rank</Button>
-              </Link>
+              {isAuthenticated ? (
+                <Link to="/leaderboard">
+                  <Button variant="secondary">View Rank</Button>
+                </Link>
+              ) : (
+                <Link to="/register">
+                  <Button variant="secondary">Create Account</Button>
+                </Link>
+              )}
             </div>
           </div>
         </Panel>
       ) : null}
 
-      {activeSessionId ? (
+      {guestPlayable || activeSessionId ? (
         <GameCanvas
-          key={`${activeSessionId}-${attemptNumber}`}
+          key={activeSessionId ? `${activeSessionId}-${attemptNumber}` : `guest-${runId}-${attemptNumber}`}
           levelData={level.dataJson}
-          runId={activeSessionId}
+          runId={activeSessionId ?? `guest-${runId}`}
           attemptNumber={attemptNumber}
           onFail={({ progressPercent }) => {
             if (activeSessionId) {
@@ -165,7 +209,10 @@ export function PlayPage() {
                 progressPercent,
                 completionTimeMs,
               });
+              return;
             }
+
+            setResultMessage('Guest clear confirmed. Sign in if you want stars and leaderboard placement.');
           }}
         />
       ) : (
@@ -201,20 +248,19 @@ export function PlayPage() {
               </div>
               <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] uppercase tracking-[0.14em] text-white/70">
                 <span>Secure run session</span>
-                <span>Retry handshake</span>
-                <span>Stage height preserved</span>
+                <span>Reward sync</span>
+                <span>Leaderboard tracking</span>
               </div>
             </div>
 
             <div className="arcade-runtime-stage">
               <div className="play-placeholder-stage">
-                <p className="font-display text-sm tracking-[0.24em] text-white/78">Preparing secure gameplay session...</p>
+                <p className="font-display text-sm tracking-[0.24em] text-white/78">Preparing tracked gameplay session...</p>
               </div>
             </div>
 
             <p className="arcade-runtime-footer text-xs leading-6 text-white/72">
-              The next official attempt is being created on the server. The stage keeps its full height here so the page
-              does not jump between retries.
+              Signed-in runs wait for a secure session so completions can grant official rewards correctly.
             </p>
           </div>
         </Panel>

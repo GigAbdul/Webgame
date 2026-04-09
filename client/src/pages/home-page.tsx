@@ -1,137 +1,325 @@
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { cn } from '../utils/cn';
 import { useAuthStore } from '../store/auth-store';
 
-const dockItems = [
-  { label: 'L', title: 'Levels', to: '/levels' },
-  { label: 'R', title: 'Rank', to: '/leaderboard' },
-  { label: 'B', title: 'Build', to: '/editor/new' },
-  { label: 'P', title: 'Profile', to: '/profile' },
+type HomePanel = 'skins' | 'settings' | null;
+type SkinId = 'pulse' | 'nova' | 'volt';
+
+type HomeSettings = {
+  musicVolume: number;
+  sfxVolume: number;
+  screenShake: boolean;
+  showHitFlash: boolean;
+};
+
+const homeSkinStorageKey = 'dashforge-home-skin';
+const homeSettingsStorageKey = 'dashforge-home-settings';
+
+const skinOptions: Array<{
+  id: SkinId;
+  name: string;
+  accent: string;
+  flavor: string;
+}> = [
+  {
+    id: 'pulse',
+    name: 'Pulse',
+    accent: 'Pink-Cyan',
+    flavor: 'Fast neon default with sharp contrast.',
+  },
+  {
+    id: 'nova',
+    name: 'Nova',
+    accent: 'Gold-Orange',
+    flavor: 'Warm arcade glow for brighter stages.',
+  },
+  {
+    id: 'volt',
+    name: 'Volt',
+    accent: 'Lime-Blue',
+    flavor: 'Electric palette tuned for clear silhouettes.',
+  },
 ];
+
+const defaultSettings: HomeSettings = {
+  musicVolume: 70,
+  sfxVolume: 80,
+  screenShake: true,
+  showHitFlash: true,
+};
+
+function isSkinId(value: string | null): value is SkinId {
+  return value === 'pulse' || value === 'nova' || value === 'volt';
+}
+
+function clampPercentage(value: number) {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function readStoredSkin() {
+  if (typeof window === 'undefined') {
+    return 'pulse' as SkinId;
+  }
+
+  const storedValue = window.localStorage.getItem(homeSkinStorageKey);
+  return isSkinId(storedValue) ? storedValue : 'pulse';
+}
+
+function readStoredSettings(): HomeSettings {
+  if (typeof window === 'undefined') {
+    return defaultSettings;
+  }
+
+  const raw = window.localStorage.getItem(homeSettingsStorageKey);
+
+  if (!raw) {
+    return defaultSettings;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<HomeSettings>;
+
+    return {
+      musicVolume: clampPercentage(parsed.musicVolume ?? defaultSettings.musicVolume),
+      sfxVolume: clampPercentage(parsed.sfxVolume ?? defaultSettings.sfxVolume),
+      screenShake: Boolean(parsed.screenShake ?? defaultSettings.screenShake),
+      showHitFlash: Boolean(parsed.showHitFlash ?? defaultSettings.showHitFlash),
+    };
+  } catch {
+    return defaultSettings;
+  }
+}
 
 export function HomePage() {
   const user = useAuthStore((state) => state.user);
-  const profileRoute = user ? '/profile' : '/register';
-  const forgeRoute = user ? '/editor/new' : '/register';
-  const playRoute = user ? '/levels' : '/login';
+  const playRoute = '/levels';
+  const builderRoute = user ? '/editor/new' : '/register';
+  const [activePanel, setActivePanel] = useState<HomePanel>(null);
+  const [selectedSkin, setSelectedSkin] = useState<SkinId>(() => readStoredSkin());
+  const [settings, setSettings] = useState<HomeSettings>(() => readStoredSettings());
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.localStorage.setItem(homeSkinStorageKey, selectedSkin);
+  }, [selectedSkin]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    window.localStorage.setItem(homeSettingsStorageKey, JSON.stringify(settings));
+  }, [settings]);
+
+  useEffect(() => {
+    if (!activePanel) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setActivePanel(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [activePanel]);
 
   return (
-    <div className="home-screen">
-      <div className="home-shard left-[-2%] top-[10%] h-[15%] w-[18%]" />
-      <div className="home-shard left-[16%] top-[-2%] h-[18%] w-[22%]" />
-      <div className="home-shard right-[14%] top-[4%] h-[18%] w-[18%]" />
-      <div className="home-shard right-[-2%] top-[0%] h-[24%] w-[20%]" />
-      <div className="home-shard left-[6%] bottom-[24%] h-[14%] w-[20%]" />
-      <div className="home-shard right-[0%] bottom-[22%] h-[18%] w-[24%]" />
+    <div className="game-home-screen" data-screen-shake={settings.screenShake ? 'on' : 'off'}>
+      <div className="game-home-atmosphere" aria-hidden="true">
+        <div className="game-home-stars" />
+        <div className="game-home-planet-glow" />
+        <div className="game-home-planet" />
+        <div className="game-home-grid" />
+        <div className="game-home-skyline game-home-skyline--rear" />
+        <div className="game-home-skyline game-home-skyline--front" />
+        <div className="game-home-stage-lane" />
+        <div className="game-home-stage-blocks" />
+        <div className="game-home-floating-cube game-home-floating-cube--left" />
+        <div className="game-home-floating-cube game-home-floating-cube--right" />
+      </div>
 
-      <div className="home-main-grid">
-        <div className="home-hero-copy">
-          <div className="home-status-ribbon">
-            <span>Neon Arcade Interface</span>
-            <strong>Official Runs + Creator Workshop</strong>
-          </div>
-          <h1 className="menu-title">DashForge</h1>
-          <div className="menu-subtitle">Arcade Main Menu</div>
-          <p>
-            A Geometry Dash-inspired web game interface with loud color, fast readability, official stage runs, and a
-            creator workflow that feels like part of the same universe.
-          </p>
-        </div>
+      <div className="game-home-shell">
+        <div className="game-home-primary">
+          <h1 className="game-home-title">DashForge</h1>
 
-        <div className="home-action-stage">
-          <div className="home-action-grid">
-            <Link to={profileRoute} className="home-action-card" aria-label={user ? 'Open profile' : 'Create account'}>
-              <div className="home-action-emblem">P</div>
-              <div>
-                <p className="arcade-eyebrow">Pilot Route</p>
-                <h2 className="home-action-title">{user ? 'Profile Hub' : 'Create Pilot'}</h2>
-              </div>
-              <p className="home-action-copy">
-                {user
-                  ? 'Track stars, profile progress, and your current forge identity.'
-                  : 'Register a pilot to save progress, earn stars, and unlock the editor.'}
-              </p>
-            </Link>
-
-            <div className="home-play-core">
-              <Link to={playRoute} className="home-play-button" aria-label="Play official levels">
-                <div className="home-play-icon" />
-                <div className="home-play-title">Play</div>
-                <div className="home-play-subtitle">Enter the official stage select and launch a run</div>
-              </Link>
-            </div>
-
-            <Link to={forgeRoute} className="home-action-card home-action-card--warm" aria-label="Open forge mode">
-              <div className="home-action-emblem">F</div>
-              <div>
-                <p className="arcade-eyebrow">Creator Route</p>
-                <h2 className="home-action-title">Forge Mode</h2>
-              </div>
-              <p className="home-action-copy">
-                Build routes, test timings, tune triggers, and send polished levels into the moderation flow.
-              </p>
-            </Link>
-          </div>
-
-          <div className="home-info-row">
-            <div className="home-pilot-pod">
-              <div className="home-pilot-cube" aria-hidden="true">
-                <span />
-              </div>
-              <div className="home-pilot-copy">
-                <p className="arcade-eyebrow">Pilot Status</p>
-                <div className="home-pilot-name">{user ? user.username : 'Guest Pilot'}</div>
-                <p className="home-pilot-description">
-                  {user
-                    ? `Logged in and ready to run. Current total stars: ${user.totalStars}.`
-                    : 'Jump in through login or register, then launch official routes and start collecting stars.'}
-                </p>
-              </div>
-            </div>
-
-            <div className="home-bottom-panel">
-              <div>
-                <p className="arcade-eyebrow">Quick Loop</p>
-                <h3 className="home-action-title">Play. Learn. Build. Repeat.</h3>
-              </div>
-              <p className="home-bottom-copy">
-                Official stages give the project its arcade pulse, while the forge keeps it alive. The UI now leans into
-                that rhythm instead of looking like a generic web dashboard.
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="home-quick-dock">
-          {dockItems.map((item) => (
-            <Link
-              key={item.title}
-              to={
-                item.to === '/editor/new' && !user
-                  ? '/register'
-                  : item.to === '/profile' && !user
-                    ? '/login'
-                    : item.to
-              }
-              className="home-dock-item"
-              aria-label={item.title}
+          <div className="game-home-button-row">
+            <button
+              type="button"
+              className="game-home-main-button game-home-main-button--skin"
+              onClick={() => setActivePanel('skins')}
+              aria-label="Skin Select"
             >
-              <div className="home-dock-button">
-                <span className="home-dock-icon">{item.label}</span>
-              </div>
-              <span className="font-display text-[10px] tracking-[0.22em] text-white/84">{item.title}</span>
-            </Link>
-          ))}
+              <span className="game-home-main-button-core">
+                <span className="game-home-main-button-sprite game-home-main-button-sprite--skin" />
+              </span>
+            </button>
 
-          {user?.role === 'ADMIN' ? (
-            <Link to="/admin" className="home-dock-item" aria-label="Admin">
-              <div className="home-dock-button">
-                <span className="home-dock-icon">A</span>
-              </div>
-              <span className="font-display text-[10px] tracking-[0.22em] text-white/84">Admin</span>
+            <Link
+              to={playRoute}
+              className="game-home-main-button game-home-main-button--play"
+              aria-label="Play"
+            >
+              <span className="game-home-main-button-core">
+                <span className="game-home-main-button-sprite game-home-main-button-sprite--play" />
+              </span>
             </Link>
-          ) : null}
+
+            <Link
+              to={builderRoute}
+              className="game-home-main-button game-home-main-button--builder"
+              aria-label="Level Builder"
+            >
+              <span className="game-home-main-button-core">
+                <span className="game-home-main-button-sprite game-home-main-button-sprite--builder" />
+              </span>
+            </Link>
+          </div>
+        </div>
+
+        <div className="game-home-submenu">
+          <button
+            type="button"
+            className="game-home-submenu-button"
+            onClick={() => setActivePanel('settings')}
+            aria-label="Settings"
+          >
+            <span className="game-home-submenu-label">Settings</span>
+          </button>
+          <Link to="/leaderboard" className="game-home-submenu-button" aria-label="Leaderboard">
+            <span className="game-home-submenu-label">
+              <span>Leader</span>
+              <span>Board</span>
+            </span>
+          </Link>
         </div>
       </div>
+
+      {activePanel === 'skins' ? (
+        <div className="game-home-overlay" role="presentation" onClick={() => setActivePanel(null)}>
+          <div className="game-home-panel" role="dialog" aria-modal="true" aria-label="Skin Select" onClick={(event) => event.stopPropagation()}>
+            <div className="game-home-panel-header">
+              <div>
+                <p className="game-home-panel-kicker">Garage</p>
+                <h2 className="game-home-panel-title">Skin Select</h2>
+              </div>
+              <button type="button" className="game-home-close" onClick={() => setActivePanel(null)}>
+                Close
+              </button>
+            </div>
+
+            <div className="game-home-skin-grid">
+              {skinOptions.map((skin) => (
+                <button
+                  key={skin.id}
+                  type="button"
+                  className={cn('game-home-skin-card', selectedSkin === skin.id && 'is-active')}
+                  onClick={() => setSelectedSkin(skin.id)}
+                >
+                  <span className="game-home-skin-preview" data-preview-skin={skin.id}>
+                    <span />
+                  </span>
+                  <span className="game-home-skin-name">{skin.name}</span>
+                  <span className="game-home-skin-accent">{skin.accent}</span>
+                  <span className="game-home-skin-flavor">{skin.flavor}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {activePanel === 'settings' ? (
+        <div className="game-home-overlay" role="presentation" onClick={() => setActivePanel(null)}>
+          <div className="game-home-panel" role="dialog" aria-modal="true" aria-label="Settings" onClick={(event) => event.stopPropagation()}>
+            <div className="game-home-panel-header">
+              <div>
+                <p className="game-home-panel-kicker">Options</p>
+                <h2 className="game-home-panel-title">Settings</h2>
+              </div>
+              <button type="button" className="game-home-close" onClick={() => setActivePanel(null)}>
+                Close
+              </button>
+            </div>
+
+            <div className="game-home-settings-grid">
+              <label className="game-home-slider">
+                <div className="game-home-slider-copy">
+                  <span>Music Volume</span>
+                  <strong>{settings.musicVolume}%</strong>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={settings.musicVolume}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      musicVolume: clampPercentage(Number(event.target.value)),
+                    }))
+                  }
+                />
+              </label>
+
+              <label className="game-home-slider">
+                <div className="game-home-slider-copy">
+                  <span>SFX Volume</span>
+                  <strong>{settings.sfxVolume}%</strong>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={settings.sfxVolume}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      sfxVolume: clampPercentage(Number(event.target.value)),
+                    }))
+                  }
+                />
+              </label>
+
+              <div className="game-home-toggle-row">
+                <button
+                  type="button"
+                  className={cn('game-home-toggle', settings.screenShake && 'is-active')}
+                  onClick={() =>
+                    setSettings((current) => ({
+                      ...current,
+                      screenShake: !current.screenShake,
+                    }))
+                  }
+                >
+                  Screen Shake
+                </button>
+                <button
+                  type="button"
+                  className={cn('game-home-toggle', settings.showHitFlash && 'is-active')}
+                  onClick={() =>
+                    setSettings((current) => ({
+                      ...current,
+                      showHitFlash: !current.showHitFlash,
+                    }))
+                  }
+                >
+                  Hit Flash
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

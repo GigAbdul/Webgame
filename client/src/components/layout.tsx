@@ -18,6 +18,17 @@ export function AppLayout() {
   const location = useLocation();
   const { user, clearAuth } = useAuthStore();
   const isHomeRoute = location.pathname === '/';
+  const isFullScreenLevelsRoute = location.pathname === '/levels';
+
+  if (isFullScreenLevelsRoute) {
+    return (
+      <div className="app-root app-root--levels">
+        <main className="app-main app-main--levels">
+          <Outlet />
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="app-root">

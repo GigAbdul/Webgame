@@ -5,6 +5,7 @@ import { Button } from './ui';
 export function ArcadeScreenLayout() {
   const location = useLocation();
   const { user, clearAuth } = useAuthStore();
+  const isHomeRoute = location.pathname === '/';
   const routeMode = location.pathname.startsWith('/editor')
     ? 'Forge Mode'
     : location.pathname.startsWith('/play')
@@ -15,6 +16,16 @@ export function ArcadeScreenLayout() {
     : location.pathname.startsWith('/play')
       ? 'Official run wrapper with session HUD'
       : 'Main menu launch scene';
+
+  if (isHomeRoute) {
+    return (
+      <div className="app-root app-root--home">
+        <main className="app-main app-main--home">
+          <Outlet />
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="app-root">

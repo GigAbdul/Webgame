@@ -1,13 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { EmptyState, Panel } from '../components/ui';
-import { LevelCard } from '../features/levels/level-card';
-import {
-  formatStageNumber,
-  formatThemeName,
-  getDifficultyPresentation,
-  getDisplayedStars,
-} from '../features/levels/level-presentation';
+import { Link } from 'react-router-dom';
+import { DifficultyIcon } from '../features/levels/difficulty-icon';
+import { getDisplayedStars } from '../features/levels/level-presentation';
 import { apiRequest } from '../services/api';
 import type { Level } from '../types/models';
 
@@ -17,213 +12,172 @@ export function LevelsPage() {
     queryFn: () => apiRequest<{ levels: Level[] }>('/api/levels/official'),
   });
 
-  const levels = levelsQuery.data?.levels;
-  const levelList = levels ?? [];
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const cardRefs = useRef<Array<HTMLDivElement | null>>([]);
-  const stripRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const initializedRef = useRef(false);
+  const levelList = levelsQuery.data?.levels ?? [];
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const selectedLevel = levelList[selectedIndex];
+  const initializedRef = useRef(false);
+  const selectedLevel = levelList[selectedIndex] ?? null;
 
   useEffect(() => {
-    if (!levels?.length) {
+    if (!levelList.length) {
       initializedRef.current = false;
       setSelectedIndex(0);
       return;
     }
 
     if (initializedRef.current) {
+      setSelectedIndex((current) => Math.min(current, levelList.length - 1));
       return;
     }
 
-    const initialIndex = Math.max(
-      0,
-      levels.findIndex((level) => level.featured),
-    );
-
+    const featuredIndex = levelList.findIndex((level) => level.featured);
     initializedRef.current = true;
-    setSelectedIndex(initialIndex);
+    setSelectedIndex(featuredIndex >= 0 ? featuredIndex : 0);
+  }, [levelList]);
 
-    requestAnimationFrame(() => {
-      cardRefs.current[initialIndex]?.scrollIntoView({
-        behavior: 'auto',
-        inline: 'center',
-        block: 'nearest',
-      });
-      stripRefs.current[initialIndex]?.scrollIntoView({
-        behavior: 'auto',
-        inline: 'center',
-        block: 'nearest',
-      });
-    });
-  }, [levels]);
-
-  const scrollToIndex = (index: number) => {
+  useEffect(() => {
     if (!levelList.length) {
       return;
     }
 
-    const nextIndex = Math.max(0, Math.min(levelList.length - 1, index));
-    setSelectedIndex(nextIndex);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        setSelectedIndex((current) => (current <= 0 ? levelList.length - 1 : current - 1));
+      }
 
-    cardRefs.current[nextIndex]?.scrollIntoView({
-      behavior: 'smooth',
-      inline: 'center',
-      block: 'nearest',
-    });
-    stripRefs.current[nextIndex]?.scrollIntoView({
-      behavior: 'smooth',
-      inline: 'center',
-      block: 'nearest',
-    });
-  };
+      if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        setSelectedIndex((current) => (current >= levelList.length - 1 ? 0 : current + 1));
+      }
+    };
 
-  const handleScroll = () => {
-    const container = scrollRef.current;
+    window.addEventListener('keydown', handleKeyDown);
 
-    if (!container || !levelList.length) {
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [levelList]);
+
+  const selectNextLevel = () => {
+    if (!levelList.length) {
       return;
     }
 
-    const viewportCenter = container.scrollLeft + container.clientWidth / 2;
-    let closestIndex = 0;
-    let closestDistance = Number.POSITIVE_INFINITY;
-
-    cardRefs.current.forEach((card, index) => {
-      if (!card) {
-        return;
-      }
-
-      const cardCenter = card.offsetLeft + card.clientWidth / 2;
-      const distance = Math.abs(cardCenter - viewportCenter);
-
-      if (distance < closestDistance) {
-        closestDistance = distance;
-        closestIndex = index;
-      }
-    });
-
-    if (closestIndex !== selectedIndex) {
-      setSelectedIndex(closestIndex);
-      stripRefs.current[closestIndex]?.scrollIntoView({
-        behavior: 'smooth',
-        inline: 'center',
-        block: 'nearest',
-      });
-    }
+    setSelectedIndex((current) => (current >= levelList.length - 1 ? 0 : current + 1));
   };
 
   return (
-    <div className="mx-auto max-w-6xl">
-      <Panel className="gd-level-select-screen game-screen bg-transparent p-0">
-        {levelsQuery.isLoading ? (
-          <div className="gd-level-select-loading">
-            <p className="font-display text-sm tracking-[0.24em] text-white/78">Loading official routes...</p>
-          </div>
-        ) : null}
+    <div className="gd-classic-level-page">
+      <div className="gd-classic-level-scene" aria-hidden="true">
+        <div className="gd-classic-level-glow" />
+        <div className="gd-classic-level-grid" />
+        <div className="gd-classic-level-floor" />
+        <div className="gd-classic-level-corner gd-classic-level-corner--left" />
+        <div className="gd-classic-level-corner gd-classic-level-corner--right" />
+      </div>
 
-        {!levelsQuery.isLoading && !levelList.length ? (
-          <div className="p-6">
-            <EmptyState
-              title="No official levels yet"
-              description="Publish a route through the admin flow and it will appear here as a launchable official stage."
-            />
-          </div>
-        ) : null}
+      {selectedLevel ? (
+        <>
+          <Link
+            to={`/play/${selectedLevel.slug}`}
+            className="gd-classic-play-button"
+            aria-label={`Play ${selectedLevel.title}`}
+          >
+            <span className="gd-classic-play-button-icon" />
+          </Link>
 
-        {levelList.length ? (
-          <div className="gd-level-select-layout">
-            {selectedLevel ? (
-              <div className="gd-level-select-head">
-                <div className="gd-level-select-copy">
-                  <p className="arcade-eyebrow">Official Stage Select</p>
-                  <h2 className="arcade-heading text-[clamp(2.8rem,5vw,4.8rem)] text-[#caff45]">Launch Corridor</h2>
-                  <p>Scroll horizontally, center a route, then hit briefing or launch when the stage rhythm feels right.</p>
+          <Link to="/" className="gd-classic-back-button" aria-label="Back to home">
+            <span className="gd-classic-back-button-icon" />
+          </Link>
+
+          <button
+            type="button"
+            className="gd-classic-next-button"
+            onClick={selectNextLevel}
+            aria-label="Next level"
+          >
+            &gt;&gt;
+          </button>
+
+          <div className="gd-classic-level-shell">
+            <section className="gd-classic-level-hero">
+              <div className="gd-classic-level-hero-main">
+                <DifficultyIcon difficulty={selectedLevel.difficulty} size="lg" />
+
+                <div className="gd-classic-level-title-wrap">
+                  <h1 className="gd-classic-level-title">{selectedLevel.title}</h1>
                 </div>
 
-                <div className="gd-level-select-current">
-                  <span className="arcade-eyebrow">Selected Stage</span>
-                  <strong className="font-display text-2xl text-white">
-                    {formatStageNumber(selectedIndex)} / {selectedLevel.title}
-                  </strong>
-                  <span className="text-sm text-white/76">
-                    {getDifficultyPresentation(selectedLevel.difficulty).label} / {formatThemeName(selectedLevel.theme)} /{' '}
-                    {getDisplayedStars(selectedLevel)} Stars
-                  </span>
-                </div>
-              </div>
-            ) : null}
-
-            <div className="gd-level-select-frame">
-              <button
-                type="button"
-                className="gd-level-selector-nav is-left"
-                onClick={() => scrollToIndex(selectedIndex - 1)}
-                disabled={selectedIndex <= 0}
-                aria-label="Previous level"
-              >
-                <span>&lt;</span>
-              </button>
-
-              <div className="gd-level-scroll-shell">
-                <div ref={scrollRef} className="gd-level-scroll scrollbar-soft" onScroll={handleScroll}>
-                  {levelList.map((level, index) => (
-                    <div
-                      key={level.id}
-                      ref={(node) => {
-                        cardRefs.current[index] = node;
-                      }}
-                      className="gd-level-slide"
-                    >
-                      <LevelCard level={level} index={index} selected={index === selectedIndex} />
-                    </div>
-                  ))}
+                <div className="gd-classic-level-stars">
+                  <span className="gd-classic-level-stars-count">{getDisplayedStars(selectedLevel)}</span>
+                  <span className="gd-classic-level-stars-mark" aria-hidden="true" />
                 </div>
               </div>
 
-              <button
-                type="button"
-                className="gd-level-selector-nav is-right"
-                onClick={() => scrollToIndex(selectedIndex + 1)}
-                disabled={selectedIndex >= levelList.length - 1}
-                aria-label="Next level"
-              >
-                <span>&gt;</span>
-              </button>
+              <div className="gd-classic-level-coins" aria-hidden="true">
+                <span className="gd-classic-level-coin" />
+                <span className="gd-classic-level-coin" />
+                <span className="gd-classic-level-coin" />
+              </div>
+            </section>
+
+            <div className="gd-classic-level-bars">
+              <ProgressLane label="Normal Mode" progress={0} />
+              <ProgressLane label="Practice Mode" progress={0} />
             </div>
 
-            <div className="gd-level-selector-dots" aria-label="Level position">
+            <Link
+              to={`/levels/${selectedLevel.slug}`}
+              className="gd-classic-soundtrack-button"
+              aria-label={`Open details for ${selectedLevel.title}`}
+            >
+              Download The Soundtracks
+            </Link>
+
+            <div className="gd-classic-level-dots" aria-label="Level selection">
               {levelList.map((level, index) => (
                 <button
                   key={`${level.id}-dot`}
                   type="button"
-                  className={`gd-level-selector-dot${index === selectedIndex ? ' is-active' : ''}`}
-                  onClick={() => scrollToIndex(index)}
+                  className={`gd-classic-level-dot${index === selectedIndex ? ' is-active' : ''}`}
+                  onClick={() => setSelectedIndex(index)}
                   aria-label={`Go to ${level.title}`}
                 />
               ))}
             </div>
-
-            <div className="gd-level-selector-strip scrollbar-soft">
-              {levelList.map((level, index) => (
-                <button
-                  key={`${level.id}-chip`}
-                  ref={(node) => {
-                    stripRefs.current[index] = node;
-                  }}
-                  type="button"
-                  className={`gd-level-selector-strip-chip${index === selectedIndex ? ' is-active' : ''}`}
-                  onClick={() => scrollToIndex(index)}
-                >
-                  <span className="gd-level-selector-strip-number">{formatStageNumber(index)}</span>
-                  <span className="truncate">{level.title}</span>
-                </button>
-              ))}
-            </div>
           </div>
-        ) : null}
-      </Panel>
+        </>
+      ) : null}
+
+      {levelsQuery.isLoading ? (
+        <div className="gd-classic-level-feedback">
+          <p>Loading official levels...</p>
+        </div>
+      ) : null}
+
+      {!levelsQuery.isLoading && !selectedLevel ? (
+        <div className="gd-classic-level-feedback">
+          <p>No official levels yet.</p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ProgressLane({
+  label,
+  progress,
+}: {
+  label: string;
+  progress: number;
+}) {
+  return (
+    <div className="gd-classic-progress-group">
+      <p className="gd-classic-progress-label">{label}</p>
+      <div className="gd-classic-progress-track">
+        <div className="gd-classic-progress-fill" style={{ width: `${progress}%` }} />
+        <span className="gd-classic-progress-value">{progress}%</span>
+      </div>
     </div>
   );
 }

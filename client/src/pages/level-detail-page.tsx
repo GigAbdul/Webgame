@@ -100,20 +100,14 @@ export function LevelDetailPage() {
                 </div>
 
                 <p className="text-sm leading-7 text-white/80">
-                  The live run uses the same runtime as the official play screen. Every attempt opens a tracked session and
-                  reports the result back to the server.
+                  The live run uses the same runtime as the official play screen. Signed-in runs are tracked for rewards and
+                  leaderboard progress, while guests can still jump in and practice freely.
                 </p>
 
                 <div className="grid gap-3">
-                  {user ? (
-                    <Link to={`/play/${level.slug}`}>
-                      <Button className="w-full">Launch Official Run</Button>
-                    </Link>
-                  ) : (
-                    <Link to="/login">
-                      <Button className="w-full">Login To Launch</Button>
-                    </Link>
-                  )}
+                  <Link to={`/play/${level.slug}`}>
+                    <Button className="w-full">{user ? 'Launch Official Run' : 'Play As Guest'}</Button>
+                  </Link>
 
                   <div className="grid grid-cols-2 gap-3">
                     <Link to="/levels">
@@ -134,9 +128,9 @@ export function LevelDetailPage() {
             <Panel className="game-screen bg-transparent">
               <div className="space-y-3">
                 <p className="arcade-eyebrow">Clear Rules</p>
-                <p className="text-sm leading-7 text-white/78">
-                  Stars are granted only on the first successful official clear. Replays still matter for routing, timing,
-                  and learning the lane.
+              <p className="text-sm leading-7 text-white/78">
+                  Stars are granted only on the first successful official clear for signed-in pilots. Guest runs are great
+                  for routing, timing, and learning the lane, but they do not enter the leaderboard.
                 </p>
               </div>
             </Panel>

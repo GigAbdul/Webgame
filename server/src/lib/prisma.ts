@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import { env } from '../config/env';
 
 declare global {
   var __prisma__: PrismaClient | undefined;
@@ -7,6 +8,7 @@ declare global {
 export const prisma =
   global.__prisma__ ??
   new PrismaClient({
+    datasourceUrl: env.DATABASE_URL,
     log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
   });
 
