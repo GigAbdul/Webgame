@@ -9,9 +9,11 @@ type GameCanvasProps = {
   attemptNumber?: number;
   runId?: string | number;
   autoRestartOnFail?: boolean;
+  fullscreen?: boolean;
   className?: string;
   onFail?: (payload: { progressPercent: number; completionTimeMs: number }) => void;
   onComplete?: (payload: { progressPercent: number; completionTimeMs: number }) => void;
+  onExitToMenu?: (payload: { progressPercent: number }) => void;
 };
 
 type PlayerState = {
@@ -39,9 +41,9 @@ const JUMP_BUFFER_MS = 130;
 const COYOTE_TIME_MS = 110;
 const AUTO_RESTART_DELAY_MS = 850;
 const BASE_HORIZONTAL_SPEED = 6.15;
-const BASE_GRAVITY_ACCELERATION = 35;
-const DEFAULT_JUMP_VELOCITY = 12.4;
-const AIR_ROTATION_SPEED = Math.PI * 1.4;
+const BASE_GRAVITY_ACCELERATION = 55;
+const DEFAULT_JUMP_VELOCITY = 15;
+const AIR_ROTATION_SPEED = Math.PI * 1.6;
 const QUARTER_TURN = Math.PI / 2;
 
 export function GameCanvas({
@@ -49,20 +51,60 @@ export function GameCanvas({
   attemptNumber = 1,
   runId = 0,
   autoRestartOnFail = false,
+  fullscreen = false,
   className,
   onFail,
   onComplete,
+  onExitToMenu,
 }: GameCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const onFailRef = useRef(onFail);
   const onCompleteRef = useRef(onComplete);
+  const pauseMenuOpenRef = useRef(false);
+  const pauseSettingsOpenRef = useRef(false);
+  const pauseStartedAtRef = useRef<number | null>(null);
+  const pausedDurationMsRef = useRef(0);
+  const screenShakeEnabledRef = useRef(true);
   const [hud, setHud] = useState({
     progressPercent: 0,
     status: 'running' as 'running' | 'failed' | 'completed',
     elapsedMs: 0,
   });
+  const [isPauseMenuOpen, setIsPauseMenuOpen] = useState(false);
+  const [isPauseSettingsOpen, setIsPauseSettingsOpen] = useState(false);
+  const [isHudVisible, setIsHudVisible] = useState(true);
+  const [isScreenShakeEnabled, setIsScreenShakeEnabled] = useState(true);
   const statusLabel =
     hud.status === 'completed' ? 'Stage Clear' : hud.status === 'failed' ? 'Attempt Lost' : 'In Run';
+
+  const closePauseMenu = () => {
+    if (!pauseMenuOpenRef.current) {
+      return;
+    }
+
+    if (pauseStartedAtRef.current !== null) {
+      pausedDurationMsRef.current += performance.now() - pauseStartedAtRef.current;
+      pauseStartedAtRef.current = null;
+    }
+
+    pauseMenuOpenRef.current = false;
+    pauseSettingsOpenRef.current = false;
+    setIsPauseMenuOpen(false);
+    setIsPauseSettingsOpen(false);
+  };
+
+  const togglePauseSettings = () => {
+    const nextOpen = !pauseSettingsOpenRef.current;
+    pauseSettingsOpenRef.current = nextOpen;
+    setIsPauseSettingsOpen(nextOpen);
+  };
+
+  const handleExitToMenu = () => {
+    closePauseMenu();
+    onExitToMenu?.({
+      progressPercent: hud.progressPercent,
+    });
+  };
 
   const levelBounds = useMemo(() => {
     const maxY = Math.max(
@@ -83,6 +125,19 @@ export function GameCanvas({
     onFailRef.current = onFail;
     onCompleteRef.current = onComplete;
   }, [onComplete, onFail]);
+
+  useEffect(() => {
+    screenShakeEnabledRef.current = isScreenShakeEnabled;
+  }, [isScreenShakeEnabled]);
+
+  useEffect(() => {
+    pauseMenuOpenRef.current = false;
+    pauseSettingsOpenRef.current = false;
+    pauseStartedAtRef.current = null;
+    pausedDurationMsRef.current = 0;
+    setIsPauseMenuOpen(false);
+    setIsPauseSettingsOpen(false);
+  }, [levelData, runId]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -152,6 +207,12 @@ export function GameCanvas({
       activeTriggers.clear();
       usedOrbs.clear();
       trail.length = 0;
+      pauseMenuOpenRef.current = false;
+      pauseSettingsOpenRef.current = false;
+      pauseStartedAtRef.current = null;
+      pausedDurationMsRef.current = 0;
+      setIsPauseMenuOpen(false);
+      setIsPauseSettingsOpen(false);
       setHud({
         progressPercent: 0,
         status: 'running',
@@ -160,6 +221,10 @@ export function GameCanvas({
     };
 
     const bumpCamera = (power = 8, duration = 0.18) => {
+      if (!screenShakeEnabledRef.current) {
+        return;
+      }
+
       shakePower = Math.max(shakePower, power);
       shakeTime = Math.max(shakeTime, duration);
     };
@@ -179,6 +244,33 @@ export function GameCanvas({
     };
 
     const keyListener = (event: KeyboardEvent) => {
+      if (event.code === 'Escape' && fullscreen && currentStatus === 'running') {
+        event.preventDefault();
+
+        if (pauseMenuOpenRef.current) {
+          if (pauseStartedAtRef.current !== null) {
+            pausedDurationMsRef.current += performance.now() - pauseStartedAtRef.current;
+            pauseStartedAtRef.current = null;
+          }
+
+          pauseMenuOpenRef.current = false;
+          pauseSettingsOpenRef.current = false;
+          setIsPauseMenuOpen(false);
+          setIsPauseSettingsOpen(false);
+          return;
+        }
+
+        pauseMenuOpenRef.current = true;
+        pauseStartedAtRef.current = performance.now();
+        setIsPauseMenuOpen(true);
+        return;
+      }
+
+      if (pauseMenuOpenRef.current) {
+        event.preventDefault();
+        return;
+      }
+
       if (event.code === 'Space') {
         event.preventDefault();
         queueJump();
@@ -200,6 +292,10 @@ export function GameCanvas({
     };
 
     const pointerListener = () => {
+      if (pauseMenuOpenRef.current) {
+        return;
+      }
+
       if (currentStatus === 'running') {
         queueJump();
         return;
@@ -264,9 +360,13 @@ export function GameCanvas({
 
       const deltaSeconds = Math.min(0.033, (timestamp - lastTimestamp) / 1000);
       lastTimestamp = timestamp;
-      const elapsedMs = Math.max(1, Math.floor(timestamp - startTime));
+      const pausedElapsedMs =
+        pausedDurationMsRef.current +
+        (pauseMenuOpenRef.current && pauseStartedAtRef.current !== null ? timestamp - pauseStartedAtRef.current : 0);
+      const elapsedMs = Math.max(1, Math.floor(timestamp - startTime - pausedElapsedMs));
+      const isPaused = pauseMenuOpenRef.current && currentStatus === 'running';
 
-      if (currentStatus === 'running') {
+      if (currentStatus === 'running' && !isPaused) {
         const horizontalSpeed = BASE_HORIZONTAL_SPEED * player.speedMultiplier;
         const previousX = player.x;
         const previousY = player.y;
@@ -502,7 +602,97 @@ export function GameCanvas({
       window.removeEventListener('keydown', keyListener);
       canvas.removeEventListener('pointerdown', pointerListener);
     };
-  }, [autoRestartOnFail, levelBounds.maxX, levelBounds.maxY, levelData, onComplete, onFail, runId]);
+  }, [autoRestartOnFail, fullscreen, levelBounds.maxX, levelBounds.maxY, levelData, onComplete, onFail, runId]);
+
+      if (fullscreen) {
+    return (
+      <div className={cn('arcade-runtime-fullscreen', className)}>
+        <div className="arcade-runtime-fullscreen-stage">
+          <canvas ref={canvasRef} className="arcade-runtime-canvas arcade-runtime-canvas--fullscreen" />
+          {isHudVisible ? (
+            <>
+              <div className="arcade-runtime-hud arcade-runtime-hud--top-left">
+                <span
+                  className={cn(
+                    'arcade-runtime-hud-badge',
+                    hud.status === 'completed'
+                      ? 'arcade-runtime-hud-badge--complete'
+                      : hud.status === 'failed'
+                        ? 'arcade-runtime-hud-badge--failed'
+                        : 'arcade-runtime-hud-badge--running',
+                  )}
+                >
+                  {statusLabel}
+                </span>
+              </div>
+              <div className="arcade-runtime-hud arcade-runtime-hud--top-right">
+                <HudStat label="Attempt" value={attemptNumber} compact />
+                <HudStat label="Progress" value={`${hud.progressPercent}%`} compact />
+                <HudStat label="Time" value={`${(hud.elapsedMs / 1000).toFixed(1)}s`} compact />
+              </div>
+            </>
+          ) : null}
+          {isPauseMenuOpen ? (
+            <div className="arcade-runtime-pause-overlay" role="dialog" aria-modal="true" aria-label="Paused game menu">
+              <div className="arcade-runtime-pause-panel">
+                <p className="arcade-runtime-pause-kicker">Paused</p>
+                <div className="arcade-runtime-pause-actions">
+                  <button
+                    type="button"
+                    className="arcade-runtime-pause-action arcade-runtime-pause-action--continue"
+                    onClick={closePauseMenu}
+                  >
+                    Continue
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(
+                      'arcade-runtime-pause-action arcade-runtime-pause-action--settings',
+                      isPauseSettingsOpen ? 'is-active' : '',
+                    )}
+                    onClick={togglePauseSettings}
+                    aria-pressed={isPauseSettingsOpen}
+                  >
+                    Settings
+                  </button>
+                  <button
+                    type="button"
+                    className="arcade-runtime-pause-action arcade-runtime-pause-action--exit"
+                    onClick={handleExitToMenu}
+                  >
+                    Exit Menu
+                  </button>
+                </div>
+                {isPauseSettingsOpen ? (
+                  <div className="arcade-runtime-pause-settings">
+                    <button
+                      type="button"
+                      className="arcade-runtime-pause-toggle"
+                      onClick={() => setIsHudVisible((current) => !current)}
+                      aria-pressed={isHudVisible}
+                    >
+                      <span>HUD</span>
+                      <strong>{isHudVisible ? 'On' : 'Off'}</strong>
+                    </button>
+                    <button
+                      type="button"
+                      className="arcade-runtime-pause-toggle"
+                      onClick={() => setIsScreenShakeEnabled((current) => !current)}
+                      aria-pressed={isScreenShakeEnabled}
+                    >
+                      <span>Shake</span>
+                      <strong>{isScreenShakeEnabled ? 'On' : 'Off'}</strong>
+                    </button>
+                  </div>
+                ) : null}
+                <p className="arcade-runtime-pause-hint">Press Esc to resume instantly.</p>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <Panel className={cn('arcade-runtime-frame game-screen space-y-4 bg-transparent', className)}>
@@ -564,11 +754,19 @@ export function GameCanvas({
   );
 }
 
-function HudStat({ label, value }: { label: string; value: string | number }) {
+function HudStat({
+  label,
+  value,
+  compact = false,
+}: {
+  label: string;
+  value: string | number;
+  compact?: boolean;
+}) {
   return (
-    <div className="hud-pill px-4 py-2">
+    <div className={cn('hud-pill px-4 py-2', compact ? 'arcade-runtime-hud-pill' : '')}>
       <p className="font-display text-[10px] uppercase tracking-[0.2em] text-[#ffd44a]">{label}</p>
-      <p className="font-display text-sm text-white">{value}</p>
+      <p className={cn('font-display text-white', compact ? 'text-xs' : 'text-sm')}>{value}</p>
     </div>
   );
 }

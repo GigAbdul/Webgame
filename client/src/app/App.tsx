@@ -20,11 +20,14 @@ import { RegisterPage } from '../pages/register-page';
 
 const router = createBrowserRouter([
   {
+    path: 'play/:slugOrId',
+    element: <PlayPage />,
+  },
+  {
     path: '/',
     element: <ArcadeScreenLayout />,
     children: [
       { index: true, element: <HomePage /> },
-      { path: 'play/:slugOrId', element: <PlayPage /> },
       {
         element: <ProtectedRoute />,
         children: [
