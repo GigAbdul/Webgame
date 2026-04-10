@@ -8,8 +8,6 @@ RUN npm install
 FROM node:20-alpine AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /app/client/node_modules ./client/node_modules
-COPY --from=deps /app/server/node_modules ./server/node_modules
 COPY . .
 RUN npm run prisma:generate
 RUN npm run build
