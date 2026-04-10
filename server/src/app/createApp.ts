@@ -36,7 +36,7 @@ export function createApp() {
   app.use('/api/game', gameRouter);
   app.use('/api/admin', adminRouter);
 
-  const clientDistPath = path.resolve(process.cwd(), 'client', 'dist');
+  const clientDistPath = path.resolve(__dirname, '../../../client/dist');
   app.use(express.static(clientDistPath));
 
   app.get('*', (request, response, next) => {
