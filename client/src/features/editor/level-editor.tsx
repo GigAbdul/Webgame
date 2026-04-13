@@ -1,15 +1,28 @@
-import type { PointerEvent as ReactPointerEvent, ReactNode } from 'react';
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Level, LevelData, LevelObject, LevelObjectType } from '../../types/models';
 import { Badge, Button, FieldLabel, Input, Panel, Textarea } from '../../components/ui';
 import { GameCanvas } from '../game/game-canvas';
-import { createEmptyLevelData, levelObjectDefinitions } from '../game/object-definitions';
+import {
+  PAINT_GROUP_SLOT_COUNT,
+  createEmptyLevelData,
+  getColorGroupById,
+  getObjectFillColor,
+  getObjectPaintGroupId,
+  getObjectStrokeColor,
+  isPaintableObjectType,
+  levelObjectDefinitions,
+} from '../game/object-definitions';
+import { SHIP_FLIGHT_CEILING_Y, SHIP_FLIGHT_FLOOR_Y, getPlayerModeLabel } from '../game/player-mode-config';
+import { getStageThemePalette } from '../game/stage-theme-palette';
+import { readLocalEditorDraft, writeLocalEditorDraft } from './local-draft-storage';
 import { cn } from '../../utils/cn';
 
 type EditorTool = 'select' | 'pan' | LevelObjectType;
 
 type LevelEditorProps = {
   initialLevel?: Level | null;
+  draftStorageKey: string;
   saveLabel?: string;
   onSave: (payload: {
     title: string;
@@ -18,7 +31,6 @@ type LevelEditorProps = {
     dataJson: LevelData;
   }) => Promise<void>;
   onSubmit?: () => Promise<void>;
-  sidebarSlot?: ReactNode;
 };
 
 type DragState =
@@ -42,23 +54,16 @@ const themePresets = [
   { value: 'cyber-night', label: 'Cyber Night' },
   { value: 'sunset-burn', label: 'Sunset Burn' },
   { value: 'acid-void', label: 'Acid Void' },
+  { value: 'deep-space', label: 'Deep Space' },
 ] as const;
 
-const quickStartSteps = [
-  'Pick a tool from the palette on the left.',
-  'Click the stage to place blocks, hazards, or triggers.',
-  'Switch to Select to move objects and edit their properties.',
-  'Open Test Play to verify timing before saving.',
-];
-
 const paletteGroups: Array<{ title: string; items: EditorTool[] }> = [
-  { title: 'Editor', items: ['select', 'pan'] },
+  { title: 'Controls', items: ['select', 'pan'] },
   { title: 'Blocks', items: ['GROUND_BLOCK', 'PLATFORM_BLOCK', 'DECORATION_BLOCK'] },
-  { title: 'Hazards', items: ['SPIKE'] },
-  {
-    title: 'Triggers',
-    items: ['JUMP_PAD', 'JUMP_ORB', 'GRAVITY_PORTAL', 'SPEED_PORTAL', 'START_MARKER', 'FINISH_PORTAL'],
-  },
+  { title: 'Obstacles', items: ['SPIKE'] },
+  { title: 'Boosts', items: ['JUMP_PAD', 'JUMP_ORB'] },
+  { title: 'Portals', items: ['GRAVITY_PORTAL', 'SPEED_PORTAL', 'SHIP_PORTAL', 'CUBE_PORTAL', 'FINISH_PORTAL'] },
+  { title: 'Run Points', items: ['START_MARKER'] },
 ];
 
 const toolDescriptions: Record<EditorTool, string> = {
@@ -71,6 +76,8 @@ const toolDescriptions: Record<EditorTool, string> = {
   JUMP_ORB: 'Mid-air extra jump',
   GRAVITY_PORTAL: 'Flips gravity',
   SPEED_PORTAL: 'Changes run speed',
+  SHIP_PORTAL: 'Switches into ship mode',
+  CUBE_PORTAL: 'Returns to cube mode',
   FINISH_PORTAL: 'Level completion',
   DECORATION_BLOCK: 'Visual block only',
   START_MARKER: 'Player spawn point',
@@ -78,9 +85,18 @@ const toolDescriptions: Record<EditorTool, string> = {
 
 const EDITOR_CANVAS_WIDTH = 1180;
 const EDITOR_CANVAS_HEIGHT = 560;
+const EDITOR_CANVAS_ASPECT_RATIO = EDITOR_CANVAS_WIDTH / EDITOR_CANVAS_HEIGHT;
 const EDITOR_DEFAULT_PAN_X = 60;
 const EDITOR_DEFAULT_PAN_Y = 80;
 const EDITOR_SCROLL_PADDING_UNITS = 6;
+
+type EditorInitialState = {
+  title: string;
+  description: string;
+  theme: string;
+  levelData: LevelData;
+  restoredFromLocal: boolean;
+};
 
 function syncDerivedLevelData(next: LevelData) {
   const maxX = Math.max(next.finish.x + 16, ...next.objects.map((object) => object.x + object.w + 12));
@@ -88,30 +104,74 @@ function syncDerivedLevelData(next: LevelData) {
   return next;
 }
 
+function getPaletteGroupTitle(tool: EditorTool) {
+  return paletteGroups.find((group) => group.items.includes(tool))?.title ?? 'Blocks';
+}
+
+function isHexColor(value: unknown): value is string {
+  return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value.trim());
+}
+
+function getEditorColorInputValue(value: string, fallback: string) {
+  return isHexColor(value) ? value : fallback;
+}
+
+function createInitialEditorState(initialLevel: Level | null | undefined, draftStorageKey: string): EditorInitialState {
+  const localDraft = readLocalEditorDraft(draftStorageKey);
+
+  if (localDraft) {
+    return {
+      title: localDraft.title,
+      description: localDraft.description,
+      theme: localDraft.theme,
+      levelData: syncDerivedLevelData(structuredClone(localDraft.dataJson)),
+      restoredFromLocal: true,
+    };
+  }
+
+  const baseLevelData = initialLevel?.dataJson
+    ? syncDerivedLevelData(structuredClone(initialLevel.dataJson))
+    : createEmptyLevelData(initialLevel?.theme ?? 'neon-grid');
+
+  return {
+    title: initialLevel?.title ?? 'Untitled Level',
+    description: initialLevel?.description ?? '',
+    theme: initialLevel?.theme ?? 'neon-grid',
+    levelData: baseLevelData,
+    restoredFromLocal: false,
+  };
+}
+
 export function LevelEditor({
   initialLevel,
+  draftStorageKey,
   saveLabel = 'Save Draft',
   onSave,
   onSubmit,
-  sidebarSlot,
 }: LevelEditorProps) {
-  const initialData = initialLevel?.dataJson
-    ? syncDerivedLevelData(structuredClone(initialLevel.dataJson))
-    : createEmptyLevelData(initialLevel?.theme ?? 'neon-grid');
-  const [title, setTitle] = useState(initialLevel?.title ?? 'Untitled Level');
-  const [description, setDescription] = useState(initialLevel?.description ?? '');
-  const [theme, setTheme] = useState(initialLevel?.theme ?? 'neon-grid');
-  const [levelData, setLevelData] = useState<LevelData>(initialData);
-  const [history, setHistory] = useState<LevelData[]>([initialData]);
+  const initialEditorState = useMemo(
+    () => createInitialEditorState(initialLevel, draftStorageKey),
+    [initialLevel, draftStorageKey],
+  );
+  const [title, setTitle] = useState(initialEditorState.title);
+  const [description, setDescription] = useState(initialEditorState.description);
+  const [theme, setTheme] = useState(initialEditorState.theme);
+  const [levelData, setLevelData] = useState<LevelData>(initialEditorState.levelData);
+  const [history, setHistory] = useState<LevelData[]>([initialEditorState.levelData]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const [selectedTool, setSelectedTool] = useState<EditorTool>('select');
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
+  const [activePaletteGroup, setActivePaletteGroup] = useState<string>('Blocks');
+  const [paletteDrawerGroup, setPaletteDrawerGroup] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: EDITOR_DEFAULT_PAN_X, y: EDITOR_DEFAULT_PAN_Y });
   const [cursorWorld, setCursorWorld] = useState({ x: 0, y: 0 });
+  const [canvasViewport, setCanvasViewport] = useState({ width: EDITOR_CANVAS_WIDTH, height: EDITOR_CANVAS_HEIGHT });
   const [showPreview, setShowPreview] = useState(false);
+  const [isPaintPopupOpen, setIsPaintPopupOpen] = useState(false);
+  const [activePaintGroupId, setActivePaintGroupId] = useState<number | null>(null);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  const [message, setMessage] = useState<string>('');
+  const [message, setMessage] = useState<string>(initialEditorState.restoredFromLocal ? 'Local draft restored.' : '');
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stageFrameRef = useRef<HTMLDivElement | null>(null);
@@ -119,23 +179,55 @@ export function LevelEditor({
   const isSpacePressedRef = useRef(false);
   const liveLevelDataRef = useRef(levelData);
 
+  const loadedDraftStorageKeyRef = useRef(draftStorageKey);
+
   useEffect(() => {
-    if (!initialLevel) {
+    if (loadedDraftStorageKeyRef.current === draftStorageKey) {
       return;
     }
 
-    const nextLevelData = syncDerivedLevelData(structuredClone(initialLevel.dataJson));
-    setTitle(initialLevel.title);
-    setDescription(initialLevel.description);
-    setTheme(initialLevel.theme);
-    setLevelData(nextLevelData);
-    setHistory([nextLevelData]);
+    loadedDraftStorageKeyRef.current = draftStorageKey;
+
+    const nextEditorState = createInitialEditorState(initialLevel, draftStorageKey);
+    setTitle(nextEditorState.title);
+    setDescription(nextEditorState.description);
+    setTheme(nextEditorState.theme);
+    setLevelData(nextEditorState.levelData);
+    setHistory([nextEditorState.levelData]);
     setHistoryIndex(0);
-  }, [initialLevel]);
+    setSelectedTool('select');
+    setSelectedObjectId(null);
+    setActivePaletteGroup('Blocks');
+    setPaletteDrawerGroup(null);
+    setZoom(1);
+    setPan({ x: EDITOR_DEFAULT_PAN_X, y: EDITOR_DEFAULT_PAN_Y });
+    setCursorWorld({ x: 0, y: 0 });
+    setShowPreview(false);
+    setIsPaintPopupOpen(false);
+    setActivePaintGroupId(null);
+    setSaveState('idle');
+    setMessage(nextEditorState.restoredFromLocal ? 'Local draft restored.' : '');
+  }, [draftStorageKey, initialLevel]);
 
   useEffect(() => {
     liveLevelDataRef.current = levelData;
   }, [levelData]);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      writeLocalEditorDraft(draftStorageKey, {
+        title,
+        description,
+        theme,
+        dataJson: levelData,
+        levelId: initialLevel?.id ?? null,
+      });
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [description, draftStorageKey, initialLevel?.id, levelData, theme, title]);
 
   const selectedObject = useMemo(
     () => levelData.objects.find((object) => object.id === selectedObjectId) ?? null,
@@ -148,7 +240,19 @@ export function LevelEditor({
   const activeToolDescription = toolDescriptions[selectedTool];
   const activeToolLabel =
     selectedTool === 'select' ? 'Select' : selectedTool === 'pan' ? 'Pan' : levelObjectDefinitions[selectedTool].label;
+  const paletteDrawer = useMemo(
+    () => paletteGroups.find((group) => group.title === paletteDrawerGroup) ?? null,
+    [paletteDrawerGroup],
+  );
+  const stageThemePalette = useMemo(() => getStageThemePalette(theme), [theme]);
+  const colorGroups = useMemo(() => levelData.meta.colorGroups ?? [], [levelData.meta.colorGroups]);
   const selectionLabel = selectedObject ? selectedDefinition?.label ?? selectedObject.type : 'Nothing selected';
+  const paintableSelectedObject =
+    selectedObject && isPaintableObjectType(selectedObject.type) ? selectedObject : null;
+  const selectedPaintGroupId = getObjectPaintGroupId(paintableSelectedObject);
+  const activePaintTool =
+    selectedTool !== 'select' && selectedTool !== 'pan' && isPaintableObjectType(selectedTool) ? selectedTool : null;
+  const canOpenPaintPopup = Boolean(paintableSelectedObject || activePaintTool || colorGroups.length > 0);
   const canUndo = historyIndex > 0;
   const canRedo = historyIndex < history.length - 1;
   const historyPosition = `${historyIndex + 1}/${history.length}`;
@@ -157,19 +261,81 @@ export function LevelEditor({
     : 'No object selected';
   const objectCount = String(levelData.objects.length);
   const stageCell = levelData.meta.gridSize * zoom;
-  const visibleStageUnits = EDITOR_CANVAS_WIDTH / stageCell;
+  const visibleStageUnits = canvasViewport.width / stageCell;
   const horizontalScrollMax = Math.max(0, levelData.meta.lengthUnits + EDITOR_SCROLL_PADDING_UNITS - visibleStageUnits);
   const horizontalScrollValue = clamp((EDITOR_DEFAULT_PAN_X - pan.x) / stageCell, 0, horizontalScrollMax);
 
   useEffect(() => {
+    setActivePaletteGroup(getPaletteGroupTitle(selectedTool));
+  }, [selectedTool]);
+
+  useEffect(() => {
+    if (!paintableSelectedObject) {
+      setIsPaintPopupOpen(false);
+    }
+  }, [paintableSelectedObject]);
+
+  useEffect(() => {
+    if (activePaintGroupId && !getColorGroupById(colorGroups, activePaintGroupId)) {
+      setActivePaintGroupId(null);
+    }
+  }, [activePaintGroupId, colorGroups]);
+
+  useEffect(() => {
+    const stageFrame = stageFrameRef.current;
+
+    if (!stageFrame) {
+      return;
+    }
+
+    const updateViewport = () => {
+      const styles = window.getComputedStyle(stageFrame);
+      const paddingX = Number.parseFloat(styles.paddingLeft) + Number.parseFloat(styles.paddingRight);
+      const paddingY = Number.parseFloat(styles.paddingTop) + Number.parseFloat(styles.paddingBottom);
+      const availableWidth = Math.max(640, Math.floor(stageFrame.clientWidth - paddingX));
+      const availableHeight = Math.max(420, Math.floor(stageFrame.clientHeight - paddingY));
+
+      let nextWidth = availableWidth;
+      let nextHeight = Math.floor(nextWidth / EDITOR_CANVAS_ASPECT_RATIO);
+
+      if (nextHeight > availableHeight) {
+        nextHeight = availableHeight;
+        nextWidth = Math.floor(nextHeight * EDITOR_CANVAS_ASPECT_RATIO);
+      }
+
+      setCanvasViewport({
+        width: nextWidth,
+        height: nextHeight,
+      });
+    };
+
+    updateViewport();
+
+    const observer = new ResizeObserver(() => {
+      updateViewport();
+    });
+
+    observer.observe(stageFrame);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const isEditableTarget = isTextInputLike(event.target);
+      const isPreviewGameplayKey = showPreview && ['Space', 'ArrowUp', 'KeyW'].includes(event.code);
 
       if (event.code === 'Space' && !isEditableTarget) {
         isSpacePressedRef.current = true;
       }
 
       if (isEditableTarget) {
+        return;
+      }
+
+      if (isPreviewGameplayKey) {
         return;
       }
 
@@ -237,7 +403,7 @@ export function LevelEditor({
         setSelectedObjectId(null);
       }
 
-      if (selectedObjectId && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+      if (!showPreview && selectedObjectId && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
         event.preventDefault();
         const delta = {
           ArrowUp: { x: 0, y: -1 },
@@ -287,7 +453,7 @@ export function LevelEditor({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [history, historyIndex, levelData, selectedObject, selectedObjectId]);
+  }, [history, historyIndex, levelData, selectedObject, selectedObjectId, showPreview]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -302,18 +468,44 @@ export function LevelEditor({
       return;
     }
 
-    const width = EDITOR_CANVAS_WIDTH;
-    const height = EDITOR_CANVAS_HEIGHT;
+    const width = canvasViewport.width;
+    const height = canvasViewport.height;
     canvas.width = width;
     canvas.height = height;
 
+    const stageTheme = getStageThemePalette(levelData.meta.theme);
     context.clearRect(0, 0, width, height);
-    context.fillStyle = '#050d19';
+    const backdrop = context.createLinearGradient(0, 0, 0, height);
+    backdrop.addColorStop(0, stageTheme.editorGradientTop);
+    backdrop.addColorStop(0.6, stageTheme.editorGradientMid);
+    backdrop.addColorStop(1, stageTheme.editorGradientBottom);
+    context.fillStyle = backdrop;
     context.fillRect(0, 0, width, height);
+
+    const editorGlow = context.createRadialGradient(width * 0.76, height * 0.2, 0, width * 0.76, height * 0.2, width * 0.42);
+    editorGlow.addColorStop(0, stageTheme.editorGlowColor);
+    editorGlow.addColorStop(1, 'rgba(0,0,0,0)');
+    context.fillStyle = editorGlow;
+    context.fillRect(0, 0, width, height);
+
+    context.fillStyle = stageTheme.editorStarColor;
+    for (let index = 0; index < 42; index += 1) {
+      const starX = (index * 137.41) % width;
+      const starY = (index * 89.73) % (height * 0.82);
+      const size = index % 6 === 0 ? 2.4 : index % 3 === 0 ? 1.7 : 1.1;
+      context.fillRect(starX, starY, size, size);
+    }
+
+    context.fillStyle = stageTheme.editorPanelTint;
+    for (let x = -80; x < width + 120; x += 160) {
+      for (let y = 24; y < height; y += 140) {
+        context.fillRect(x + ((x / 2 + y) % 36), y, 118, 82);
+      }
+    }
 
     const cell = levelData.meta.gridSize * zoom;
 
-    context.strokeStyle = 'rgba(255,255,255,0.05)';
+    context.strokeStyle = stageTheme.editorGridLine;
     for (let x = ((pan.x % cell) + cell) % cell; x < width; x += cell) {
       context.beginPath();
       context.moveTo(x, 0);
@@ -328,28 +520,59 @@ export function LevelEditor({
       context.stroke();
     }
 
+    if (levelData.player.mode === 'ship') {
+      const ceilingY = worldToScreen(0, SHIP_FLIGHT_CEILING_Y, pan.x, pan.y, cell).y;
+      const floorY = worldToScreen(0, SHIP_FLIGHT_FLOOR_Y, pan.x, pan.y, cell).y;
+
+      context.fillStyle = 'rgba(5, 10, 28, 0.28)';
+      context.fillRect(0, 0, width, Math.max(0, ceilingY));
+      context.fillRect(0, floorY, width, Math.max(0, height - floorY));
+
+      context.strokeStyle = 'rgba(202,255,69,0.78)';
+      context.lineWidth = 3;
+      context.beginPath();
+      context.moveTo(0, ceilingY);
+      context.lineTo(width, ceilingY);
+      context.moveTo(0, floorY);
+      context.lineTo(width, floorY);
+      context.stroke();
+    }
+
     for (const object of levelData.objects) {
       const definition = levelObjectDefinitions[object.type];
       const { x, y } = worldToScreen(object.x, object.y, pan.x, pan.y, cell);
       const w = object.w * cell;
       const h = object.h * cell;
+      const fillColor = getObjectFillColor(object, colorGroups);
+      const strokeColor = getObjectStrokeColor(object, colorGroups);
 
       if (object.type === 'SPIKE') {
-        context.fillStyle = definition.color;
+        context.fillStyle = fillColor;
         context.beginPath();
         context.moveTo(x, y + h);
         context.lineTo(x + w / 2, y);
         context.lineTo(x + w, y + h);
         context.closePath();
         context.fill();
+        context.strokeStyle = strokeColor;
+        context.lineWidth = Math.max(2, cell * 0.08);
+        context.stroke();
       } else if (object.type === 'JUMP_ORB') {
         context.fillStyle = definition.color;
         context.beginPath();
         context.arc(x + w / 2, y + h / 2, Math.max(10, w / 2.4), 0, Math.PI * 2);
         context.fill();
       } else {
-        context.fillStyle = definition.color;
+        context.fillStyle = fillColor;
         context.fillRect(x, y, w, h);
+
+        if (isPaintableObjectType(object.type)) {
+          context.strokeStyle = strokeColor;
+          context.lineWidth = Math.max(2, cell * 0.07);
+          context.strokeRect(x + 1, y + 1, Math.max(0, w - 2), Math.max(0, h - 2));
+          context.fillStyle = 'rgba(255,255,255,0.14)';
+          context.fillRect(x + 3, y + 3, Math.max(0, w - 6), Math.max(4, h * 0.16));
+        }
       }
 
       if (object.id === selectedObjectId) {
@@ -358,7 +581,7 @@ export function LevelEditor({
         context.strokeRect(x - 2, y - 2, w + 4, h + 4);
       }
     }
-  }, [levelData, pan, selectedObjectId, zoom]);
+  }, [canvasViewport.height, canvasViewport.width, colorGroups, levelData, pan, selectedObjectId, zoom]);
 
   const updateLevelData = (mutator: (draft: LevelData) => void) => {
     const next = structuredClone(levelData);
@@ -416,7 +639,12 @@ export function LevelEditor({
         h: definition.defaultSize.h,
         rotation: 0,
         layer: type === 'DECORATION_BLOCK' ? 'decoration' : 'gameplay',
-        props: {},
+        props:
+          isPaintableObjectType(type) && activePaintGroupId
+            ? {
+                paintGroupId: activePaintGroupId,
+              }
+            : {},
       };
 
       draft.objects.push(object);
@@ -464,8 +692,129 @@ export function LevelEditor({
       meta: {
         ...current.meta,
         theme: nextTheme,
+        background: nextTheme,
       },
     }));
+  };
+
+  const setPlayerMode = (nextMode: LevelData['player']['mode']) => {
+    updateLevelData((draft) => {
+      draft.player.mode = nextMode;
+    });
+  };
+
+  const updateSelectedObjectPaint = (field: 'fillColor' | 'strokeColor', value: string) => {
+    if (!selectedObjectId) {
+      return;
+    }
+
+    updateLevelData((draft) => {
+      const object = draft.objects.find((entry) => entry.id === selectedObjectId);
+
+      if (!object || !isPaintableObjectType(object.type)) {
+        return;
+      }
+
+      const linkedGroupId = getObjectPaintGroupId(object);
+
+      if (linkedGroupId) {
+        const currentGroups = draft.meta.colorGroups ?? [];
+        const existingGroup = getColorGroupById(currentGroups, linkedGroupId);
+        const fallbackFillColor = getObjectFillColor(object, currentGroups);
+        const fallbackStrokeColor = getObjectStrokeColor(object, currentGroups);
+        const nextGroups = currentGroups.filter((group) => group.id !== linkedGroupId);
+        nextGroups.push({
+          id: linkedGroupId,
+          fillColor: field === 'fillColor' ? value : existingGroup?.fillColor ?? fallbackFillColor,
+          strokeColor: field === 'strokeColor' ? value : existingGroup?.strokeColor ?? fallbackStrokeColor,
+        });
+        nextGroups.sort((left, right) => left.id - right.id);
+        draft.meta.colorGroups = nextGroups;
+        return;
+      }
+
+      object.props = {
+        ...object.props,
+        [field]: value,
+      };
+    });
+  };
+
+  const resetSelectedObjectPaint = () => {
+    if (!selectedObjectId) {
+      return;
+    }
+
+    updateLevelData((draft) => {
+      const object = draft.objects.find((entry) => entry.id === selectedObjectId);
+
+      if (!object || !isPaintableObjectType(object.type)) {
+        return;
+      }
+
+      const nextProps = { ...object.props };
+      delete nextProps.paintGroupId;
+      delete nextProps.fillColor;
+      delete nextProps.strokeColor;
+      object.props = nextProps;
+    });
+  };
+
+  const assignSelectedObjectToPaintGroup = (groupId: number) => {
+    if (!paintableSelectedObject) {
+      return;
+    }
+
+    updateLevelData((draft) => {
+      const object = draft.objects.find((entry) => entry.id === paintableSelectedObject.id);
+
+      if (!object || !isPaintableObjectType(object.type)) {
+        return;
+      }
+
+      const currentGroups = draft.meta.colorGroups ?? [];
+      const fillColor = getObjectFillColor(object, currentGroups);
+      const strokeColor = getObjectStrokeColor(object, currentGroups);
+      const nextGroups = currentGroups.filter((group) => group.id !== groupId);
+      nextGroups.push({
+        id: groupId,
+        fillColor,
+        strokeColor,
+      });
+      nextGroups.sort((left, right) => left.id - right.id);
+      draft.meta.colorGroups = nextGroups;
+      object.props = {
+        ...object.props,
+        paintGroupId: groupId,
+      };
+      delete object.props.fillColor;
+      delete object.props.strokeColor;
+    });
+
+    setActivePaintGroupId(groupId);
+  };
+
+  const detachSelectedObjectFromPaintGroup = () => {
+    if (!paintableSelectedObject) {
+      return;
+    }
+
+    updateLevelData((draft) => {
+      const object = draft.objects.find((entry) => entry.id === paintableSelectedObject.id);
+
+      if (!object || !isPaintableObjectType(object.type)) {
+        return;
+      }
+
+      const fillColor = getObjectFillColor(object, draft.meta.colorGroups ?? []);
+      const strokeColor = getObjectStrokeColor(object, draft.meta.colorGroups ?? []);
+      object.props = {
+        ...object.props,
+        fillColor,
+        strokeColor,
+      };
+      delete object.props.paintGroupId;
+    });
   };
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -475,15 +824,14 @@ export function LevelEditor({
       return;
     }
 
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const screenX = (event.clientX - rect.left) * scaleX;
-    const screenY = (event.clientY - rect.top) * scaleY;
+    const { screenX, screenY } = getCanvasScreenPoint(canvas, event.clientX, event.clientY);
     const cell = levelData.meta.gridSize * zoom;
     const world = screenToWorld(screenX, screenY, pan.x, pan.y, cell);
 
-    setCursorWorld(world);
+    setCursorWorld({
+      x: Math.floor(world.x),
+      y: Math.floor(world.y),
+    });
 
     if (event.button === 2) {
       return;
@@ -534,7 +882,7 @@ export function LevelEditor({
       return;
     }
 
-    placeObject(selectedTool, Math.round(world.x), Math.round(world.y));
+    placeObject(selectedTool, Math.floor(world.x), Math.floor(world.y));
   };
 
   const handlePointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -544,15 +892,14 @@ export function LevelEditor({
       return;
     }
 
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const screenX = (event.clientX - rect.left) * scaleX;
-    const screenY = (event.clientY - rect.top) * scaleY;
+    const { screenX, screenY } = getCanvasScreenPoint(canvas, event.clientX, event.clientY);
     const cell = levelData.meta.gridSize * zoom;
     const world = screenToWorld(screenX, screenY, pan.x, pan.y, cell);
 
-    setCursorWorld(world);
+    setCursorWorld({
+      x: Math.floor(world.x),
+      y: Math.floor(world.y),
+    });
 
     const dragState = dragRef.current;
 
@@ -642,6 +989,17 @@ export function LevelEditor({
     }));
   }, [horizontalScrollMax, stageCell]);
 
+  const handleToolSelect = (tool: EditorTool) => {
+    setSelectedTool(tool);
+    setActivePaletteGroup(getPaletteGroupTitle(tool));
+    setPaletteDrawerGroup(null);
+  };
+
+  const handlePaletteGroupClick = (groupTitle: string) => {
+    setActivePaletteGroup(groupTitle);
+    setPaletteDrawerGroup((current) => (current === groupTitle ? null : groupTitle));
+  };
+
   useEffect(() => {
     const stageFrame = stageFrameRef.current;
 
@@ -656,15 +1014,20 @@ export function LevelEditor({
         return;
       }
 
-      event.preventDefault();
-      event.stopPropagation();
-
       if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+        event.preventDefault();
+        event.stopPropagation();
         const delta = event.deltaX !== 0 ? event.deltaX : event.deltaY;
         setHorizontalScrollPosition(horizontalScrollValue + delta / stageCell);
         return;
       }
 
+      if (!event.ctrlKey && !event.metaKey) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
       applyWheelZoom(event.deltaY);
     };
 
@@ -675,52 +1038,6 @@ export function LevelEditor({
     };
   }, [horizontalScrollValue, setHorizontalScrollPosition, stageCell]);
 
-  const handleObjectField = (field: keyof LevelObject, value: string | number) => {
-    if (!selectedObjectId) {
-      return;
-    }
-
-    updateLevelData((draft) => {
-      const object = draft.objects.find((entry) => entry.id === selectedObjectId);
-
-      if (!object) {
-        return;
-      }
-
-      // The inspector edits only numeric runtime geometry fields here.
-      (object[field] as string | number) = value;
-
-      if (object.type === 'START_MARKER') {
-        draft.player.startX = object.x;
-        draft.player.startY = object.y;
-      }
-
-      if (object.type === 'FINISH_PORTAL') {
-        draft.finish.x = object.x;
-        draft.finish.y = object.y;
-      }
-    });
-  };
-
-  const handleObjectPropField = (key: string, value: string | number) => {
-    if (!selectedObjectId) {
-      return;
-    }
-
-    updateLevelData((draft) => {
-      const object = draft.objects.find((entry) => entry.id === selectedObjectId);
-
-      if (!object) {
-        return;
-      }
-
-      object.props = {
-        ...object.props,
-        [key]: value,
-      };
-    });
-  };
-
   const handleSave = async () => {
     setSaveState('saving');
     setMessage('');
@@ -728,6 +1045,7 @@ export function LevelEditor({
     try {
       const dataToSave = structuredClone(levelData);
       dataToSave.meta.theme = theme;
+      dataToSave.meta.background = theme;
 
       await onSave({
         title,
@@ -757,497 +1075,630 @@ export function LevelEditor({
   };
 
   return (
-    <div className="arcade-editor-workstation flex h-full min-h-0 flex-col space-y-6">
-      <Panel className="arcade-editor-topbar game-screen bg-transparent">
-        <div className="space-y-4">
-          <div className="editor-command-main">
-            <div>
-              <p className="font-display text-[11px] tracking-[0.26em] text-[#ffd44a]">Forge Workstation</p>
-              <h3 className="mt-2 font-display text-3xl text-white">{title}</h3>
-              <p className="mt-2 max-w-2xl text-sm leading-7 text-white/72">
-                Choose a tool on the left, build in the center, and tune on the right. The stage is the main focus and the
-                primary actions stay visible up here.
-              </p>
-            </div>
+    <div className="arcade-editor-workstation editor-workbench flex flex-col space-y-5">
+      <Panel className="arcade-editor-topbar editor-workbench-toolbar game-screen bg-transparent">
+        <div className="editor-workbench-toolbar-main">
+          <div>
+            <p className="font-display text-[11px] tracking-[0.26em] text-[#ffd44a]">Forge Workstation</p>
+            <h3 className="mt-2 font-display text-3xl text-white">{title}</h3>
+            <p className="mt-2 max-w-3xl text-sm leading-7 text-white/72">
+              Build straight on the stage, keep the palette inside the editor surface, and scroll down only when you want
+              inspector details or level tuning.
+            </p>
+          </div>
 
-            <div className="editor-primary-actions">
-              <Button onClick={handleSave} disabled={saveState === 'saving'}>
-                {saveState === 'saving' ? 'Saving...' : saveLabel}
+          <div className="editor-primary-actions">
+            <Button onClick={handleSave} disabled={saveState === 'saving'}>
+              {saveState === 'saving' ? 'Saving...' : saveLabel}
+            </Button>
+            {onSubmit ? (
+              <Button variant="secondary" onClick={handleSubmit}>
+                Submit for Review
               </Button>
-              {onSubmit ? (
-                <Button variant="secondary" onClick={handleSubmit}>
-                  Submit for Review
-                </Button>
-              ) : null}
-              <Button variant="ghost" onClick={() => setShowPreview((current) => !current)}>
-                {showPreview ? 'Hide Preview' : 'Open Preview'}
-              </Button>
-            </div>
+            ) : null}
+            <Button variant="ghost" onClick={() => setShowPreview((current) => !current)}>
+              {showPreview ? 'Hide Preview' : 'Open Preview'}
+            </Button>
           </div>
+        </div>
 
-          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-            {quickStartSteps.map((step, index) => (
-              <HintChip key={step} label={`Step ${index + 1}`} value={step} />
-            ))}
-          </div>
-
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
-            <HintChip label="Tool" value={activeToolLabel} />
-            <HintChip label="Selected" value={selectionLabel} />
-            <HintChip label="History" value={historyPosition} />
-            <HintChip label="Theme" value={theme} />
-            <HintChip label="Objects" value={objectCount} />
-          </div>
+        <div className="editor-workbench-toolbar-meta">
+          <HintChip label="Tool" value={activeToolLabel} />
+          <HintChip label="Selected" value={selectionLabel} />
+          <HintChip label="History" value={historyPosition} />
+          <HintChip label="Theme" value={theme} />
+          <HintChip label="Objects" value={objectCount} />
         </div>
       </Panel>
 
-      <div className="grid min-h-0 flex-1 gap-6 xl:grid-cols-[240px_minmax(0,1fr)_360px]">
-        <div className="arcade-tool-rail space-y-4 xl:overflow-y-auto xl:pr-1">
-          <Panel className="game-screen space-y-4 bg-transparent">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Step 1</p>
-                <h3 className="font-display text-2xl text-white">Toolbox</h3>
-              </div>
-              <Badge tone="accent">Build</Badge>
+      <Panel className="arcade-editor-stage-panel editor-stage-shell game-screen bg-transparent">
+        <div
+          ref={stageFrameRef}
+          className="editor-canvas-frame"
+          style={
+            {
+              '--editor-stage-top': stageThemePalette.editorGradientTop,
+              '--editor-stage-mid': stageThemePalette.editorGradientMid,
+              '--editor-stage-bottom': stageThemePalette.editorGradientBottom,
+            } as CSSProperties
+          }
+        >
+          <div className="editor-canvas-overlay editor-canvas-overlay--hud">
+            <div className="editor-canvas-hud-bar">
+              <HintChip label="Tool" value={activeToolLabel} />
+              <HintChip label="Selected" value={selectionSummary} />
+              <HintChip label="Zoom" value={`${zoom.toFixed(2)}x`} />
+              <HintChip label="Cursor" value={`${cursorWorld.x}, ${cursorWorld.y}`} />
             </div>
+          </div>
 
-            <div className="space-y-4">
+          <div className="editor-canvas-overlay editor-canvas-overlay--left">
+            <div className="editor-canvas-rail editor-canvas-rail--categories">
               {paletteGroups.map((group) => (
-                <div key={group.title} className="space-y-2">
-                  <p className="font-display text-[10px] tracking-[0.22em] text-white/48">{group.title}</p>
-                  <div className="grid gap-2">
-                    {group.items.map((tool) => (
-                      <ToolButton
-                        key={tool}
-                        label={tool === 'select' ? 'Select' : tool === 'pan' ? 'Pan' : levelObjectDefinitions[tool].label}
-                        description={toolDescriptions[tool]}
-                        active={selectedTool === tool}
-                        onClick={() => setSelectedTool(tool)}
-                      />
-                    ))}
-                  </div>
-                </div>
+                <button
+                  key={group.title}
+                  type="button"
+                  className={cn('editor-canvas-rail-button', activePaletteGroup === group.title ? 'is-active' : '')}
+                  onClick={() => handlePaletteGroupClick(group.title)}
+                >
+                  {group.title}
+                </button>
               ))}
             </div>
+          </div>
 
-            <div className="editor-note-box text-sm leading-6 text-white/72">
-              <p className="font-display mb-1 text-[10px] tracking-[0.18em] text-[#ffd44a]">Active Tool</p>
-              <p className="text-white">{activeToolLabel}</p>
-              <p>{activeToolDescription}</p>
-            </div>
-          </Panel>
+          <canvas
+            ref={canvasRef}
+            className="editor-stage-canvas cursor-crosshair border-[4px] border-[#39105f] bg-[#130326]"
+            aria-label="Level editor stage"
+            style={{
+              width: `${canvasViewport.width}px`,
+              height: `${canvasViewport.height}px`,
+            }}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerLeave={handlePointerUp}
+            onAuxClick={(event) => {
+              if (event.button === 1) {
+                event.preventDefault();
+              }
+            }}
+          />
 
-          <Panel className="game-screen space-y-3 bg-transparent">
-            <div>
-              <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Step 2</p>
-              <h3 className="font-display text-2xl text-white">Quick Actions</h3>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <Button variant="ghost" onClick={performUndo} disabled={!canUndo}>
-                Undo
-              </Button>
-              <Button variant="ghost" onClick={performRedo} disabled={!canRedo}>
-                Redo
-              </Button>
-              <Button variant="ghost" onClick={duplicateSelected} disabled={!selectedObject}>
-                Clone
-              </Button>
-              <Button variant="danger" onClick={deleteSelected} disabled={!selectedObject}>
-                Delete Object
-              </Button>
-            </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <HintChip label="Pan" value="Space or middle drag" />
-              <HintChip label="Move" value="Arrow keys" />
-              <HintChip label="Undo" value="Ctrl/Cmd + Z" />
-              <HintChip label="Redo" value="Ctrl/Cmd + Shift + Z" />
-              <HintChip label="Duplicate" value="Ctrl/Cmd + D" />
-            </div>
-          </Panel>
-        </div>
-
-        <div className="min-h-0 space-y-4 xl:overflow-y-auto xl:pr-1">
-          <Panel className="arcade-editor-stage-panel game-screen space-y-4 bg-transparent">
-            <div className="editor-stage-header">
-              <div>
-                <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Step 3</p>
-                <h3 className="font-display text-2xl text-white">Stage Canvas</h3>
-                <p className="mt-2 max-w-2xl text-sm leading-7 text-white/72">
-                  Build the route here. Place pieces with the active tool, switch to Select when you want to adjust geometry,
-                  and use the inspector on the right for precise tuning.
-                </p>
-              </div>
-
-              <div className="editor-stage-actions">
-                <Button variant="ghost" onClick={() => setZoom((current) => Math.max(0.45, current - 0.1))}>
-                  Zoom -
-                </Button>
-                <Button variant="ghost" onClick={() => setZoom((current) => Math.min(2.4, current + 0.1))}>
-                  Zoom +
-                </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => {
-                    setPan({ x: EDITOR_DEFAULT_PAN_X, y: EDITOR_DEFAULT_PAN_Y });
-                    setZoom(1);
-                  }}
-                >
-                  Reset View
-                </Button>
-              </div>
-            </div>
-
-            <div className="editor-stage-status-grid">
-              <HintChip label="Active Tool" value={activeToolLabel} />
-              <HintChip label="Selected" value={selectionSummary} />
-              <HintChip label="Camera" value={`${zoom.toFixed(2)}x zoom`} />
-              <HintChip label="Cursor" value={`${cursorWorld.x}, ${cursorWorld.y}`} />
-              <HintChip label="Place / Select" value="Left click on stage" />
-              <HintChip label="Pan / Zoom" value="Middle drag, wheel, Shift + wheel" />
-            </div>
-
-            <div ref={stageFrameRef} className="editor-canvas-frame">
-              <canvas
-                ref={canvasRef}
-                className="w-full cursor-crosshair border-[4px] border-[#39105f] bg-[#130326]"
-                aria-label="Level editor stage"
-                onPointerDown={handlePointerDown}
-                onPointerMove={handlePointerMove}
-                onPointerUp={handlePointerUp}
-                onPointerLeave={handlePointerUp}
-                onAuxClick={(event) => {
-                  if (event.button === 1) {
-                    event.preventDefault();
-                  }
+          <div className="editor-canvas-overlay editor-canvas-overlay--right">
+            <div className="editor-canvas-rail editor-canvas-rail--actions">
+              <button type="button" className="editor-canvas-rail-button" onClick={() => setZoom((current) => Math.min(2.4, current + 0.1))}>
+                Zoom+
+              </button>
+              <button type="button" className="editor-canvas-rail-button" onClick={() => setZoom((current) => Math.max(0.45, current - 0.1))}>
+                Zoom-
+              </button>
+              <button
+                type="button"
+                className="editor-canvas-rail-button"
+                onClick={() => {
+                  setPan({ x: EDITOR_DEFAULT_PAN_X, y: EDITOR_DEFAULT_PAN_Y });
+                  setZoom(1);
                 }}
-              />
-            </div>
-
-            <div className="editor-stage-footer">
-              <div className="editor-stage-scrollbar-row">
-                <Button
-                  variant="ghost"
-                  onClick={() => setHorizontalScrollPosition(horizontalScrollValue - 8)}
-                  disabled={horizontalScrollMax <= 0}
-                >
-                  Left
-                </Button>
-
-                <div className="editor-stage-scrollbar-track">
-                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-white/72">
-                    <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Stage Scroll</p>
-                    <p>
-                      X: <span className="text-white">{Math.round(horizontalScrollValue)}</span> /{' '}
-                      <span className="text-white">{Math.max(0, Math.round(horizontalScrollMax))}</span>
-                    </p>
-                  </div>
-
-                  <input
-                    type="range"
-                    min={0}
-                    max={Math.max(horizontalScrollMax, 0)}
-                    step={1}
-                    value={horizontalScrollValue}
-                    disabled={horizontalScrollMax <= 0}
-                    className="editor-horizontal-scroll"
-                    aria-label="Horizontal stage scroll"
-                    onChange={(event) => setHorizontalScrollPosition(Number(event.target.value))}
-                  />
-                </div>
-
-                <Button
-                  variant="ghost"
-                  onClick={() => setHorizontalScrollPosition(horizontalScrollValue + 8)}
-                  disabled={horizontalScrollMax <= 0}
-                >
-                  Right
-                </Button>
-              </div>
-
-              <div className="editor-stage-meta">
-                <p>
-                  Tool: <span className="text-white">{activeToolLabel}</span>
-                </p>
-                <p>
-                  Selected: <span className="text-white">{selectionLabel}</span>
-                </p>
-                <p>
-                  Cursor: <span className="text-white">{cursorWorld.x}, {cursorWorld.y}</span>
-                </p>
-                <p>
-                  Zoom: <span className="text-white">{zoom.toFixed(2)}x</span>
-                </p>
-                <p>
-                  Objects: <span className="text-white">{levelData.objects.length}</span>
-                </p>
-                <p>
-                  History: <span className="text-white">{historyPosition}</span>
-                </p>
-              </div>
-            </div>
-
-            {message ? (
-              <div
-                className={cn(
-                  'editor-note-box px-4 py-3 text-sm',
-                  saveState === 'error' ? 'text-[#ff8aa1]' : 'text-[#82f6ff]',
-                )}
               >
-                {message}
-              </div>
-            ) : null}
-          </Panel>
-
-          <Panel className="arcade-preview-dock game-screen space-y-4 bg-transparent">
-            <div className="editor-stage-header">
-              <div>
-                <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Step 4</p>
-                <h3 className="font-display text-2xl text-white">Test Lane</h3>
-                <p className="mt-2 text-sm leading-7 text-white/72">
-                  Check feel and timing without leaving the editor. Open the live preview when you want to test jumps,
-                  speed portals, and readability.
-                </p>
-              </div>
-              <div className="editor-stage-actions">
-                <Button variant="ghost" onClick={() => setShowPreview((current) => !current)}>
-                  {showPreview ? 'Hide Preview' : 'Open Preview'}
-                </Button>
-              </div>
+                Reset
+              </button>
+              <button type="button" className="editor-canvas-rail-button" onClick={performUndo} disabled={!canUndo}>
+                Undo
+              </button>
+              <button type="button" className="editor-canvas-rail-button" onClick={performRedo} disabled={!canRedo}>
+                Redo
+              </button>
+              <button type="button" className="editor-canvas-rail-button" onClick={duplicateSelected} disabled={!selectedObject}>
+                Clone
+              </button>
+              <button
+                type="button"
+                className={cn('editor-canvas-rail-button', isPaintPopupOpen ? 'is-active' : '')}
+                onClick={() => setIsPaintPopupOpen((current) => !current)}
+                disabled={!canOpenPaintPopup}
+              >
+                Paint
+              </button>
+              <button
+                type="button"
+                className="editor-canvas-rail-button editor-canvas-rail-button--danger"
+                onClick={deleteSelected}
+                disabled={!selectedObject}
+              >
+                Delete
+              </button>
+              <button
+                type="button"
+                className={cn('editor-canvas-rail-button', showPreview ? 'is-active' : '')}
+                onClick={() => setShowPreview((current) => !current)}
+              >
+                {showPreview ? 'Hide Test' : 'Test'}
+              </button>
             </div>
+          </div>
 
-            {showPreview ? (
-              <div className="space-y-3">
-                <div className="grid gap-2 md:grid-cols-3">
-                  <HintChip label="Attempt" value="Runtime test" />
-                  <HintChip label="Restart" value="Auto after fail" />
-                  <HintChip label="Goal" value="Check timing and flow" />
-                </div>
-                <GameCanvas levelData={levelData} attemptNumber={1} autoRestartOnFail />
-              </div>
-            ) : (
-              <div className="editor-note-box text-sm leading-7 text-white/68">
-                Keep this dock closed while building, then open it once a route segment feels ready. That way the center
-                stage stays clean and the preview still lives one step below.
-              </div>
-            )}
-          </Panel>
-        </div>
-
-        <div className="arcade-editor-drawer space-y-4 xl:overflow-y-auto xl:pr-1">
-          <Panel className="game-screen space-y-4 bg-transparent">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Step 5</p>
-                <h3 className="font-display text-2xl text-white">Inspector</h3>
-              </div>
-              {selectedObject ? <Badge tone="accent">{selectedObject.type}</Badge> : <Badge tone="default">Nothing Selected</Badge>}
-            </div>
-
-            {selectedObject ? (
-              <>
-                <div className="editor-note-box text-sm leading-6 text-white/72">
-                  <p className="font-display mb-1 text-[10px] tracking-[0.18em] text-[#ffd44a]">Selected Object</p>
-                  <p className="text-white">{selectedDefinition?.label}</p>
-                  <p>{toolDescriptions[selectedObject.type]}</p>
-                </div>
-
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <HintChip label="Position" value={`${selectedObject.x}, ${selectedObject.y}`} />
-                  <HintChip label="Size" value={`${selectedObject.w} x ${selectedObject.h}`} />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <NumberField label="X" value={selectedObject.x} onChange={(value) => handleObjectField('x', value)} />
-                  <NumberField label="Y" value={selectedObject.y} onChange={(value) => handleObjectField('y', value)} />
-                  <NumberField label="W" value={selectedObject.w} onChange={(value) => handleObjectField('w', value)} />
-                  <NumberField label="H" value={selectedObject.h} onChange={(value) => handleObjectField('h', value)} />
-                  <NumberField
-                    label="Rotation"
-                    value={selectedObject.rotation}
-                    onChange={(value) => handleObjectField('rotation', value)}
-                  />
-                </div>
-
-                {selectedObject.type === 'JUMP_PAD' ? (
-                  <div className="grid grid-cols-2 gap-3">
-                    <NumberField
-                      label="Boost"
-                      value={Number(selectedObject.props.boost ?? 16)}
-                      step={0.5}
-                      onChange={(value) => handleObjectPropField('boost', value)}
-                    />
-                  </div>
-                ) : null}
-
-                {selectedObject.type === 'SPEED_PORTAL' ? (
-                  <div className="grid grid-cols-2 gap-3">
-                    <NumberField
-                      label="Multiplier"
-                      value={Number(selectedObject.props.multiplier ?? 1.4)}
-                      step={0.1}
-                      min={0.4}
-                      onChange={(value) => handleObjectPropField('multiplier', value)}
-                    />
-                  </div>
-                ) : null}
-
-                {selectedObject.type === 'GRAVITY_PORTAL' ? (
+          {isPaintPopupOpen && paintableSelectedObject ? (
+            <div className="editor-canvas-overlay editor-canvas-overlay--paint">
+              <div className="editor-canvas-popup editor-canvas-paint-popup">
+                <div className="editor-canvas-popup-header">
                   <div>
-                    <FieldLabel>Gravity Direction</FieldLabel>
-                    <div className="grid grid-cols-2 gap-2">
-                      <Button
-                        variant={Number(selectedObject.props.gravity ?? -1) > 0 ? 'secondary' : 'ghost'}
-                        onClick={() => handleObjectPropField('gravity', 1)}
-                      >
-                        Normal
+                    <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Paint & Groups</p>
+                    <h4 className="font-display text-xl text-white">
+                      {paintableSelectedObject
+                        ? selectedDefinition?.label ?? paintableSelectedObject.type
+                        : activePaintTool
+                          ? levelObjectDefinitions[activePaintTool].label
+                          : 'Placement Paint'}
+                    </h4>
+                  </div>
+                  <button
+                    type="button"
+                    className="editor-canvas-popup-close"
+                    onClick={() => setIsPaintPopupOpen(false)}
+                  >
+                    Close
+                  </button>
+                </div>
+
+                {paintableSelectedObject ? (
+                  <div className="editor-color-controls">
+                    <div className="editor-color-control">
+                      <span className="editor-color-control-label">Fill</span>
+                      <div className="editor-color-control-body">
+                        <input
+                          type="color"
+                          aria-label="Selected object fill color"
+                          className="editor-color-picker"
+                          value={getEditorColorInputValue(
+                            getObjectFillColor(paintableSelectedObject, colorGroups),
+                            levelObjectDefinitions[paintableSelectedObject.type].color,
+                          )}
+                          onChange={(event) => updateSelectedObjectPaint('fillColor', event.target.value)}
+                        />
+                        <span className="editor-color-value">
+                          {getObjectFillColor(paintableSelectedObject, colorGroups)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="editor-color-control">
+                      <span className="editor-color-control-label">Stroke</span>
+                      <div className="editor-color-control-body">
+                        <input
+                          type="color"
+                          aria-label="Selected object stroke color"
+                          className="editor-color-picker"
+                          value={getEditorColorInputValue(
+                            getObjectStrokeColor(paintableSelectedObject, colorGroups),
+                            levelObjectDefinitions[paintableSelectedObject.type].strokeColor,
+                          )}
+                          onChange={(event) => updateSelectedObjectPaint('strokeColor', event.target.value)}
+                        />
+                        <span className="editor-color-value">
+                          {getObjectStrokeColor(paintableSelectedObject, colorGroups)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="editor-paint-inline-actions">
+                      <Button variant="ghost" onClick={resetSelectedObjectPaint}>
+                        Reset Colors
                       </Button>
-                      <Button
-                        variant={Number(selectedObject.props.gravity ?? -1) < 0 ? 'secondary' : 'ghost'}
-                        onClick={() => handleObjectPropField('gravity', -1)}
-                      >
-                        Inverted
-                      </Button>
+                      {selectedPaintGroupId ? (
+                        <Button variant="ghost" onClick={detachSelectedObjectFromPaintGroup}>
+                          Detach Group
+                        </Button>
+                      ) : null}
                     </div>
                   </div>
-                ) : null}
+                ) : (
+                  <div className="editor-note-box px-4 py-3 text-sm text-white/72">
+                    Select a block or spike if you want to save its colors into a group.
+                  </div>
+                )}
 
-                <div>
-                  <FieldLabel>Advanced Props (JSON)</FieldLabel>
-                  <Textarea
-                    className="font-mono text-xs"
-                    rows={6}
-                    value={JSON.stringify(selectedObject.props, null, 2)}
-                    onChange={(event) => {
-                      try {
-                        const parsed = JSON.parse(event.target.value);
-                        updateLevelData((draft) => {
-                          const object = draft.objects.find((entry) => entry.id === selectedObject.id);
-                          if (object) {
-                            object.props = parsed;
-                          }
-                        });
-                      } catch {
-                        // Keep editor forgiving; invalid JSON is simply ignored until corrected.
-                      }
-                    }}
-                  />
+                <div className="editor-paint-groups">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="editor-color-control-label">Color Groups</span>
+                    <Badge tone="accent">
+                      {activePaintGroupId ? `Placing: Group ${activePaintGroupId}` : 'Placing: Direct'}
+                    </Badge>
+                  </div>
+
+                  <div className="editor-paint-group-grid">
+                    {Array.from({ length: PAINT_GROUP_SLOT_COUNT }, (_, index) => {
+                      const groupId = index + 1;
+                      const group = getColorGroupById(colorGroups, groupId);
+                      const isActiveGroup = activePaintGroupId === groupId;
+                      const isLinkedGroup = selectedPaintGroupId === groupId;
+
+                      return (
+                        <button
+                          key={groupId}
+                          type="button"
+                          className={cn(
+                            'editor-paint-group-button',
+                            isActiveGroup ? 'is-active' : '',
+                            isLinkedGroup ? 'is-linked' : '',
+                          )}
+                          onClick={() => {
+                            if (paintableSelectedObject) {
+                              assignSelectedObjectToPaintGroup(groupId);
+                              return;
+                            }
+
+                            if (group) {
+                              setActivePaintGroupId(groupId);
+                            }
+                          }}
+                          disabled={!paintableSelectedObject && !group}
+                        >
+                          <span className="editor-paint-group-title">Group {groupId}</span>
+                          <span className="editor-paint-group-swatches">
+                            <span
+                              className="editor-paint-group-swatch"
+                              style={{ backgroundColor: group?.fillColor ?? 'rgba(255,255,255,0.12)' }}
+                            />
+                            <span
+                              className="editor-paint-group-swatch"
+                              style={{ backgroundColor: group?.strokeColor ?? 'rgba(255,255,255,0.28)' }}
+                            />
+                          </span>
+                          <span className="editor-paint-group-status">
+                            {isLinkedGroup ? 'Linked' : isActiveGroup ? 'Active' : group ? 'Saved' : 'Empty'}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="editor-paint-inline-actions">
+                    <Button variant="ghost" onClick={() => setActivePaintGroupId(null)}>
+                      Place Direct
+                    </Button>
+                  </div>
                 </div>
-              </>
-            ) : (
-              <div className="editor-note-box text-sm leading-7 text-white/68">
-                Select an object on the stage and this drawer will switch into tuning mode. Position, size, trigger values,
-                and advanced props all live here so the canvas stays visually clean.
               </div>
-            )}
-          </Panel>
-
-          <Panel className="game-screen space-y-4 bg-transparent">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Step 6</p>
-                <h3 className="font-display text-2xl text-white">Level Settings</h3>
-              </div>
-              <Badge tone="accent">{themePresets.find((preset) => preset.value === theme)?.label ?? 'Custom'}</Badge>
             </div>
-
-            <div>
-              <FieldLabel>Title</FieldLabel>
-              <Input value={title} onChange={(event) => setTitle(event.target.value)} />
-            </div>
-            <div>
-              <FieldLabel>Description</FieldLabel>
-              <Textarea rows={4} value={description} onChange={(event) => setDescription(event.target.value)} />
-            </div>
-
-            <div className="space-y-3">
-              <FieldLabel>Theme Preset</FieldLabel>
-              <div className="grid grid-cols-2 gap-2">
-                {themePresets.map((preset) => (
+          ) : isPaintPopupOpen ? (
+            <div className="editor-canvas-overlay editor-canvas-overlay--paint">
+              <div className="editor-canvas-popup editor-canvas-paint-popup">
+                <div className="editor-canvas-popup-header">
+                  <div>
+                    <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Paint & Groups</p>
+                    <h4 className="font-display text-xl text-white">
+                      {activePaintTool ? levelObjectDefinitions[activePaintTool].label : 'Placement Paint'}
+                    </h4>
+                  </div>
                   <button
-                    key={preset.value}
                     type="button"
-                    onClick={() => applyThemePreset(preset.value)}
-                    className={cn(
-                      'tool-tile px-3 py-3 text-left transition',
-                      theme === preset.value ? 'tool-tile-active text-[#173300]' : 'text-white hover:brightness-110',
-                    )}
+                    className="editor-canvas-popup-close"
+                    onClick={() => setIsPaintPopupOpen(false)}
                   >
-                    <span className="font-display block text-[10px] tracking-[0.18em] uppercase">{preset.label}</span>
-                    <span
-                      className={cn(
-                        'mt-1 block text-[10px] normal-case',
-                        theme === preset.value ? 'text-[#173300]/80' : 'text-white/60',
-                      )}
-                    >
-                      {preset.value}
-                    </span>
+                    Close
                   </button>
-                ))}
+                </div>
+
+                <div className="editor-note-box px-4 py-3 text-sm text-white/72">
+                  Choose a saved group for new blocks and spikes, or select an existing painted object to write its
+                  colors into one of the groups below.
+                </div>
+
+                <div className="editor-paint-groups">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="editor-color-control-label">Color Groups</span>
+                    <Badge tone="accent">
+                      {activePaintGroupId ? `Placing: Group ${activePaintGroupId}` : 'Placing: Direct'}
+                    </Badge>
+                  </div>
+
+                  <div className="editor-paint-group-grid">
+                    {Array.from({ length: PAINT_GROUP_SLOT_COUNT }, (_, index) => {
+                      const groupId = index + 1;
+                      const group = getColorGroupById(colorGroups, groupId);
+
+                      return (
+                        <button
+                          key={groupId}
+                          type="button"
+                          className={cn('editor-paint-group-button', activePaintGroupId === groupId ? 'is-active' : '')}
+                          onClick={() => setActivePaintGroupId(groupId)}
+                          disabled={!group}
+                        >
+                          <span className="editor-paint-group-title">Group {groupId}</span>
+                          <span className="editor-paint-group-swatches">
+                            <span
+                              className="editor-paint-group-swatch"
+                              style={{ backgroundColor: group?.fillColor ?? 'rgba(255,255,255,0.12)' }}
+                            />
+                            <span
+                              className="editor-paint-group-swatch"
+                              style={{ backgroundColor: group?.strokeColor ?? 'rgba(255,255,255,0.28)' }}
+                            />
+                          </span>
+                          <span className="editor-paint-group-status">{group ? 'Saved' : 'Empty'}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="editor-paint-inline-actions">
+                    <Button variant="ghost" onClick={() => setActivePaintGroupId(null)}>
+                      Place Direct
+                    </Button>
+                  </div>
+                </div>
               </div>
-              <Input
-                value={theme}
-                onChange={(event) => {
-                  applyThemePreset(event.target.value);
-                }}
+            </div>
+          ) : null}
+
+          <div className="editor-canvas-overlay editor-canvas-overlay--bottom">
+            <div className="editor-canvas-toolstrip">
+              <div className="editor-canvas-toolstrip-header">
+                <div>
+                  <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">
+                    {paletteDrawer ? `${paletteDrawer.title} Drawer` : 'Object Drawer'}
+                  </p>
+                  <p className="text-sm text-white/72">
+                    {paletteDrawer
+                      ? 'Choose the exact piece you want to place on the stage.'
+                      : 'Click Blocks, Obstacles, Portals or another category on the left to open the picker.'}
+                  </p>
+                </div>
+                {paletteDrawer ? (
+                  <button
+                    type="button"
+                    className="editor-canvas-drawer-close"
+                    onClick={() => setPaletteDrawerGroup(null)}
+                  >
+                    Close
+                  </button>
+                ) : (
+                  <Badge tone="accent">{activeToolLabel}</Badge>
+                )}
+              </div>
+
+              {paletteDrawer ? (
+                <div className="editor-canvas-toolstrip-row">
+                  {paletteDrawer.items.map((tool) => (
+                    <ToolButton
+                      key={tool}
+                      label={tool === 'select' ? 'Select' : tool === 'pan' ? 'Pan' : levelObjectDefinitions[tool].label}
+                      description={toolDescriptions[tool]}
+                      active={selectedTool === tool}
+                      compact
+                      onClick={() => handleToolSelect(tool)}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="editor-canvas-toolstrip-empty">
+                  <span className="font-display text-[10px] tracking-[0.16em] text-[#ffd44a]">Current Tool</span>
+                  <strong>{activeToolLabel}</strong>
+                  <span>{activeToolDescription}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="editor-stage-footer">
+          <div className="editor-stage-scrollbar-row">
+            <Button
+              variant="ghost"
+              onClick={() => setHorizontalScrollPosition(horizontalScrollValue - 8)}
+              disabled={horizontalScrollMax <= 0}
+            >
+              Left
+            </Button>
+
+            <div className="editor-stage-scrollbar-track">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-white/72">
+                <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Stage Scroll</p>
+                <p>
+                  X: <span className="text-white">{Math.round(horizontalScrollValue)}</span> /{' '}
+                  <span className="text-white">{Math.max(0, Math.round(horizontalScrollMax))}</span>
+                </p>
+              </div>
+
+              <input
+                type="range"
+                min={0}
+                max={Math.max(horizontalScrollMax, 0)}
+                step={1}
+                value={horizontalScrollValue}
+                disabled={horizontalScrollMax <= 0}
+                className="editor-horizontal-scroll"
+                aria-label="Horizontal stage scroll"
+                onChange={(event) => setHorizontalScrollPosition(Number(event.target.value))}
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <FieldLabel>Length Units</FieldLabel>
-                <Input
-                  type="number"
-                  value={levelData.meta.lengthUnits}
-                  onChange={(event) =>
-                    updateLevelData((draft) => {
-                      draft.meta.lengthUnits = Number(event.target.value);
-                    })
-                  }
-                />
-              </div>
-              <div>
-                <FieldLabel>Base Speed</FieldLabel>
-                <Input
-                  type="number"
-                  step="0.1"
-                  value={levelData.player.baseSpeed}
-                  onChange={(event) =>
-                    updateLevelData((draft) => {
-                      draft.player.baseSpeed = Number(event.target.value);
-                    })
-                  }
-                />
-              </div>
-            </div>
+            <Button
+              variant="ghost"
+              onClick={() => setHorizontalScrollPosition(horizontalScrollValue + 8)}
+              disabled={horizontalScrollMax <= 0}
+            >
+              Right
+            </Button>
+          </div>
 
-            <div className="grid gap-2 sm:grid-cols-2">
-              <HintChip label="Objects" value={String(levelData.objects.length)} />
-              <HintChip label="Length" value={`${levelData.meta.lengthUnits} units`} />
-              <HintChip label="Base Speed" value={levelData.player.baseSpeed.toFixed(1)} />
-              <HintChip label="Theme" value={theme} />
-            </div>
-          </Panel>
-
-          <Panel className="game-screen space-y-4 bg-transparent">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Quick Guide</p>
-                <h3 className="font-display text-2xl text-white">Creator Flow</h3>
-              </div>
-              <Badge tone="accent">Live</Badge>
-            </div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <HintChip label="Build" value="Pick tool, then click stage" />
-              <HintChip label="Adjust" value="Select object, edit in inspector" />
-              <HintChip label="Navigate" value="Wheel zoom, middle drag pan" />
-              <HintChip label="Validate" value="Use preview before submit" />
-            </div>
-          </Panel>
-
-          {sidebarSlot}
+          <div className="editor-stage-meta">
+            <p>
+              Tool: <span className="text-white">{activeToolLabel}</span>
+            </p>
+            <p>
+              Selected: <span className="text-white">{selectionLabel}</span>
+            </p>
+            <p>
+              Cursor: <span className="text-white">{cursorWorld.x}, {cursorWorld.y}</span>
+            </p>
+            <p>
+              Zoom: <span className="text-white">{zoom.toFixed(2)}x</span>
+            </p>
+            <p>
+              Objects: <span className="text-white">{levelData.objects.length}</span>
+            </p>
+            <p>
+              History: <span className="text-white">{historyPosition}</span>
+            </p>
+          </div>
         </div>
-      </div>
+
+        {message ? (
+          <div
+            className={cn(
+              'editor-note-box px-4 py-3 text-sm',
+              saveState === 'error' ? 'text-[#ff8aa1]' : 'text-[#82f6ff]',
+            )}
+          >
+            {message}
+          </div>
+        ) : null}
+      </Panel>
+
+      {showPreview ? (
+        <Panel className="arcade-preview-dock game-screen space-y-4 bg-transparent">
+          <div className="editor-workbench-section-head">
+            <div>
+              <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Live Test</p>
+              <h3 className="font-display text-2xl text-white">Test Lane</h3>
+            </div>
+            <div className="editor-stage-actions">
+              <Button variant="ghost" onClick={() => setShowPreview(false)}>
+                Hide Preview
+              </Button>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="grid gap-2 md:grid-cols-3">
+              <HintChip label="Attempt" value="Runtime test" />
+              <HintChip label="Restart" value="Auto after fail" />
+              <HintChip label="Goal" value="Check timing and flow" />
+            </div>
+            <GameCanvas levelData={levelData} attemptNumber={1} autoRestartOnFail />
+          </div>
+        </Panel>
+      ) : null}
+
+      <Panel className="game-screen space-y-4 bg-transparent">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Level Setup</p>
+            <h3 className="font-display text-2xl text-white">Level Settings</h3>
+          </div>
+          <Badge tone="accent">{themePresets.find((preset) => preset.value === theme)?.label ?? 'Custom'}</Badge>
+        </div>
+
+        <div>
+          <FieldLabel>Title</FieldLabel>
+          <Input value={title} onChange={(event) => setTitle(event.target.value)} />
+        </div>
+        <div>
+          <FieldLabel>Description</FieldLabel>
+          <Textarea rows={4} value={description} onChange={(event) => setDescription(event.target.value)} />
+        </div>
+
+        <div className="space-y-3">
+          <FieldLabel>Theme Preset</FieldLabel>
+          <div className="grid grid-cols-2 gap-2">
+            {themePresets.map((preset) => (
+              <button
+                key={preset.value}
+                type="button"
+                onClick={() => applyThemePreset(preset.value)}
+                className={cn(
+                  'tool-tile px-3 py-3 text-left transition',
+                  theme === preset.value ? 'tool-tile-active text-[#173300]' : 'text-white hover:brightness-110',
+                )}
+              >
+                <span className="font-display block text-[10px] tracking-[0.18em] uppercase">{preset.label}</span>
+                <span
+                  className={cn(
+                    'mt-1 block text-[10px] normal-case',
+                    theme === preset.value ? 'text-[#173300]/80' : 'text-white/60',
+                  )}
+                >
+                  {preset.value}
+                </span>
+              </button>
+            ))}
+          </div>
+          <Input
+            value={theme}
+            onChange={(event) => {
+              applyThemePreset(event.target.value);
+            }}
+          />
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+          <div>
+            <FieldLabel>Player Mode</FieldLabel>
+            <div className="grid grid-cols-2 gap-2">
+              {(['cube', 'ship'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setPlayerMode(mode)}
+                  className={cn(
+                    'tool-tile px-3 py-3 text-left transition',
+                    levelData.player.mode === mode ? 'tool-tile-active text-[#173300]' : 'text-white hover:brightness-110',
+                  )}
+                >
+                  <span className="font-display block text-[10px] tracking-[0.18em] uppercase">
+                    {getPlayerModeLabel(mode)}
+                  </span>
+                  <span
+                    className={cn(
+                      'mt-1 block text-[10px] normal-case',
+                      levelData.player.mode === mode ? 'text-[#173300]/80' : 'text-white/60',
+                    )}
+                  >
+                    {mode === 'ship' ? 'Hold to climb, release to descend' : 'Classic jump timing'}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <FieldLabel>Length Units</FieldLabel>
+            <Input
+              type="number"
+              value={levelData.meta.lengthUnits}
+              onChange={(event) =>
+                updateLevelData((draft) => {
+                  draft.meta.lengthUnits = Number(event.target.value);
+                })
+              }
+            />
+          </div>
+          <div>
+            <FieldLabel>Base Speed</FieldLabel>
+            <Input
+              type="number"
+              step="0.1"
+              value={levelData.player.baseSpeed}
+              onChange={(event) =>
+                updateLevelData((draft) => {
+                  draft.player.baseSpeed = Number(event.target.value);
+                })
+              }
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-2 sm:grid-cols-2">
+          <HintChip label="Objects" value={String(levelData.objects.length)} />
+          <HintChip label="Length" value={`${levelData.meta.lengthUnits} units`} />
+          <HintChip label="Base Speed" value={levelData.player.baseSpeed.toFixed(1)} />
+          <HintChip label="Mode" value={getPlayerModeLabel(levelData.player.mode)} />
+          <HintChip label="Theme" value={theme} />
+        </div>
+      </Panel>
     </div>
   );
 }
@@ -1256,11 +1707,13 @@ function ToolButton({
   label,
   description,
   active,
+  compact = false,
   onClick,
 }: {
   label: string;
   description?: string;
   active: boolean;
+  compact?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -1268,13 +1721,22 @@ function ToolButton({
       type="button"
       onClick={onClick}
       className={cn(
-        'tool-tile px-3 py-3 text-left transition',
+        'tool-tile text-left transition',
+        compact ? 'px-2.5 py-2' : 'px-3 py-3',
         active ? 'tool-tile-active text-[#173300]' : 'text-white hover:brightness-110',
       )}
     >
-      <span className="font-display block text-[10px] tracking-[0.18em] uppercase">{label}</span>
+      <span className={cn('font-display block uppercase', compact ? 'text-[9px] tracking-[0.14em]' : 'text-[10px] tracking-[0.18em]')}>
+        {label}
+      </span>
       {description ? (
-        <span className={cn('mt-1 block text-[10px] normal-case leading-5', active ? 'text-[#173300]/80' : 'text-white/62')}>
+        <span
+          className={cn(
+            'mt-1 block normal-case',
+            compact ? 'text-[9px] leading-4' : 'text-[10px] leading-5',
+            active ? 'text-[#173300]/80' : 'text-white/62',
+          )}
+        >
           {description}
         </span>
       ) : null}
@@ -1291,40 +1753,28 @@ function HintChip({ label, value }: { label: string; value: string }) {
   );
 }
 
-function NumberField({
-  label,
-  value,
-  onChange,
-  step,
-  min,
-  max,
-}: {
-  label: string;
-  value: number;
-  onChange: (value: number) => void;
-  step?: number;
-  min?: number;
-  max?: number;
-}) {
-  return (
-    <div>
-      <FieldLabel>{label}</FieldLabel>
-      <Input
-        type="number"
-        step={step}
-        min={min}
-        max={max}
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
-      />
-    </div>
-  );
+function getCanvasScreenPoint(canvas: HTMLCanvasElement, clientX: number, clientY: number) {
+  const rect = canvas.getBoundingClientRect();
+  const styles = window.getComputedStyle(canvas);
+  const borderLeft = Number.parseFloat(styles.borderLeftWidth) || 0;
+  const borderRight = Number.parseFloat(styles.borderRightWidth) || 0;
+  const borderTop = Number.parseFloat(styles.borderTopWidth) || 0;
+  const borderBottom = Number.parseFloat(styles.borderBottomWidth) || 0;
+  const innerWidth = Math.max(1, rect.width - borderLeft - borderRight);
+  const innerHeight = Math.max(1, rect.height - borderTop - borderBottom);
+  const offsetX = clamp(clientX - rect.left - borderLeft, 0, innerWidth);
+  const offsetY = clamp(clientY - rect.top - borderTop, 0, innerHeight);
+
+  return {
+    screenX: (offsetX / innerWidth) * canvas.width,
+    screenY: (offsetY / innerHeight) * canvas.height,
+  };
 }
 
 function screenToWorld(screenX: number, screenY: number, panX: number, panY: number, cell: number) {
   return {
-    x: Math.round((screenX - panX) / cell),
-    y: Math.round((screenY - panY) / cell),
+    x: (screenX - panX) / cell,
+    y: (screenY - panY) / cell,
   };
 }
 

@@ -20,6 +20,8 @@ export type LevelObjectType =
   | 'JUMP_ORB'
   | 'GRAVITY_PORTAL'
   | 'SPEED_PORTAL'
+  | 'SHIP_PORTAL'
+  | 'CUBE_PORTAL'
   | 'FINISH_PORTAL'
   | 'DECORATION_BLOCK'
   | 'START_MARKER';
@@ -36,6 +38,12 @@ export type LevelObject = {
   props: Record<string, unknown>;
 };
 
+export type LevelColorGroup = {
+  id: number;
+  fillColor: string;
+  strokeColor: string;
+};
+
 export type LevelData = {
   meta: {
     gridSize: number;
@@ -44,11 +52,12 @@ export type LevelData = {
     background: string;
     music: string;
     version: number;
+    colorGroups?: LevelColorGroup[];
   };
   player: {
     startX: number;
     startY: number;
-    mode: 'cube';
+    mode: 'cube' | 'ship';
     baseSpeed: number;
     gravity: number;
   };

@@ -8,6 +8,8 @@ export const levelObjectTypes = [
   'JUMP_ORB',
   'GRAVITY_PORTAL',
   'SPEED_PORTAL',
+  'SHIP_PORTAL',
+  'CUBE_PORTAL',
   'FINISH_PORTAL',
   'DECORATION_BLOCK',
   'START_MARKER',
@@ -35,11 +37,20 @@ export const levelDataSchema = z.object({
     background: z.string().min(1).default('default'),
     music: z.string().min(1).default('placeholder-track-01'),
     version: z.number().int().default(1),
+    colorGroups: z
+      .array(
+        z.object({
+          id: z.number().int().positive(),
+          fillColor: z.string().min(1),
+          strokeColor: z.string().min(1),
+        }),
+      )
+      .default([]),
   }),
   player: z.object({
     startX: z.number(),
     startY: z.number(),
-    mode: z.enum(['cube']).default('cube'),
+    mode: z.enum(['cube', 'ship']).default('cube'),
     baseSpeed: z.number().positive().default(1),
     gravity: z.number().default(1),
   }),
@@ -59,7 +70,7 @@ export const levelObjectDefinitions: Record<
     defaultSize: { w: number; h: number };
     collides: boolean;
     lethal: boolean;
-    effect: 'jumpPad' | 'jumpOrb' | 'gravity' | 'speed' | 'finish' | null;
+    effect: 'jumpPad' | 'jumpOrb' | 'gravity' | 'speed' | 'shipMode' | 'cubeMode' | 'finish' | null;
   }
 > = {
   GROUND_BLOCK: {
@@ -110,6 +121,20 @@ export const levelObjectDefinitions: Record<
     collides: false,
     lethal: false,
     effect: 'speed',
+  },
+  SHIP_PORTAL: {
+    label: 'Ship Portal',
+    defaultSize: { w: 1, h: 2 },
+    collides: false,
+    lethal: false,
+    effect: 'shipMode',
+  },
+  CUBE_PORTAL: {
+    label: 'Cube Portal',
+    defaultSize: { w: 1, h: 2 },
+    collides: false,
+    lethal: false,
+    effect: 'cubeMode',
   },
   FINISH_PORTAL: {
     label: 'Finish',
@@ -165,6 +190,7 @@ export function createEmptyLevelData(theme = 'neon-grid'): LevelData {
       background: 'default',
       music: 'placeholder-track-01',
       version: 1,
+      colorGroups: [],
     },
     player: {
       startX: 2,
@@ -194,6 +220,7 @@ export function createSampleLevelDataOne(): LevelData {
       background: 'city-neon',
       music: 'placeholder-track-01',
       version: 1,
+      colorGroups: [],
     },
     player: {
       startX: 2,
@@ -232,6 +259,7 @@ export function createSampleLevelDataTwo(): LevelData {
       background: 'canyon',
       music: 'placeholder-track-02',
       version: 1,
+      colorGroups: [],
     },
     player: {
       startX: 2,

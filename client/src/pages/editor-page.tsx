@@ -1,8 +1,8 @@
 import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Panel } from '../components/ui';
 import { LevelEditor } from '../features/editor/level-editor';
+import { moveLocalEditorDraft } from '../features/editor/local-draft-storage';
 import { apiRequest } from '../services/api';
 import { useAuthStore } from '../store/auth-store';
 import type { Level } from '../types/models';
@@ -39,6 +39,7 @@ export function EditorPage() {
       void queryClient.invalidateQueries({ queryKey: ['my-levels'] });
       void queryClient.invalidateQueries({ queryKey: ['profile'] });
       if (!id) {
+        moveLocalEditorDraft('new', payload.level.id);
         navigate(`/editor/${payload.level.id}`);
       }
     },
@@ -73,28 +74,12 @@ export function EditorPage() {
     <div className="editor-page-shell">
       <LevelEditor
         initialLevel={level}
+        draftStorageKey={id ?? 'new'}
         onSave={(payload) => saveMutation.mutateAsync(payload).then(() => undefined)}
         onSubmit={
           id && user?.role !== 'ADMIN' && !level?.isOfficial
             ? () => submitMutation.mutateAsync().then(() => undefined)
             : undefined
-        }
-        sidebarSlot={
-          <Panel className="game-screen bg-transparent">
-            <div className="space-y-3">
-              <p className="arcade-eyebrow">Workshop Notes</p>
-              <h3 className="font-display text-2xl text-white">Moderation Ready</h3>
-              <p className="text-sm leading-7 text-white/78">
-                Stars are derived from difficulty during admin review. Creator focus stays on route quality, gameplay
-                readability, and whether the run feels clean in preview.
-              </p>
-              {level ? (
-                <p className="font-display text-[11px] tracking-[0.22em] text-[#ffd44a]">Current status: {level.status}</p>
-              ) : (
-                <p className="text-sm text-white/76">The first save creates a persistent draft in PostgreSQL.</p>
-              )}
-            </div>
-          </Panel>
         }
       />
     </div>

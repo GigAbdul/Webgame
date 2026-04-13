@@ -1,5 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { levelObjectDefinitions } from './object-definitions';
+import { getObjectFillColor, getObjectStrokeColor, levelObjectDefinitions } from './object-definitions';
+import {
+  SHIP_FALL_ACCELERATION,
+  SHIP_FLIGHT_CEILING_Y,
+  SHIP_FLIGHT_FLOOR_Y,
+  SHIP_MAX_VERTICAL_SPEED,
+  SHIP_THRUST_ACCELERATION,
+  SHIP_VISUAL_BOUND_PADDING,
+  getPlayerModeDescription,
+  getPlayerModeLabel,
+} from './player-mode-config';
+import { getStageThemePalette } from './stage-theme-palette';
 import type { LevelData } from '../../types/models';
 import { Panel } from '../../components/ui';
 import { cn } from '../../utils/cn';
@@ -26,6 +37,7 @@ type PlayerState = {
   grounded: boolean;
   gravity: number;
   speedMultiplier: number;
+  mode: LevelData['player']['mode'];
 };
 
 type TrailPoint = {
@@ -42,9 +54,10 @@ const COYOTE_TIME_MS = 110;
 const AUTO_RESTART_DELAY_MS = 850;
 const BASE_HORIZONTAL_SPEED = 6.15;
 const BASE_GRAVITY_ACCELERATION = 55;
-const DEFAULT_JUMP_VELOCITY = 15;
+const DEFAULT_JUMP_VELOCITY = 15.5;
 const AIR_ROTATION_SPEED = Math.PI * 1.6;
 const QUARTER_TURN = Math.PI / 2;
+const GAMEPLAY_INPUT_CODES = new Set(['Space', 'ArrowUp', 'KeyW']);
 
 export function GameCanvas({
   levelData,
@@ -60,6 +73,7 @@ export function GameCanvas({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const onFailRef = useRef(onFail);
   const onCompleteRef = useRef(onComplete);
+  const inputHeldRef = useRef(false);
   const pauseMenuOpenRef = useRef(false);
   const pauseSettingsOpenRef = useRef(false);
   const pauseStartedAtRef = useRef<number | null>(null);
@@ -74,6 +88,7 @@ export function GameCanvas({
   const [isPauseSettingsOpen, setIsPauseSettingsOpen] = useState(false);
   const [isHudVisible, setIsHudVisible] = useState(true);
   const [isScreenShakeEnabled, setIsScreenShakeEnabled] = useState(true);
+  const playerModeLabel = getPlayerModeLabel(levelData.player.mode);
   const statusLabel =
     hud.status === 'completed' ? 'Stage Clear' : hud.status === 'failed' ? 'Attempt Lost' : 'In Run';
 
@@ -170,6 +185,7 @@ export function GameCanvas({
       grounded: false,
       gravity: levelData.player.gravity,
       speedMultiplier: levelData.player.baseSpeed,
+      mode: levelData.player.mode,
     };
 
     const activeTriggers = new Set<string>();
@@ -202,7 +218,9 @@ export function GameCanvas({
       player.rotation = 0;
       player.gravity = levelData.player.gravity;
       player.speedMultiplier = levelData.player.baseSpeed;
+      player.mode = levelData.player.mode;
       player.grounded = false;
+      inputHeldRef.current = false;
       currentStatus = 'running';
       activeTriggers.clear();
       usedOrbs.clear();
@@ -271,9 +289,12 @@ export function GameCanvas({
         return;
       }
 
-      if (event.code === 'Space') {
+      if (GAMEPLAY_INPUT_CODES.has(event.code)) {
         event.preventDefault();
-        queueJump();
+        inputHeldRef.current = true;
+        if (player.mode === 'cube') {
+          queueJump();
+        }
       }
 
       if (event.code === 'KeyR' && !isExternallyManagedRun) {
@@ -291,13 +312,23 @@ export function GameCanvas({
       }
     };
 
-    const pointerListener = () => {
+    const keyUpListener = (event: KeyboardEvent) => {
+      if (GAMEPLAY_INPUT_CODES.has(event.code)) {
+        inputHeldRef.current = false;
+      }
+    };
+
+    const pointerDownListener = () => {
       if (pauseMenuOpenRef.current) {
         return;
       }
 
+      inputHeldRef.current = true;
+
       if (currentStatus === 'running') {
-        queueJump();
+        if (player.mode === 'cube') {
+          queueJump();
+        }
         return;
       }
 
@@ -306,8 +337,15 @@ export function GameCanvas({
       }
     };
 
+    const releaseHeldInput = () => {
+      inputHeldRef.current = false;
+    };
+
     window.addEventListener('keydown', keyListener);
-    canvas.addEventListener('pointerdown', pointerListener);
+    window.addEventListener('keyup', keyUpListener);
+    window.addEventListener('pointerup', releaseHeldInput);
+    window.addEventListener('blur', releaseHeldInput);
+    canvas.addEventListener('pointerdown', pointerDownListener);
 
     const markFailed = (elapsedMs: number) => {
       if (currentStatus !== 'running') {
@@ -370,11 +408,35 @@ export function GameCanvas({
         const horizontalSpeed = BASE_HORIZONTAL_SPEED * player.speedMultiplier;
         const previousX = player.x;
         const previousY = player.y;
+        const gravityDirection = Math.sign(player.gravity || 1);
 
         player.x += horizontalSpeed * deltaSeconds;
-        player.vy += BASE_GRAVITY_ACCELERATION * player.gravity * deltaSeconds;
+
+        if (player.mode === 'ship') {
+          const shipAcceleration = inputHeldRef.current ? -SHIP_THRUST_ACCELERATION : SHIP_FALL_ACCELERATION;
+          player.vy += shipAcceleration * gravityDirection * deltaSeconds;
+          player.vy = clamp(player.vy, -SHIP_MAX_VERTICAL_SPEED, SHIP_MAX_VERTICAL_SPEED);
+        } else {
+          player.vy += BASE_GRAVITY_ACCELERATION * player.gravity * deltaSeconds;
+        }
+
         player.y += player.vy * deltaSeconds;
         player.grounded = false;
+
+        if (player.mode === 'ship') {
+          const shipMinY = SHIP_FLIGHT_CEILING_Y + SHIP_VISUAL_BOUND_PADDING;
+          const shipMaxY = SHIP_FLIGHT_FLOOR_Y - player.h - SHIP_VISUAL_BOUND_PADDING;
+
+          if (player.y < shipMinY) {
+            player.y = shipMinY;
+            player.vy = Math.max(0, player.vy);
+          }
+
+          if (player.y > shipMaxY) {
+            player.y = shipMaxY;
+            player.vy = Math.min(0, player.vy);
+          }
+        }
 
         for (const object of levelData.objects) {
           if (
@@ -386,7 +448,27 @@ export function GameCanvas({
 
           let resolvedSafely = false;
 
-          if (player.gravity > 0) {
+          if (player.mode === 'ship') {
+            const previousBottom = previousY + player.h;
+            const nextBottom = player.y + player.h;
+            const previousTop = previousY;
+            const nextTop = player.y;
+            const ceiling = object.y + object.h;
+
+            if (previousBottom <= object.y && nextBottom >= object.y && player.vy >= 0) {
+              player.y = object.y - player.h;
+              player.vy = 0;
+              resolvedSafely = true;
+            }
+
+            if (!resolvedSafely && previousTop >= ceiling && nextTop <= ceiling && player.vy <= 0) {
+              player.y = ceiling;
+              player.vy = 0;
+              resolvedSafely = true;
+            }
+          }
+
+          if (!resolvedSafely && player.gravity > 0) {
             const previousBottom = previousY + player.h;
             const nextBottom = player.y + player.h;
 
@@ -397,7 +479,7 @@ export function GameCanvas({
               lastGroundedAt = timestamp;
               resolvedSafely = true;
             }
-          } else {
+          } else if (!resolvedSafely) {
             const previousTop = previousY;
             const nextTop = player.y;
             const ceiling = object.y + object.h;
@@ -417,7 +499,7 @@ export function GameCanvas({
           }
         }
 
-        if (currentStatus === 'running' && jumpBufferedUntil >= timestamp) {
+        if (player.mode === 'cube' && currentStatus === 'running' && jumpBufferedUntil >= timestamp) {
           const jumpVelocity = -DEFAULT_JUMP_VELOCITY * Math.sign(player.gravity || 1);
           const canGroundJump = player.grounded || timestamp - lastGroundedAt <= COYOTE_TIME_MS;
 
@@ -466,7 +548,7 @@ export function GameCanvas({
           ) {
             activeTriggers.add(object.id);
 
-            if (object.type === 'JUMP_PAD') {
+            if (object.type === 'JUMP_PAD' && player.mode === 'cube') {
               const boost = Number(object.props.boost ?? 16);
               launchPlayer(-boost * Math.sign(player.gravity || 1));
               bumpCamera(5, 0.14);
@@ -481,20 +563,45 @@ export function GameCanvas({
               player.speedMultiplier = Number(object.props.multiplier ?? 1.4);
             }
 
+            if (object.type === 'SHIP_PORTAL') {
+              player.mode = 'ship';
+              player.grounded = false;
+              player.y = clamp(
+                player.y,
+                SHIP_FLIGHT_CEILING_Y + SHIP_VISUAL_BOUND_PADDING,
+                SHIP_FLIGHT_FLOOR_Y - player.h - SHIP_VISUAL_BOUND_PADDING,
+              );
+              player.vy = clamp(player.vy, -SHIP_MAX_VERTICAL_SPEED, SHIP_MAX_VERTICAL_SPEED);
+              bumpCamera(4, 0.12);
+            }
+
+            if (object.type === 'CUBE_PORTAL') {
+              player.mode = 'cube';
+              player.grounded = false;
+              player.rotation = snapCubeRotation(player.rotation);
+              bumpCamera(4, 0.12);
+            }
+
             if (object.type === 'FINISH_PORTAL') {
               markCompleted(elapsedMs);
             }
           }
         }
 
-        if (
-          currentStatus === 'running' &&
-          (player.y > levelBounds.maxY + 3 || player.y < -3 || player.x > levelBounds.maxX + 8)
-        ) {
-          markFailed(elapsedMs);
+        if (currentStatus === 'running') {
+          if (player.mode === 'ship') {
+            if (player.x > levelBounds.maxX + 8) {
+              markFailed(elapsedMs);
+            }
+          } else if (player.y > levelBounds.maxY + 3 || player.y < -3 || player.x > levelBounds.maxX + 8) {
+            markFailed(elapsedMs);
+          }
         }
 
-        if (player.grounded) {
+        if (player.mode === 'ship') {
+          const targetRotation = clamp(player.vy * 0.07, -0.58, 0.58);
+          player.rotation += (targetRotation - player.rotation) * Math.min(1, deltaSeconds * 10);
+        } else if (player.grounded) {
           player.rotation = snapCubeRotation(player.rotation);
         } else {
           player.rotation = normalizeAngle(
@@ -543,12 +650,16 @@ export function GameCanvas({
       }
 
       context.clearRect(0, 0, width, height);
-      drawBackdrop(context, width, height, elapsedMs);
+      drawBackdrop(context, width, height, elapsedMs, levelData.meta.theme);
 
       context.save();
       context.translate(-(cameraX + shakeOffsetX), 0);
 
       drawGrid(context, cameraX + shakeOffsetX, verticalOffset, width, height, cell);
+
+      if (player.mode === 'ship') {
+        drawShipBounds(context, cameraX + shakeOffsetX, verticalOffset, width, cell);
+      }
 
       context.strokeStyle = 'rgba(202,255,69,0.16)';
       context.lineWidth = 2;
@@ -558,7 +669,15 @@ export function GameCanvas({
       context.stroke();
 
       for (const object of levelData.objects) {
-        drawObject(context, object, cell, verticalOffset, activeTriggers.has(object.id), usedOrbs.has(object.id));
+        drawObject(
+          context,
+          object,
+          cell,
+          verticalOffset,
+          levelData.meta.colorGroups,
+          activeTriggers.has(object.id),
+          usedOrbs.has(object.id),
+        );
       }
 
       for (const point of trail) {
@@ -600,7 +719,10 @@ export function GameCanvas({
 
       window.cancelAnimationFrame(animationFrame);
       window.removeEventListener('keydown', keyListener);
-      canvas.removeEventListener('pointerdown', pointerListener);
+      window.removeEventListener('keyup', keyUpListener);
+      window.removeEventListener('pointerup', releaseHeldInput);
+      window.removeEventListener('blur', releaseHeldInput);
+      canvas.removeEventListener('pointerdown', pointerDownListener);
     };
   }, [autoRestartOnFail, fullscreen, levelBounds.maxX, levelBounds.maxY, levelData, onComplete, onFail, runId]);
 
@@ -715,7 +837,9 @@ export function GameCanvas({
           </div>
           <div>
             <h3 className="font-display text-2xl text-[#caff45]">{levelData.meta.theme}</h3>
-            <p className="text-sm text-white/72">Cube mode / buffered jump / snap landing</p>
+            <p className="text-sm text-white/72">
+              {playerModeLabel} mode / {getPlayerModeDescription(levelData.player.mode)}
+            </p>
           </div>
         </div>
         <div className="flex gap-3 text-sm">
@@ -741,14 +865,17 @@ export function GameCanvas({
       </div>
 
       <p className="arcade-runtime-footer text-xs leading-6 text-white/72">
-        Controls: <span className="text-white">Space</span>, click, or tap to jump.
+        Controls: <span className="text-white">Space</span>, click, or tap to{' '}
+        {levelData.player.mode === 'ship' ? 'thrust upward' : 'jump'}.
         {!onFail && !onComplete ? (
           <>
             {' '}
             <span className="text-white">R</span> restarts instantly.
           </>
         ) : null}{' '}
-        Jump inputs are buffered briefly, spikes use a fairer hitbox, and side collisions still punish sloppy routing.
+        {levelData.player.mode === 'ship'
+          ? 'Ship runs stay between the top and bottom flight bounds, and any wall contact still punishes sloppy routing.'
+          : 'Jump inputs are buffered briefly, spikes use a fairer hitbox, and side collisions still punish sloppy routing.'}
       </p>
     </Panel>
   );
@@ -776,6 +903,7 @@ function drawObject(
   object: LevelData['objects'][number],
   cell: number,
   verticalOffset: number,
+  colorGroups: LevelData['meta']['colorGroups'],
   isActive: boolean,
   isUsedOrb: boolean,
 ) {
@@ -784,18 +912,20 @@ function drawObject(
   const y = verticalOffset + object.y * cell;
   const w = object.w * cell;
   const h = object.h * cell;
+  const fillColor = getObjectFillColor(object, colorGroups);
+  const strokeColor = getObjectStrokeColor(object, colorGroups);
 
   context.save();
 
   if (object.type === 'SPIKE') {
-    context.fillStyle = definition.color;
+    context.fillStyle = fillColor;
     context.beginPath();
     context.moveTo(x, y + h);
     context.lineTo(x + w / 2, y);
     context.lineTo(x + w, y + h);
     context.closePath();
     context.fill();
-    context.strokeStyle = 'rgba(255,255,255,0.3)';
+    context.strokeStyle = strokeColor;
     context.lineWidth = 2;
     context.stroke();
     context.restore();
@@ -814,16 +944,39 @@ function drawObject(
     return;
   }
 
-  context.fillStyle = definition.color;
+  context.fillStyle = fillColor;
   context.fillRect(x, y, w, h);
 
-  if (object.type === 'GRAVITY_PORTAL' || object.type === 'SPEED_PORTAL' || object.type === 'FINISH_PORTAL') {
+  if (
+    object.type === 'GRAVITY_PORTAL' ||
+    object.type === 'SPEED_PORTAL' ||
+    object.type === 'SHIP_PORTAL' ||
+    object.type === 'CUBE_PORTAL' ||
+    object.type === 'FINISH_PORTAL'
+  ) {
     context.strokeStyle = 'rgba(255,255,255,0.6)';
     context.lineWidth = 2;
     context.strokeRect(x + 2, y + 2, w - 4, h - 4);
 
     context.fillStyle = isActive ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.1)';
     context.fillRect(x + w * 0.25, y + 6, w * 0.5, h - 12);
+
+    if (object.type === 'SHIP_PORTAL' || object.type === 'CUBE_PORTAL') {
+      context.strokeStyle = 'rgba(255,255,255,0.9)';
+      context.lineWidth = 2;
+      context.beginPath();
+      if (object.type === 'SHIP_PORTAL') {
+        context.moveTo(x + w * 0.68, y + h * 0.5);
+        context.lineTo(x + w * 0.32, y + h * 0.32);
+        context.lineTo(x + w * 0.42, y + h * 0.5);
+        context.lineTo(x + w * 0.32, y + h * 0.68);
+        context.closePath();
+      } else {
+        context.rect(x + w * 0.32, y + h * 0.32, w * 0.36, h * 0.36);
+      }
+      context.stroke();
+    }
+
     context.restore();
     return;
   }
@@ -837,7 +990,7 @@ function drawObject(
 
   context.fillStyle = 'rgba(255,255,255,0.12)';
   context.fillRect(x + 3, y + 3, w - 6, Math.max(5, h * 0.16));
-  context.strokeStyle = 'rgba(0,0,0,0.28)';
+  context.strokeStyle = strokeColor;
   context.lineWidth = 2;
   context.strokeRect(x + 1, y + 1, w - 2, h - 2);
   context.restore();
@@ -853,6 +1006,74 @@ function drawPlayer(context: CanvasRenderingContext2D, player: PlayerState, cell
   context.translate(playerX + sizeW / 2, playerY + sizeH / 2);
   context.rotate(player.rotation);
 
+  if (player.mode === 'ship') {
+    const bodyLength = sizeW * 0.84;
+    const bodyHeight = sizeH * 0.54;
+    const halfLength = bodyLength / 2;
+    const halfHeight = bodyHeight / 2;
+    const cubeSize = Math.min(sizeW, sizeH) * 0.3;
+
+    context.fillStyle = '#101a2a';
+    context.beginPath();
+    context.moveTo(halfLength, 0);
+    context.lineTo(halfLength * 0.18, -halfHeight);
+    context.lineTo(-halfLength * 0.9, -halfHeight * 0.9);
+    context.lineTo(-halfLength, 0);
+    context.lineTo(-halfLength * 0.9, halfHeight * 0.9);
+    context.lineTo(halfLength * 0.18, halfHeight);
+    context.closePath();
+    context.fill();
+
+    context.fillStyle = '#f4f7ff';
+    context.beginPath();
+    context.moveTo(halfLength * 0.94, 0);
+    context.lineTo(halfLength * 0.14, -halfHeight * 0.94);
+    context.lineTo(-halfLength * 0.74, -halfHeight * 0.76);
+    context.lineTo(-halfLength * 0.88, 0);
+    context.lineTo(-halfLength * 0.74, halfHeight * 0.76);
+    context.lineTo(halfLength * 0.14, halfHeight * 0.94);
+    context.closePath();
+    context.fill();
+    context.strokeStyle = '#182133';
+    context.lineWidth = 3;
+    context.stroke();
+
+    context.fillStyle = '#67ff9f';
+    context.beginPath();
+    context.moveTo(-halfLength * 0.2, 0);
+    context.lineTo(halfLength * 0.46, -halfHeight * 0.6);
+    context.lineTo(halfLength * 0.16, 0);
+    context.lineTo(halfLength * 0.46, halfHeight * 0.6);
+    context.closePath();
+    context.fill();
+
+    context.fillStyle = '#dffcff';
+    context.beginPath();
+    context.moveTo(halfLength * 0.2, 0);
+    context.lineTo(-halfLength * 0.12, -halfHeight * 0.42);
+    context.lineTo(-halfLength * 0.34, 0);
+    context.lineTo(-halfLength * 0.12, halfHeight * 0.42);
+    context.closePath();
+    context.fill();
+
+    context.fillStyle = '#f4f7ff';
+    context.fillRect(-halfLength * 0.64, -cubeSize / 2, cubeSize, cubeSize);
+    context.strokeStyle = '#182133';
+    context.lineWidth = 2.5;
+    context.strokeRect(-halfLength * 0.64, -cubeSize / 2, cubeSize, cubeSize);
+
+    context.fillStyle = '#182133';
+    context.fillRect(-halfLength * 0.56, -cubeSize * 0.2, cubeSize * 0.12, cubeSize * 0.12);
+    context.fillRect(-halfLength * 0.42, -cubeSize * 0.2, cubeSize * 0.12, cubeSize * 0.12);
+    context.fillRect(-halfLength * 0.56, cubeSize * 0.12, cubeSize * 0.26, cubeSize * 0.08);
+
+    context.fillStyle = '#79f7ff';
+    context.fillRect(-halfLength * 0.06, -cubeSize * 0.24, cubeSize * 0.2, cubeSize * 0.48);
+
+    context.restore();
+    return;
+  }
+
   context.fillStyle = '#f4f7ff';
   context.fillRect(-sizeW / 2, -sizeH / 2, sizeW, sizeH);
   context.strokeStyle = '#182133';
@@ -864,6 +1085,32 @@ function drawPlayer(context: CanvasRenderingContext2D, player: PlayerState, cell
   context.fillRect(sizeW * 0.06, -sizeH * 0.18, sizeW * 0.12, sizeH * 0.12);
   context.fillRect(-sizeW * 0.18, sizeH * 0.12, sizeW * 0.36, sizeH * 0.08);
   context.restore();
+}
+
+function drawShipBounds(
+  context: CanvasRenderingContext2D,
+  cameraX: number,
+  verticalOffset: number,
+  width: number,
+  cell: number,
+) {
+  const ceilingY = verticalOffset + SHIP_FLIGHT_CEILING_Y * cell;
+  const floorY = verticalOffset + SHIP_FLIGHT_FLOOR_Y * cell;
+  const startX = cameraX - cell * 2;
+  const endX = cameraX + width + cell * 5;
+
+  context.fillStyle = 'rgba(3, 7, 22, 0.22)';
+  context.fillRect(startX, verticalOffset - cell * 12, endX - startX, ceilingY - (verticalOffset - cell * 12));
+  context.fillRect(startX, floorY, endX - startX, cell * 12);
+
+  context.strokeStyle = 'rgba(202,255,69,0.78)';
+  context.lineWidth = 3;
+  context.beginPath();
+  context.moveTo(startX, ceilingY);
+  context.lineTo(endX, ceilingY);
+  context.moveTo(startX, floorY);
+  context.lineTo(endX, floorY);
+  context.stroke();
 }
 
 function aabbIntersects(
@@ -896,6 +1143,10 @@ function clampProgress(value: number) {
   return Math.min(100, Math.max(0, Math.round(value)));
 }
 
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
 function normalizeAngle(value: number) {
   const fullTurn = Math.PI * 2;
   return ((value % fullTurn) + fullTurn) % fullTurn;
@@ -905,26 +1156,41 @@ function snapCubeRotation(value: number) {
   return normalizeAngle(Math.round(value / QUARTER_TURN) * QUARTER_TURN);
 }
 
-function drawBackdrop(context: CanvasRenderingContext2D, width: number, height: number, elapsedMs: number) {
+function drawBackdrop(context: CanvasRenderingContext2D, width: number, height: number, elapsedMs: number, theme: string) {
+  const stageTheme = getStageThemePalette(theme);
   const gradient = context.createLinearGradient(0, 0, 0, height);
-  gradient.addColorStop(0, '#7b1fe0');
-  gradient.addColorStop(0.45, '#4f0fa5');
-  gradient.addColorStop(1, '#14022b');
+  gradient.addColorStop(0, stageTheme.runtimeGradientTop);
+  gradient.addColorStop(0.45, stageTheme.runtimeGradientMid);
+  gradient.addColorStop(1, stageTheme.runtimeGradientBottom);
   context.fillStyle = gradient;
+  context.fillRect(0, 0, width, height);
+
+  const glow = context.createRadialGradient(width * 0.74, height * 0.18, 0, width * 0.74, height * 0.18, width * 0.42);
+  glow.addColorStop(0, stageTheme.runtimeGlowColor);
+  glow.addColorStop(1, 'rgba(0,0,0,0)');
+  context.fillStyle = glow;
   context.fillRect(0, 0, width, height);
 
   const drift = (elapsedMs / 1000) * 16;
 
-  context.fillStyle = 'rgba(255,255,255,0.04)';
+  context.fillStyle = stageTheme.runtimeStarColor;
+  for (let index = 0; index < 56; index += 1) {
+    const starX = (((index * 97.37) % (width + 240)) - 120 + drift * (0.18 + (index % 5) * 0.03) + width) % width;
+    const starY = ((index * 63.17) % (height * 0.8)) + 10;
+    const size = index % 7 === 0 ? 2.2 : index % 3 === 0 ? 1.5 : 1;
+    context.fillRect(starX, starY, size, size);
+  }
+
+  context.fillStyle = stageTheme.runtimePanelTint;
   for (let x = -120; x < width + 120; x += 120) {
     for (let y = 18; y < height; y += 120) {
       context.fillRect(x + (drift % 120), y, 82, 82);
     }
   }
 
-  context.fillStyle = 'rgba(44,243,255,0.08)';
+  context.fillStyle = stageTheme.runtimeAccentPrimary;
   context.fillRect(0, height * 0.72, width, 3);
-  context.fillStyle = 'rgba(255,212,74,0.06)';
+  context.fillStyle = stageTheme.runtimeAccentSecondary;
   context.fillRect(0, height * 0.28, width, 2);
 }
 

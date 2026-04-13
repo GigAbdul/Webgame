@@ -2,6 +2,7 @@ import { useMutation } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Panel } from '../components/ui';
 import { LevelEditor } from '../features/editor/level-editor';
+import { moveLocalEditorDraft } from '../features/editor/local-draft-storage';
 import { apiRequest } from '../services/api';
 import type { Level } from '../types/models';
 
@@ -25,6 +26,7 @@ export function AdminCreateOfficialPage() {
         }),
       }),
     onSuccess: (payload) => {
+      moveLocalEditorDraft('admin-official-new', payload.level.id);
       navigate(`/admin/levels/${payload.level.id}`);
     },
   });
@@ -60,19 +62,9 @@ export function AdminCreateOfficialPage() {
       </Panel>
 
       <LevelEditor
+        draftStorageKey="admin-official-new"
         saveLabel="Save Admin Draft"
         onSave={(payload) => createMutation.mutateAsync(payload).then(() => undefined)}
-        sidebarSlot={
-          <Panel className="game-screen bg-transparent">
-            <div className="space-y-3">
-              <h3 className="font-display text-2xl text-white">Admin Workflow</h3>
-              <p className="text-sm leading-7 text-white/78">
-                After the first save you land on the detail screen, where difficulty, featured state, and publishing are
-                tuned. The star reward is calculated automatically there.
-              </p>
-            </div>
-          </Panel>
-        }
       />
     </div>
   );
