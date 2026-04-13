@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { getObjectFillColor, getObjectStrokeColor, levelObjectDefinitions } from './object-definitions';
+import { getObjectFillColor, getObjectStrokeColor } from './object-definitions';
 import {
   SHIP_FALL_ACCELERATION,
   SHIP_FLIGHT_CEILING_Y,
@@ -10,6 +10,8 @@ import {
   getPlayerModeDescription,
   getPlayerModeLabel,
 } from './player-mode-config';
+import { readStoredMusicVolume, resolveLevelMusic } from './level-music';
+import { drawStageObjectSprite } from './object-renderer';
 import { getStageThemePalette } from './stage-theme-palette';
 import type { LevelData } from '../../types/models';
 import { Panel } from '../../components/ui';
@@ -47,7 +49,7 @@ type TrailPoint = {
   size: number;
 };
 
-const solidTypes = new Set(['GROUND_BLOCK', 'PLATFORM_BLOCK']);
+const solidTypes = new Set(['GROUND_BLOCK', 'HALF_GROUND_BLOCK', 'PLATFORM_BLOCK', 'HALF_PLATFORM_BLOCK']);
 const hazardTypes = new Set(['SPIKE']);
 const JUMP_BUFFER_MS = 130;
 const COYOTE_TIME_MS = 110;
@@ -71,6 +73,7 @@ export function GameCanvas({
   onExitToMenu,
 }: GameCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const onFailRef = useRef(onFail);
   const onCompleteRef = useRef(onComplete);
   const inputHeldRef = useRef(false);
@@ -89,6 +92,7 @@ export function GameCanvas({
   const [isHudVisible, setIsHudVisible] = useState(true);
   const [isScreenShakeEnabled, setIsScreenShakeEnabled] = useState(true);
   const playerModeLabel = getPlayerModeLabel(levelData.player.mode);
+  const resolvedMusic = useMemo(() => resolveLevelMusic(levelData.meta), [levelData.meta]);
   const statusLabel =
     hud.status === 'completed' ? 'Stage Clear' : hud.status === 'failed' ? 'Attempt Lost' : 'In Run';
 
@@ -106,6 +110,10 @@ export function GameCanvas({
     pauseSettingsOpenRef.current = false;
     setIsPauseMenuOpen(false);
     setIsPauseSettingsOpen(false);
+    if (audioRef.current) {
+      audioRef.current.volume = readStoredMusicVolume();
+      void audioRef.current.play().catch(() => {});
+    }
   };
 
   const togglePauseSettings = () => {
@@ -153,6 +161,37 @@ export function GameCanvas({
     setIsPauseMenuOpen(false);
     setIsPauseSettingsOpen(false);
   }, [levelData, runId]);
+
+  useEffect(() => {
+    const currentAudio = audioRef.current;
+
+    if (currentAudio) {
+      currentAudio.pause();
+      currentAudio.src = '';
+      audioRef.current = null;
+    }
+
+    if (!resolvedMusic.src) {
+      return;
+    }
+
+    const nextAudio = new Audio(resolvedMusic.src);
+    nextAudio.loop = true;
+    nextAudio.preload = 'auto';
+    nextAudio.volume = readStoredMusicVolume();
+    audioRef.current = nextAudio;
+
+    void nextAudio.play().catch(() => {});
+
+    return () => {
+      nextAudio.pause();
+      nextAudio.src = '';
+
+      if (audioRef.current === nextAudio) {
+        audioRef.current = null;
+      }
+    };
+  }, [resolvedMusic.src, runId]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -221,6 +260,11 @@ export function GameCanvas({
       player.mode = levelData.player.mode;
       player.grounded = false;
       inputHeldRef.current = false;
+      if (audioRef.current) {
+        audioRef.current.currentTime = 0;
+        audioRef.current.volume = readStoredMusicVolume();
+        void audioRef.current.play().catch(() => {});
+      }
       currentStatus = 'running';
       activeTriggers.clear();
       usedOrbs.clear();
@@ -253,6 +297,20 @@ export function GameCanvas({
       lastGroundedAt = -Infinity;
     };
 
+    const ensureAudioPlayback = () => {
+      const audio = audioRef.current;
+
+      if (!audio) {
+        return;
+      }
+
+      audio.volume = readStoredMusicVolume();
+
+      if (audio.paused) {
+        void audio.play().catch(() => {});
+      }
+    };
+
     const queueJump = (timestamp = performance.now()) => {
       if (currentStatus !== 'running') {
         return;
@@ -280,6 +338,7 @@ export function GameCanvas({
 
         pauseMenuOpenRef.current = true;
         pauseStartedAtRef.current = performance.now();
+        audioRef.current?.pause();
         setIsPauseMenuOpen(true);
         return;
       }
@@ -292,6 +351,7 @@ export function GameCanvas({
       if (GAMEPLAY_INPUT_CODES.has(event.code)) {
         event.preventDefault();
         inputHeldRef.current = true;
+        ensureAudioPlayback();
         if (player.mode === 'cube') {
           queueJump();
         }
@@ -324,6 +384,7 @@ export function GameCanvas({
       }
 
       inputHeldRef.current = true;
+      ensureAudioPlayback();
 
       if (currentStatus === 'running') {
         if (player.mode === 'cube') {
@@ -907,93 +968,24 @@ function drawObject(
   isActive: boolean,
   isUsedOrb: boolean,
 ) {
-  const definition = levelObjectDefinitions[object.type];
   const x = object.x * cell;
   const y = verticalOffset + object.y * cell;
   const w = object.w * cell;
   const h = object.h * cell;
   const fillColor = getObjectFillColor(object, colorGroups);
   const strokeColor = getObjectStrokeColor(object, colorGroups);
-
-  context.save();
-
-  if (object.type === 'SPIKE') {
-    context.fillStyle = fillColor;
-    context.beginPath();
-    context.moveTo(x, y + h);
-    context.lineTo(x + w / 2, y);
-    context.lineTo(x + w, y + h);
-    context.closePath();
-    context.fill();
-    context.strokeStyle = strokeColor;
-    context.lineWidth = 2;
-    context.stroke();
-    context.restore();
-    return;
-  }
-
-  if (object.type === 'JUMP_ORB') {
-    context.fillStyle = isUsedOrb ? 'rgba(255,213,77,0.35)' : definition.color;
-    context.beginPath();
-    context.arc(x + w / 2, y + h / 2, Math.max(8, w / 2.2), 0, Math.PI * 2);
-    context.fill();
-    context.strokeStyle = 'rgba(255,255,255,0.45)';
-    context.lineWidth = 2;
-    context.stroke();
-    context.restore();
-    return;
-  }
-
-  context.fillStyle = fillColor;
-  context.fillRect(x, y, w, h);
-
-  if (
-    object.type === 'GRAVITY_PORTAL' ||
-    object.type === 'SPEED_PORTAL' ||
-    object.type === 'SHIP_PORTAL' ||
-    object.type === 'CUBE_PORTAL' ||
-    object.type === 'FINISH_PORTAL'
-  ) {
-    context.strokeStyle = 'rgba(255,255,255,0.6)';
-    context.lineWidth = 2;
-    context.strokeRect(x + 2, y + 2, w - 4, h - 4);
-
-    context.fillStyle = isActive ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.1)';
-    context.fillRect(x + w * 0.25, y + 6, w * 0.5, h - 12);
-
-    if (object.type === 'SHIP_PORTAL' || object.type === 'CUBE_PORTAL') {
-      context.strokeStyle = 'rgba(255,255,255,0.9)';
-      context.lineWidth = 2;
-      context.beginPath();
-      if (object.type === 'SHIP_PORTAL') {
-        context.moveTo(x + w * 0.68, y + h * 0.5);
-        context.lineTo(x + w * 0.32, y + h * 0.32);
-        context.lineTo(x + w * 0.42, y + h * 0.5);
-        context.lineTo(x + w * 0.32, y + h * 0.68);
-        context.closePath();
-      } else {
-        context.rect(x + w * 0.32, y + h * 0.32, w * 0.36, h * 0.36);
-      }
-      context.stroke();
-    }
-
-    context.restore();
-    return;
-  }
-
-  if (object.type === 'JUMP_PAD') {
-    context.fillStyle = 'rgba(255,255,255,0.18)';
-    context.fillRect(x + 4, y + 4, w - 8, Math.max(4, h * 0.35));
-    context.restore();
-    return;
-  }
-
-  context.fillStyle = 'rgba(255,255,255,0.12)';
-  context.fillRect(x + 3, y + 3, w - 6, Math.max(5, h * 0.16));
-  context.strokeStyle = strokeColor;
-  context.lineWidth = 2;
-  context.strokeRect(x + 1, y + 1, w - 2, h - 2);
-  context.restore();
+  drawStageObjectSprite({
+    context,
+    object,
+    x,
+    y,
+    w,
+    h,
+    fillColor,
+    strokeColor,
+    isActive,
+    isUsedOrb,
+  });
 }
 
 function drawPlayer(context: CanvasRenderingContext2D, player: PlayerState, cell: number, verticalOffset: number) {

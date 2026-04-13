@@ -1,4 +1,4 @@
-import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
+import type { ChangeEvent, CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Level, LevelData, LevelObject, LevelObjectType } from '../../types/models';
 import { Badge, Button, FieldLabel, Input, Panel, Textarea } from '../../components/ui';
@@ -13,6 +13,8 @@ import {
   isPaintableObjectType,
   levelObjectDefinitions,
 } from '../game/object-definitions';
+import { resolveLevelMusic } from '../game/level-music';
+import { drawStageObjectSprite } from '../game/object-renderer';
 import { SHIP_FLIGHT_CEILING_Y, SHIP_FLIGHT_FLOOR_Y, getPlayerModeLabel } from '../game/player-mode-config';
 import { getStageThemePalette } from '../game/stage-theme-palette';
 import { readLocalEditorDraft, writeLocalEditorDraft } from './local-draft-storage';
@@ -59,7 +61,7 @@ const themePresets = [
 
 const paletteGroups: Array<{ title: string; items: EditorTool[] }> = [
   { title: 'Controls', items: ['select', 'pan'] },
-  { title: 'Blocks', items: ['GROUND_BLOCK', 'PLATFORM_BLOCK', 'DECORATION_BLOCK'] },
+  { title: 'Blocks', items: ['GROUND_BLOCK', 'HALF_GROUND_BLOCK', 'PLATFORM_BLOCK', 'HALF_PLATFORM_BLOCK', 'DECORATION_BLOCK'] },
   { title: 'Obstacles', items: ['SPIKE'] },
   { title: 'Boosts', items: ['JUMP_PAD', 'JUMP_ORB'] },
   { title: 'Portals', items: ['GRAVITY_PORTAL', 'SPEED_PORTAL', 'SHIP_PORTAL', 'CUBE_PORTAL', 'FINISH_PORTAL'] },
@@ -70,7 +72,9 @@ const toolDescriptions: Record<EditorTool, string> = {
   select: 'Pick, move and inspect objects',
   pan: 'Hold Space or drag to move around',
   GROUND_BLOCK: 'Safe floor for the run',
+  HALF_GROUND_BLOCK: 'Half-height floor piece',
   PLATFORM_BLOCK: 'Extra landable block',
+  HALF_PLATFORM_BLOCK: 'Half-height platform piece',
   SPIKE: 'Primary hazard',
   JUMP_PAD: 'Forces an upward bounce',
   JUMP_ORB: 'Mid-air extra jump',
@@ -89,6 +93,7 @@ const EDITOR_CANVAS_ASPECT_RATIO = EDITOR_CANVAS_WIDTH / EDITOR_CANVAS_HEIGHT;
 const EDITOR_DEFAULT_PAN_X = 60;
 const EDITOR_DEFAULT_PAN_Y = 80;
 const EDITOR_SCROLL_PADDING_UNITS = 6;
+const MAX_CUSTOM_MUSIC_FILE_SIZE_BYTES = 8 * 1024 * 1024;
 
 type EditorInitialState = {
   title: string;
@@ -114,6 +119,35 @@ function isHexColor(value: unknown): value is string {
 
 function getEditorColorInputValue(value: string, fallback: string) {
   return isHexColor(value) ? value : fallback;
+}
+
+function isDirectMusicSource(value: string) {
+  return (
+    value.startsWith('http://') ||
+    value.startsWith('https://') ||
+    value.startsWith('/') ||
+    value.startsWith('blob:') ||
+    value.startsWith('data:audio/')
+  );
+}
+
+function getInitialMusicUrlInput(music: string) {
+  return isDirectMusicSource(music) && !music.startsWith('data:audio/') ? music : '';
+}
+
+function inferMusicLabel(source: string) {
+  const trimmedSource = source.trim();
+
+  if (!trimmedSource) {
+    return 'Custom Track';
+  }
+
+  if (trimmedSource.startsWith('data:audio/')) {
+    return 'Uploaded Track';
+  }
+
+  const lastSegment = trimmedSource.split('/').pop() ?? trimmedSource;
+  return decodeURIComponent(lastSegment) || 'Custom Track';
 }
 
 function createInitialEditorState(initialLevel: Level | null | undefined, draftStorageKey: string): EditorInitialState {
@@ -170,6 +204,8 @@ export function LevelEditor({
   const [showPreview, setShowPreview] = useState(false);
   const [isPaintPopupOpen, setIsPaintPopupOpen] = useState(false);
   const [activePaintGroupId, setActivePaintGroupId] = useState<number | null>(null);
+  const [musicUrlInput, setMusicUrlInput] = useState(() => getInitialMusicUrlInput(initialEditorState.levelData.meta.music));
+  const [musicLabelInput, setMusicLabelInput] = useState(initialEditorState.levelData.meta.musicLabel ?? '');
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [message, setMessage] = useState<string>(initialEditorState.restoredFromLocal ? 'Local draft restored.' : '');
 
@@ -205,6 +241,8 @@ export function LevelEditor({
     setShowPreview(false);
     setIsPaintPopupOpen(false);
     setActivePaintGroupId(null);
+    setMusicUrlInput(getInitialMusicUrlInput(nextEditorState.levelData.meta.music));
+    setMusicLabelInput(nextEditorState.levelData.meta.musicLabel ?? '');
     setSaveState('idle');
     setMessage(nextEditorState.restoredFromLocal ? 'Local draft restored.' : '');
   }, [draftStorageKey, initialLevel]);
@@ -246,6 +284,7 @@ export function LevelEditor({
   );
   const stageThemePalette = useMemo(() => getStageThemePalette(theme), [theme]);
   const colorGroups = useMemo(() => levelData.meta.colorGroups ?? [], [levelData.meta.colorGroups]);
+  const resolvedMusic = useMemo(() => resolveLevelMusic(levelData.meta), [levelData.meta]);
   const selectionLabel = selectedObject ? selectedDefinition?.label ?? selectedObject.type : 'Nothing selected';
   const paintableSelectedObject =
     selectedObject && isPaintableObjectType(selectedObject.type) ? selectedObject : null;
@@ -539,41 +578,22 @@ export function LevelEditor({
     }
 
     for (const object of levelData.objects) {
-      const definition = levelObjectDefinitions[object.type];
       const { x, y } = worldToScreen(object.x, object.y, pan.x, pan.y, cell);
       const w = object.w * cell;
       const h = object.h * cell;
       const fillColor = getObjectFillColor(object, colorGroups);
       const strokeColor = getObjectStrokeColor(object, colorGroups);
 
-      if (object.type === 'SPIKE') {
-        context.fillStyle = fillColor;
-        context.beginPath();
-        context.moveTo(x, y + h);
-        context.lineTo(x + w / 2, y);
-        context.lineTo(x + w, y + h);
-        context.closePath();
-        context.fill();
-        context.strokeStyle = strokeColor;
-        context.lineWidth = Math.max(2, cell * 0.08);
-        context.stroke();
-      } else if (object.type === 'JUMP_ORB') {
-        context.fillStyle = definition.color;
-        context.beginPath();
-        context.arc(x + w / 2, y + h / 2, Math.max(10, w / 2.4), 0, Math.PI * 2);
-        context.fill();
-      } else {
-        context.fillStyle = fillColor;
-        context.fillRect(x, y, w, h);
-
-        if (isPaintableObjectType(object.type)) {
-          context.strokeStyle = strokeColor;
-          context.lineWidth = Math.max(2, cell * 0.07);
-          context.strokeRect(x + 1, y + 1, Math.max(0, w - 2), Math.max(0, h - 2));
-          context.fillStyle = 'rgba(255,255,255,0.14)';
-          context.fillRect(x + 3, y + 3, Math.max(0, w - 6), Math.max(4, h * 0.16));
-        }
-      }
+      drawStageObjectSprite({
+        context,
+        object,
+        x,
+        y,
+        w,
+        h,
+        fillColor,
+        strokeColor,
+      });
 
       if (object.id === selectedObjectId) {
         context.strokeStyle = '#ffffff';
@@ -701,6 +721,70 @@ export function LevelEditor({
     updateLevelData((draft) => {
       draft.player.mode = nextMode;
     });
+  };
+
+  const applyCustomMusicUrl = () => {
+    const trimmedUrl = musicUrlInput.trim();
+    const nextLabel = musicLabelInput.trim() || (trimmedUrl ? inferMusicLabel(trimmedUrl) : undefined);
+
+    updateLevelData((draft) => {
+      draft.meta.music = trimmedUrl || 'none';
+
+      if (nextLabel) {
+        draft.meta.musicLabel = nextLabel;
+      } else {
+        delete draft.meta.musicLabel;
+      }
+    });
+
+    setMusicLabelInput(nextLabel ?? '');
+    setMessage(trimmedUrl ? 'Custom music URL attached to the level.' : 'Music cleared from the level.');
+  };
+
+  const clearLevelMusic = () => {
+    updateLevelData((draft) => {
+      draft.meta.music = 'none';
+      delete draft.meta.musicLabel;
+    });
+    setMusicUrlInput('');
+    setMusicLabelInput('');
+    setMessage('Music cleared from the level.');
+  };
+
+  const handleMusicFilePicked = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    if (file.size > MAX_CUSTOM_MUSIC_FILE_SIZE_BYTES) {
+      setMessage('Music file is too large. Keep it under 8 MB.');
+      event.target.value = '';
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') {
+        setMessage('Could not read the selected music file.');
+        return;
+      }
+
+      const nextLabel = musicLabelInput.trim() || file.name;
+      updateLevelData((draft) => {
+        draft.meta.music = reader.result as string;
+        draft.meta.musicLabel = nextLabel;
+      });
+      setMusicUrlInput('');
+      setMusicLabelInput(nextLabel);
+      setMessage(`Custom music loaded: ${file.name}.`);
+    };
+    reader.onerror = () => {
+      setMessage('Could not read the selected music file.');
+    };
+    reader.readAsDataURL(file);
+    event.target.value = '';
   };
 
   const updateSelectedObjectPaint = (field: 'fillColor' | 'strokeColor', value: string) => {
@@ -1465,6 +1549,7 @@ export function LevelEditor({
                   {paletteDrawer.items.map((tool) => (
                     <ToolButton
                       key={tool}
+                      tool={tool}
                       label={tool === 'select' ? 'Select' : tool === 'pan' ? 'Pan' : levelObjectDefinitions[tool].label}
                       description={toolDescriptions[tool]}
                       active={selectedTool === tool}
@@ -1635,6 +1720,64 @@ export function LevelEditor({
           />
         </div>
 
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <FieldLabel>Level Music</FieldLabel>
+            <Badge tone={resolvedMusic.src ? 'accent' : 'default'}>
+              {resolvedMusic.src ? 'Custom Track Ready' : 'No Custom Audio'}
+            </Badge>
+          </div>
+
+          <div>
+            <FieldLabel>Track Label</FieldLabel>
+            <Input
+              value={musicLabelInput}
+              placeholder="My custom song"
+              onChange={(event) => setMusicLabelInput(event.target.value)}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <FieldLabel>Music URL</FieldLabel>
+            <div className="editor-music-url-row">
+              <Input
+                value={musicUrlInput}
+                placeholder="https://example.com/track.mp3"
+                onChange={(event) => setMusicUrlInput(event.target.value)}
+              />
+              <Button variant="ghost" onClick={applyCustomMusicUrl}>
+                Apply URL
+              </Button>
+            </div>
+          </div>
+
+          <div className="editor-music-upload-row">
+            <label className="editor-music-upload-button">
+              <span>Upload Audio</span>
+              <input type="file" accept="audio/*" onChange={handleMusicFilePicked} />
+            </label>
+
+            <Button variant="ghost" onClick={clearLevelMusic}>
+              Clear Music
+            </Button>
+          </div>
+
+          <div className="editor-note-box px-4 py-3 text-sm text-white/72">
+            Add your own track by URL or upload an audio file. Uploaded files are embedded into the level data, so keep
+            them reasonably small.
+          </div>
+
+          {resolvedMusic.src ? (
+            <div className="editor-music-preview">
+              <div className="flex items-center justify-between gap-3">
+                <span className="editor-color-control-label">Preview</span>
+                <span className="text-xs text-white/72">{resolvedMusic.label}</span>
+              </div>
+              <audio controls preload="metadata" src={resolvedMusic.src} className="w-full" />
+            </div>
+          ) : null}
+        </div>
+
         <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
           <div>
             <FieldLabel>Player Mode</FieldLabel>
@@ -1704,12 +1847,14 @@ export function LevelEditor({
 }
 
 function ToolButton({
+  tool,
   label,
   description,
   active,
   compact = false,
   onClick,
 }: {
+  tool: EditorTool;
   label: string;
   description?: string;
   active: boolean;
@@ -1726,6 +1871,7 @@ function ToolButton({
         active ? 'tool-tile-active text-[#173300]' : 'text-white hover:brightness-110',
       )}
     >
+      <ToolButtonPreview tool={tool} active={active} />
       <span className={cn('font-display block uppercase', compact ? 'text-[9px] tracking-[0.14em]' : 'text-[10px] tracking-[0.18em]')}>
         {label}
       </span>
@@ -1741,6 +1887,82 @@ function ToolButton({
         </span>
       ) : null}
     </button>
+  );
+}
+
+function ToolButtonPreview({ tool, active }: { tool: EditorTool; active: boolean }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+
+    const context = canvas.getContext('2d');
+    if (!context) {
+      return;
+    }
+
+    const width = canvas.width;
+    const height = canvas.height;
+    context.clearRect(0, 0, width, height);
+
+    if (tool === 'select' || tool === 'pan') {
+      context.fillStyle = active ? 'rgba(23, 51, 0, 0.12)' : 'rgba(255,255,255,0.08)';
+      context.fillRect(0, 0, width, height);
+      context.strokeStyle = active ? 'rgba(23, 51, 0, 0.48)' : 'rgba(255,255,255,0.18)';
+      context.lineWidth = 2;
+      context.strokeRect(1, 1, width - 2, height - 2);
+      context.fillStyle = active ? '#173300' : 'rgba(255,255,255,0.9)';
+      context.font = "900 12px 'Arial Black', 'Trebuchet MS', 'Verdana', sans-serif";
+      context.textAlign = 'center';
+      context.textBaseline = 'middle';
+      context.fillText(tool === 'select' ? 'SEL' : 'PAN', width / 2, height / 2 + 0.5);
+      return;
+    }
+
+    const definition = levelObjectDefinitions[tool];
+    const object: LevelObject = {
+      id: `preview-${tool}`,
+      type: tool,
+      x: 0,
+      y: 0,
+      w: definition.defaultSize.w,
+      h: definition.defaultSize.h,
+      rotation: 0,
+      layer: tool === 'DECORATION_BLOCK' ? 'decoration' : 'gameplay',
+      props: {},
+    };
+
+    const padding = 5;
+    const scale = Math.min(
+      (width - padding * 2) / Math.max(object.w, 0.001),
+      (height - padding * 2) / Math.max(object.h, 0.001),
+    );
+    const drawWidth = object.w * scale;
+    const drawHeight = object.h * scale;
+    const drawX = (width - drawWidth) / 2;
+    const drawY = (height - drawHeight) / 2;
+
+    drawStageObjectSprite({
+      context,
+      object,
+      x: drawX,
+      y: drawY,
+      w: drawWidth,
+      h: drawHeight,
+      fillColor: definition.color,
+      strokeColor: definition.strokeColor,
+      isActive: active,
+      isUsedOrb: false,
+    });
+  }, [tool, active]);
+
+  return (
+    <span className="tool-tile-preview" aria-hidden="true">
+      <canvas ref={canvasRef} width={64} height={40} />
+    </span>
   );
 }
 

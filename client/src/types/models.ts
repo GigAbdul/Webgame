@@ -14,7 +14,9 @@ export type Difficulty =
   | 'EXTREME_DEMON';
 export type LevelObjectType =
   | 'GROUND_BLOCK'
+  | 'HALF_GROUND_BLOCK'
   | 'PLATFORM_BLOCK'
+  | 'HALF_PLATFORM_BLOCK'
   | 'SPIKE'
   | 'JUMP_PAD'
   | 'JUMP_ORB'
@@ -51,6 +53,7 @@ export type LevelData = {
     theme: string;
     background: string;
     music: string;
+    musicLabel?: string;
     version: number;
     colorGroups?: LevelColorGroup[];
   };

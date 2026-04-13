@@ -30,6 +30,24 @@ export const levelObjectDefinitions: Record<
     lethal: false,
     effect: null,
   },
+  HALF_GROUND_BLOCK: {
+    label: 'Half Ground',
+    color: '#31f0ff',
+    strokeColor: '#0f1b31',
+    defaultSize: { w: 1, h: 0.5 },
+    collides: true,
+    lethal: false,
+    effect: null,
+  },
+  HALF_PLATFORM_BLOCK: {
+    label: 'Half Platform',
+    color: '#7af0a5',
+    strokeColor: '#103428',
+    defaultSize: { w: 1, h: 0.5 },
+    collides: true,
+    lethal: false,
+    effect: null,
+  },
   SPIKE: {
     label: 'Spike',
     color: '#ff5a87',
@@ -124,7 +142,14 @@ export const levelObjectDefinitions: Record<
 
 export const objectPaletteOrder = Object.keys(levelObjectDefinitions) as LevelObjectType[];
 export const PAINT_GROUP_SLOT_COUNT = 6;
-const paintableObjectTypes = new Set<LevelObjectType>(['GROUND_BLOCK', 'PLATFORM_BLOCK', 'DECORATION_BLOCK', 'SPIKE']);
+const paintableObjectTypes = new Set<LevelObjectType>([
+  'GROUND_BLOCK',
+  'HALF_GROUND_BLOCK',
+  'PLATFORM_BLOCK',
+  'HALF_PLATFORM_BLOCK',
+  'DECORATION_BLOCK',
+  'SPIKE',
+]);
 
 export function isPaintableObjectType(type: LevelObjectType) {
   return paintableObjectTypes.has(type);

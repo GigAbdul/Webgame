@@ -2,7 +2,9 @@ import { z } from 'zod';
 
 export const levelObjectTypes = [
   'GROUND_BLOCK',
+  'HALF_GROUND_BLOCK',
   'PLATFORM_BLOCK',
+  'HALF_PLATFORM_BLOCK',
   'SPIKE',
   'JUMP_PAD',
   'JUMP_ORB',
@@ -36,6 +38,7 @@ export const levelDataSchema = z.object({
     theme: z.string().min(1).default('neon-grid'),
     background: z.string().min(1).default('default'),
     music: z.string().min(1).default('placeholder-track-01'),
+    musicLabel: z.string().min(1).optional(),
     version: z.number().int().default(1),
     colorGroups: z
       .array(
@@ -83,6 +86,20 @@ export const levelObjectDefinitions: Record<
   PLATFORM_BLOCK: {
     label: 'Platform',
     defaultSize: { w: 1, h: 1 },
+    collides: true,
+    lethal: false,
+    effect: null,
+  },
+  HALF_GROUND_BLOCK: {
+    label: 'Half Ground',
+    defaultSize: { w: 1, h: 0.5 },
+    collides: true,
+    lethal: false,
+    effect: null,
+  },
+  HALF_PLATFORM_BLOCK: {
+    label: 'Half Platform',
+    defaultSize: { w: 1, h: 0.5 },
     collides: true,
     lethal: false,
     effect: null,
