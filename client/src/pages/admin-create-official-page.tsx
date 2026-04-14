@@ -64,6 +64,7 @@ export function AdminCreateOfficialPage() {
       <LevelEditor
         draftStorageKey="admin-official-new"
         saveLabel="Save Admin Draft"
+        onClose={() => navigate('/admin/levels')}
         onSave={(payload) => createMutation.mutateAsync(payload).then(() => undefined)}
       />
     </div>

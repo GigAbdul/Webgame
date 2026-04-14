@@ -10,6 +10,17 @@ export function errorHandler(
 ) {
   void _next;
 
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'type' in error &&
+    (error as { type?: string }).type === 'entity.too.large'
+  ) {
+    return response.status(413).json({
+      message: 'Request payload is too large. Use a smaller embedded file or attach music by URL.',
+    });
+  }
+
   if (error instanceof ApiError) {
     return response.status(error.statusCode).json({
       message: error.message,

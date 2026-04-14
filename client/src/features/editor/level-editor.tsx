@@ -11,6 +11,7 @@ import {
   getObjectPaintGroupId,
   getObjectStrokeColor,
   isPaintableObjectType,
+  isTriggerObjectType,
   levelObjectDefinitions,
 } from '../game/object-definitions';
 import { resolveLevelMusic } from '../game/level-music';
@@ -26,6 +27,7 @@ type LevelEditorProps = {
   initialLevel?: Level | null;
   draftStorageKey: string;
   saveLabel?: string;
+  onClose?: () => void;
   onSave: (payload: {
     title: string;
     description: string;
@@ -51,6 +53,15 @@ type DragState =
     }
   | null;
 
+type TouchGestureState = {
+  startDistance: number;
+  startZoom: number;
+  startPanX: number;
+  startPanY: number;
+  startCenterX: number;
+  startCenterY: number;
+};
+
 const themePresets = [
   { value: 'neon-grid', label: 'Neon Grid' },
   { value: 'cyber-night', label: 'Cyber Night' },
@@ -62,9 +73,10 @@ const themePresets = [
 const paletteGroups: Array<{ title: string; items: EditorTool[] }> = [
   { title: 'Controls', items: ['select', 'pan'] },
   { title: 'Blocks', items: ['GROUND_BLOCK', 'HALF_GROUND_BLOCK', 'PLATFORM_BLOCK', 'HALF_PLATFORM_BLOCK', 'DECORATION_BLOCK'] },
-  { title: 'Obstacles', items: ['SPIKE'] },
+  { title: 'Obstacles', items: ['SPIKE', 'SAW_BLADE'] },
   { title: 'Boosts', items: ['JUMP_PAD', 'JUMP_ORB'] },
   { title: 'Portals', items: ['GRAVITY_PORTAL', 'SPEED_PORTAL', 'SHIP_PORTAL', 'CUBE_PORTAL', 'FINISH_PORTAL'] },
+  { title: 'Triggers', items: ['MOVE_TRIGGER', 'ALPHA_TRIGGER', 'TOGGLE_TRIGGER', 'PULSE_TRIGGER'] },
   { title: 'Run Points', items: ['START_MARKER'] },
 ];
 
@@ -76,6 +88,7 @@ const toolDescriptions: Record<EditorTool, string> = {
   PLATFORM_BLOCK: 'Extra landable block',
   HALF_PLATFORM_BLOCK: 'Half-height platform piece',
   SPIKE: 'Primary hazard',
+  SAW_BLADE: 'Rotating circular hazard',
   JUMP_PAD: 'Forces an upward bounce',
   JUMP_ORB: 'Mid-air extra jump',
   GRAVITY_PORTAL: 'Flips gravity',
@@ -83,6 +96,10 @@ const toolDescriptions: Record<EditorTool, string> = {
   SHIP_PORTAL: 'Switches into ship mode',
   CUBE_PORTAL: 'Returns to cube mode',
   FINISH_PORTAL: 'Level completion',
+  MOVE_TRIGGER: 'Moves a paint group during the run',
+  ALPHA_TRIGGER: 'Changes group opacity',
+  TOGGLE_TRIGGER: 'Shows or hides a group',
+  PULSE_TRIGGER: 'Pulses a group color for a short burst',
   DECORATION_BLOCK: 'Visual block only',
   START_MARKER: 'Player spawn point',
 };
@@ -180,6 +197,7 @@ export function LevelEditor({
   initialLevel,
   draftStorageKey,
   saveLabel = 'Save Draft',
+  onClose,
   onSave,
   onSubmit,
 }: LevelEditorProps) {
@@ -202,6 +220,7 @@ export function LevelEditor({
   const [cursorWorld, setCursorWorld] = useState({ x: 0, y: 0 });
   const [canvasViewport, setCanvasViewport] = useState({ width: EDITOR_CANVAS_WIDTH, height: EDITOR_CANVAS_HEIGHT });
   const [showPreview, setShowPreview] = useState(false);
+  const [previewRunSeed, setPreviewRunSeed] = useState(0);
   const [isPaintPopupOpen, setIsPaintPopupOpen] = useState(false);
   const [activePaintGroupId, setActivePaintGroupId] = useState<number | null>(null);
   const [musicUrlInput, setMusicUrlInput] = useState(() => getInitialMusicUrlInput(initialEditorState.levelData.meta.music));
@@ -214,6 +233,8 @@ export function LevelEditor({
   const dragRef = useRef<DragState>(null);
   const isSpacePressedRef = useRef(false);
   const liveLevelDataRef = useRef(levelData);
+  const touchPointsRef = useRef(new Map<number, { x: number; y: number }>());
+  const touchGestureRef = useRef<TouchGestureState | null>(null);
 
   const loadedDraftStorageKeyRef = useRef(draftStorageKey);
 
@@ -239,6 +260,7 @@ export function LevelEditor({
     setPan({ x: EDITOR_DEFAULT_PAN_X, y: EDITOR_DEFAULT_PAN_Y });
     setCursorWorld({ x: 0, y: 0 });
     setShowPreview(false);
+    setPreviewRunSeed(0);
     setIsPaintPopupOpen(false);
     setActivePaintGroupId(null);
     setMusicUrlInput(getInitialMusicUrlInput(nextEditorState.levelData.meta.music));
@@ -288,7 +310,9 @@ export function LevelEditor({
   const selectionLabel = selectedObject ? selectedDefinition?.label ?? selectedObject.type : 'Nothing selected';
   const paintableSelectedObject =
     selectedObject && isPaintableObjectType(selectedObject.type) ? selectedObject : null;
+  const selectedTriggerObject = selectedObject && isTriggerObjectType(selectedObject.type) ? selectedObject : null;
   const selectedPaintGroupId = getObjectPaintGroupId(paintableSelectedObject);
+  const normalizedSelectedRotation = normalizeQuarterRotation(selectedObject?.rotation ?? 0);
   const activePaintTool =
     selectedTool !== 'select' && selectedTool !== 'pan' && isPaintableObjectType(selectedTool) ? selectedTool : null;
   const canOpenPaintPopup = Boolean(paintableSelectedObject || activePaintTool || colorGroups.length > 0);
@@ -299,6 +323,7 @@ export function LevelEditor({
     ? `${selectedDefinition?.label ?? selectedObject.type} at ${selectedObject.x}, ${selectedObject.y}`
     : 'No object selected';
   const objectCount = String(levelData.objects.length);
+  const musicOffsetMsValue = Math.max(0, Number(levelData.meta.musicOffsetMs ?? 0) || 0);
   const stageCell = levelData.meta.gridSize * zoom;
   const visibleStageUnits = canvasViewport.width / stageCell;
   const horizontalScrollMax = Math.max(0, levelData.meta.lengthUnits + EDITOR_SCROLL_PADDING_UNITS - visibleStageUnits);
@@ -650,6 +675,18 @@ export function LevelEditor({
       }
 
       const definition = levelObjectDefinitions[type];
+      const triggerDefaults: Record<string, unknown> =
+        type === 'MOVE_TRIGGER'
+          ? { groupId: 1, moveX: 2, moveY: 0, durationMs: 650 }
+          : type === 'ALPHA_TRIGGER'
+            ? { groupId: 1, alpha: 0.35 }
+            : type === 'TOGGLE_TRIGGER'
+              ? { groupId: 1, enabled: false }
+              : type === 'PULSE_TRIGGER'
+                ? { groupId: 1, fillColor: '#ffffff', strokeColor: '#ffffff', durationMs: 900 }
+                : type === 'SAW_BLADE'
+                  ? { rotationSpeed: 240 }
+                : {};
       const object: LevelObject = {
         id: `${type.toLowerCase()}-${Date.now()}`,
         type,
@@ -659,12 +696,14 @@ export function LevelEditor({
         h: definition.defaultSize.h,
         rotation: 0,
         layer: type === 'DECORATION_BLOCK' ? 'decoration' : 'gameplay',
-        props:
-          isPaintableObjectType(type) && activePaintGroupId
+        props: {
+          ...triggerDefaults,
+          ...(isPaintableObjectType(type) && activePaintGroupId
             ? {
                 paintGroupId: activePaintGroupId,
               }
-            : {},
+            : {}),
+        },
       };
 
       draft.objects.push(object);
@@ -721,6 +760,119 @@ export function LevelEditor({
     updateLevelData((draft) => {
       draft.player.mode = nextMode;
     });
+  };
+
+  const updateSelectedObject = (mutator: (object: LevelObject, draft: LevelData) => void) => {
+    if (!selectedObjectId) {
+      return;
+    }
+
+    updateLevelData((draft) => {
+      const object = draft.objects.find((entry) => entry.id === selectedObjectId);
+
+      if (!object) {
+        return;
+      }
+
+      mutator(object, draft);
+
+      if (object.type === 'START_MARKER') {
+        draft.player.startX = object.x;
+        draft.player.startY = object.y;
+      }
+
+      if (object.type === 'FINISH_PORTAL') {
+        draft.finish.x = object.x;
+        draft.finish.y = object.y;
+      }
+    });
+  };
+
+  const updateSelectedObjectNumeric = (
+    field: 'x' | 'y' | 'w' | 'h',
+    rawValue: string,
+    options?: { min?: number; max?: number; step?: number },
+  ) => {
+    const numericValue = Number(rawValue);
+
+    if (!Number.isFinite(numericValue)) {
+      return;
+    }
+
+    const min = options?.min ?? Number.NEGATIVE_INFINITY;
+    const max = options?.max ?? Number.POSITIVE_INFINITY;
+    const step = options?.step ?? 1;
+    const snappedValue = Math.round(numericValue / step) * step;
+    const clampedValue = clamp(snappedValue, min, max);
+
+    updateSelectedObject((object) => {
+      object[field] = clampedValue;
+    });
+  };
+
+  const rotateSelectedObject = (direction: -1 | 1) => {
+    updateSelectedObject((object) => {
+      const previousRotation = normalizeQuarterRotation(object.rotation);
+      const nextRotation = normalizeQuarterRotation(previousRotation + 90 * direction);
+      const previousQuarterTurns = ((previousRotation / 90) % 4 + 4) % 4;
+      const nextQuarterTurns = ((nextRotation / 90) % 4 + 4) % 4;
+      const toggledOrientation = previousQuarterTurns % 2 !== nextQuarterTurns % 2;
+
+      object.rotation = nextRotation;
+
+      if (toggledOrientation && Math.abs(object.w - object.h) > 0.001) {
+        const previousWidth = object.w;
+        object.w = object.h;
+        object.h = previousWidth;
+      }
+    });
+  };
+
+  const updateSelectedObjectLayer = (nextLayer: LevelObject['layer']) => {
+    updateSelectedObject((object) => {
+      object.layer = nextLayer;
+    });
+  };
+
+  const updateSelectedTriggerNumericProp = (key: string, rawValue: string, options?: { min?: number; max?: number }) => {
+    if (!selectedTriggerObject) {
+      return;
+    }
+
+    const numericValue = Number(rawValue);
+    if (!Number.isFinite(numericValue)) {
+      return;
+    }
+
+    const min = options?.min ?? Number.NEGATIVE_INFINITY;
+    const max = options?.max ?? Number.POSITIVE_INFINITY;
+    const clampedValue = clamp(numericValue, min, max);
+
+    updateSelectedObject((object) => {
+      object.props = {
+        ...object.props,
+        [key]: clampedValue,
+      };
+    });
+  };
+
+  const updateSelectedTriggerStringProp = (key: string, value: string) => {
+    if (!selectedTriggerObject) {
+      return;
+    }
+
+    updateSelectedObject((object) => {
+      object.props = {
+        ...object.props,
+        [key]: value,
+      };
+    });
+  };
+
+  const restartPreviewFromMusicOffset = () => {
+    setShowPreview(true);
+    setPreviewRunSeed((current) => current + 1);
+    setMessage('Preview restarted from the configured music offset.');
   };
 
   const applyCustomMusicUrl = () => {
@@ -901,6 +1053,25 @@ export function LevelEditor({
     });
   };
 
+  const beginTouchGesture = () => {
+    const touchPoints = [...touchPointsRef.current.values()];
+
+    if (touchPoints.length < 2) {
+      touchGestureRef.current = null;
+      return;
+    }
+
+    const [firstPoint, secondPoint] = touchPoints;
+    touchGestureRef.current = {
+      startDistance: getPointerDistance(firstPoint, secondPoint),
+      startZoom: zoom,
+      startPanX: pan.x,
+      startPanY: pan.y,
+      startCenterX: (firstPoint.x + secondPoint.x) / 2,
+      startCenterY: (firstPoint.y + secondPoint.y) / 2,
+    };
+  };
+
   const handlePointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
 
@@ -922,6 +1093,16 @@ export function LevelEditor({
     }
 
     event.currentTarget.setPointerCapture(event.pointerId);
+
+    if (event.pointerType === 'touch') {
+      touchPointsRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+      if (touchPointsRef.current.size >= 2) {
+        dragRef.current = null;
+        beginTouchGesture();
+        return;
+      }
+    }
 
     if (event.button === 1) {
       event.preventDefault();
@@ -985,6 +1166,37 @@ export function LevelEditor({
       y: Math.floor(world.y),
     });
 
+    if (event.pointerType === 'touch' && touchPointsRef.current.has(event.pointerId)) {
+      touchPointsRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+
+      if (touchPointsRef.current.size >= 2) {
+        event.preventDefault();
+
+        if (!touchGestureRef.current) {
+          beginTouchGesture();
+        }
+
+        const touchPoints = [...touchPointsRef.current.values()];
+        const [firstPoint, secondPoint] = touchPoints;
+
+        if (firstPoint && secondPoint && touchGestureRef.current) {
+          const centerX = (firstPoint.x + secondPoint.x) / 2;
+          const centerY = (firstPoint.y + secondPoint.y) / 2;
+          const distance = getPointerDistance(firstPoint, secondPoint);
+          const zoomFactor = touchGestureRef.current.startDistance > 0 ? distance / touchGestureRef.current.startDistance : 1;
+
+          setZoom(clamp(roundToStep(touchGestureRef.current.startZoom * zoomFactor, 0.01), 0.45, 2.4));
+          setPan({
+            x: touchGestureRef.current.startPanX + (centerX - touchGestureRef.current.startCenterX),
+            y: touchGestureRef.current.startPanY + (centerY - touchGestureRef.current.startCenterY),
+          });
+        }
+
+        dragRef.current = null;
+        return;
+      }
+    }
+
     const dragState = dragRef.current;
 
     if (event.buttons & 4) {
@@ -1046,6 +1258,14 @@ export function LevelEditor({
   };
 
   const handlePointerUp = (event?: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (event && touchPointsRef.current.has(event.pointerId)) {
+      touchPointsRef.current.delete(event.pointerId);
+
+      if (touchPointsRef.current.size < 2) {
+        touchGestureRef.current = null;
+      }
+    }
+
     if (dragRef.current?.mode === 'move') {
       const next = syncDerivedLevelData(structuredClone(liveLevelDataRef.current));
       const trimmedHistory = history.slice(0, historyIndex + 1);
@@ -1172,6 +1392,17 @@ export function LevelEditor({
           </div>
 
           <div className="editor-primary-actions">
+            {onClose ? (
+              <button
+                type="button"
+                className="editor-close-button"
+                onClick={onClose}
+                aria-label="Close editor"
+                title="Close editor"
+              >
+                <span aria-hidden="true">×</span>
+              </button>
+            ) : null}
             <Button onClick={handleSave} disabled={saveState === 'saving'}>
               {saveState === 'saving' ? 'Saving...' : saveLabel}
             </Button>
@@ -1242,6 +1473,7 @@ export function LevelEditor({
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
             onPointerLeave={handlePointerUp}
             onAuxClick={(event) => {
               if (event.button === 1) {
@@ -1379,7 +1611,7 @@ export function LevelEditor({
                   </div>
                 ) : (
                   <div className="editor-note-box px-4 py-3 text-sm text-white/72">
-                    Select a block or spike if you want to save its colors into a group.
+                    Select a block, spike, or saw if you want to save its colors into a group.
                   </div>
                 )}
 
@@ -1466,7 +1698,7 @@ export function LevelEditor({
                 </div>
 
                 <div className="editor-note-box px-4 py-3 text-sm text-white/72">
-                  Choose a saved group for new blocks and spikes, or select an existing painted object to write its
+                  Choose a saved group for new blocks, spikes, and saws, or select an existing painted object to write its
                   colors into one of the groups below.
                 </div>
 
@@ -1664,7 +1896,13 @@ export function LevelEditor({
               <HintChip label="Restart" value="Auto after fail" />
               <HintChip label="Goal" value="Check timing and flow" />
             </div>
-            <GameCanvas levelData={levelData} attemptNumber={1} autoRestartOnFail />
+            <GameCanvas
+              key={`editor-preview-${previewRunSeed}`}
+              levelData={levelData}
+              runId={`editor-preview-${previewRunSeed}`}
+              attemptNumber={1}
+              autoRestartOnFail
+            />
           </div>
         </Panel>
       ) : null}
@@ -1686,6 +1924,335 @@ export function LevelEditor({
           <FieldLabel>Description</FieldLabel>
           <Textarea rows={4} value={description} onChange={(event) => setDescription(event.target.value)} />
         </div>
+
+        {selectedObject ? (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <FieldLabel>Selected Object</FieldLabel>
+                <p className="mt-1 text-sm text-white/68">
+                  Fine-tune transform, layer, and object-specific behavior without leaving the editor.
+                </p>
+              </div>
+              <Badge tone="accent">{selectedDefinition?.label ?? selectedObject.type}</Badge>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div>
+                <FieldLabel>X</FieldLabel>
+                <Input
+                  type="number"
+                  step="0.5"
+                  value={selectedObject.x}
+                  onChange={(event) => updateSelectedObjectNumeric('x', event.target.value, { step: 0.5 })}
+                />
+              </div>
+              <div>
+                <FieldLabel>Y</FieldLabel>
+                <Input
+                  type="number"
+                  step="0.5"
+                  value={selectedObject.y}
+                  onChange={(event) => updateSelectedObjectNumeric('y', event.target.value, { step: 0.5 })}
+                />
+              </div>
+              <div>
+                <FieldLabel>Width</FieldLabel>
+                <Input
+                  type="number"
+                  step="0.5"
+                  min="0.5"
+                  value={selectedObject.w}
+                  onChange={(event) => updateSelectedObjectNumeric('w', event.target.value, { min: 0.5, step: 0.5 })}
+                />
+              </div>
+              <div>
+                <FieldLabel>Height</FieldLabel>
+                <Input
+                  type="number"
+                  step="0.5"
+                  min="0.5"
+                  value={selectedObject.h}
+                  onChange={(event) => updateSelectedObjectNumeric('h', event.target.value, { min: 0.5, step: 0.5 })}
+                />
+              </div>
+            </div>
+
+            <div className="grid gap-3 lg:grid-cols-[1.1fr_0.9fr]">
+              <div className="editor-inline-card">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="editor-color-control-label">Rotation</span>
+                  <Badge tone="default">{normalizedSelectedRotation}deg</Badge>
+                </div>
+                <div className="editor-inline-actions">
+                  <Button variant="ghost" onClick={() => rotateSelectedObject(-1)}>
+                    Rotate -90
+                  </Button>
+                  <Button variant="ghost" onClick={() => rotateSelectedObject(1)}>
+                    Rotate +90
+                  </Button>
+                </div>
+              </div>
+
+              <div className="editor-inline-card">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="editor-color-control-label">Layer</span>
+                  <Badge tone="default">{selectedObject.layer}</Badge>
+                </div>
+                <div className="editor-inline-actions">
+                  <Button
+                    variant={selectedObject.layer === 'gameplay' ? 'primary' : 'ghost'}
+                    onClick={() => updateSelectedObjectLayer('gameplay')}
+                  >
+                    Gameplay
+                  </Button>
+                  <Button
+                    variant={selectedObject.layer === 'decoration' ? 'primary' : 'ghost'}
+                    onClick={() => updateSelectedObjectLayer('decoration')}
+                  >
+                    Decoration
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            {selectedObject.type === 'JUMP_PAD' ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <FieldLabel>Jump Boost</FieldLabel>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    min="1"
+                    value={Number(selectedObject.props.boost ?? 16)}
+                    onChange={(event) => updateSelectedObject((object) => {
+                      object.props = {
+                        ...object.props,
+                        boost: Number(event.target.value),
+                      };
+                    })}
+                  />
+                </div>
+              </div>
+            ) : null}
+
+            {selectedObject.type === 'GRAVITY_PORTAL' ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <FieldLabel>Gravity Direction</FieldLabel>
+                  <div className="editor-inline-actions">
+                    <Button
+                      variant={Number(selectedObject.props.gravity ?? -1) === -1 ? 'primary' : 'ghost'}
+                      onClick={() =>
+                        updateSelectedObject((object) => {
+                          object.props = { ...object.props, gravity: -1 };
+                        })
+                      }
+                    >
+                      Up
+                    </Button>
+                    <Button
+                      variant={Number(selectedObject.props.gravity ?? -1) === 1 ? 'primary' : 'ghost'}
+                      onClick={() =>
+                        updateSelectedObject((object) => {
+                          object.props = { ...object.props, gravity: 1 };
+                        })
+                      }
+                    >
+                      Down
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {selectedObject.type === 'SPEED_PORTAL' ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <FieldLabel>Speed Multiplier</FieldLabel>
+                  <Input
+                    type="number"
+                    step="0.1"
+                    min="0.2"
+                    value={Number(selectedObject.props.multiplier ?? 1.4)}
+                    onChange={(event) =>
+                      updateSelectedObject((object) => {
+                        object.props = {
+                          ...object.props,
+                          multiplier: Number(event.target.value),
+                        };
+                      })
+                    }
+                  />
+                </div>
+              </div>
+            ) : null}
+
+            {selectedObject.type === 'SAW_BLADE' ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <FieldLabel>Rotation Speed (deg/s)</FieldLabel>
+                  <Input
+                    type="number"
+                    step="10"
+                    value={Number(selectedObject.props.rotationSpeed ?? 240)}
+                    onChange={(event) =>
+                      updateSelectedObject((object) => {
+                        object.props = {
+                          ...object.props,
+                          rotationSpeed: Number(event.target.value),
+                        };
+                      })
+                    }
+                  />
+                </div>
+              </div>
+            ) : null}
+
+            {selectedTriggerObject ? (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <FieldLabel>Trigger Settings</FieldLabel>
+                  <Badge tone="accent">Group {Number(selectedTriggerObject.props.groupId ?? 1)}</Badge>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  <div>
+                    <FieldLabel>Target Group</FieldLabel>
+                    <Input
+                      type="number"
+                      min="1"
+                      max={String(PAINT_GROUP_SLOT_COUNT)}
+                      value={Number(selectedTriggerObject.props.groupId ?? 1)}
+                      onChange={(event) =>
+                        updateSelectedTriggerNumericProp('groupId', event.target.value, {
+                          min: 1,
+                          max: PAINT_GROUP_SLOT_COUNT,
+                        })
+                      }
+                    />
+                  </div>
+
+                  {selectedTriggerObject.type === 'MOVE_TRIGGER' ? (
+                    <>
+                      <div>
+                        <FieldLabel>Move X</FieldLabel>
+                        <Input
+                          type="number"
+                          step="0.5"
+                          value={Number(selectedTriggerObject.props.moveX ?? 2)}
+                          onChange={(event) => updateSelectedTriggerNumericProp('moveX', event.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <FieldLabel>Move Y</FieldLabel>
+                        <Input
+                          type="number"
+                          step="0.5"
+                          value={Number(selectedTriggerObject.props.moveY ?? 0)}
+                          onChange={(event) => updateSelectedTriggerNumericProp('moveY', event.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <FieldLabel>Duration (ms)</FieldLabel>
+                        <Input
+                          type="number"
+                          min="1"
+                          value={Number(selectedTriggerObject.props.durationMs ?? 650)}
+                          onChange={(event) =>
+                            updateSelectedTriggerNumericProp('durationMs', event.target.value, { min: 1 })
+                          }
+                        />
+                      </div>
+                    </>
+                  ) : null}
+
+                  {selectedTriggerObject.type === 'ALPHA_TRIGGER' ? (
+                    <div>
+                      <FieldLabel>Alpha</FieldLabel>
+                      <Input
+                        type="number"
+                        step="0.05"
+                        min="0"
+                        max="1"
+                        value={Number(selectedTriggerObject.props.alpha ?? 0.35)}
+                        onChange={(event) =>
+                          updateSelectedTriggerNumericProp('alpha', event.target.value, { min: 0, max: 1 })
+                        }
+                      />
+                    </div>
+                  ) : null}
+
+                  {selectedTriggerObject.type === 'TOGGLE_TRIGGER' ? (
+                    <div className="sm:col-span-2">
+                      <FieldLabel>Toggle Result</FieldLabel>
+                      <div className="editor-inline-actions">
+                        <Button
+                          variant={selectedTriggerObject.props.enabled ? 'primary' : 'ghost'}
+                          onClick={() => updateSelectedObject((object) => {
+                            object.props = { ...object.props, enabled: true };
+                          })}
+                        >
+                          Show Group
+                        </Button>
+                        <Button
+                          variant={!selectedTriggerObject.props.enabled ? 'primary' : 'ghost'}
+                          onClick={() => updateSelectedObject((object) => {
+                            object.props = { ...object.props, enabled: false };
+                          })}
+                        >
+                          Hide Group
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {selectedTriggerObject.type === 'PULSE_TRIGGER' ? (
+                    <>
+                      <div>
+                        <FieldLabel>Duration (ms)</FieldLabel>
+                        <Input
+                          type="number"
+                          min="1"
+                          value={Number(selectedTriggerObject.props.durationMs ?? 900)}
+                          onChange={(event) =>
+                            updateSelectedTriggerNumericProp('durationMs', event.target.value, { min: 1 })
+                          }
+                        />
+                      </div>
+                      <div>
+                        <FieldLabel>Pulse Fill</FieldLabel>
+                        <Input
+                          type="color"
+                          value={getEditorColorInputValue(
+                            typeof selectedTriggerObject.props.fillColor === 'string'
+                              ? selectedTriggerObject.props.fillColor
+                              : '#ffffff',
+                            '#ffffff',
+                          )}
+                          onChange={(event) => updateSelectedTriggerStringProp('fillColor', event.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <FieldLabel>Pulse Stroke</FieldLabel>
+                        <Input
+                          type="color"
+                          value={getEditorColorInputValue(
+                            typeof selectedTriggerObject.props.strokeColor === 'string'
+                              ? selectedTriggerObject.props.strokeColor
+                              : '#ffffff',
+                            '#ffffff',
+                          )}
+                          onChange={(event) => updateSelectedTriggerStringProp('strokeColor', event.target.value)}
+                        />
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="space-y-3">
           <FieldLabel>Theme Preset</FieldLabel>
@@ -1760,11 +2327,30 @@ export function LevelEditor({
             <Button variant="ghost" onClick={clearLevelMusic}>
               Clear Music
             </Button>
+
+            <Button variant="ghost" onClick={restartPreviewFromMusicOffset}>
+              Test Sync
+            </Button>
+          </div>
+
+          <div>
+            <FieldLabel>Music Offset (ms)</FieldLabel>
+            <Input
+              type="number"
+              min="0"
+              step="10"
+              value={musicOffsetMsValue}
+              onChange={(event) =>
+                updateLevelData((draft) => {
+                  draft.meta.musicOffsetMs = Math.max(0, Number(event.target.value) || 0);
+                })
+              }
+            />
           </div>
 
           <div className="editor-note-box px-4 py-3 text-sm text-white/72">
-            Add your own track by URL or upload an audio file. Uploaded files are embedded into the level data, so keep
-            them reasonably small.
+            Add your own track by URL or upload an audio file, then use offset plus sync test to line the song up with
+            your gameplay. Uploaded files are embedded into the level data, so keep them reasonably small.
           </div>
 
           {resolvedMusic.src ? (
@@ -2009,6 +2595,32 @@ function worldToScreen(x: number, y: number, panX: number, panY: number, cell: n
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+function roundToStep(value: number, step: number) {
+  if (!Number.isFinite(value) || !Number.isFinite(step) || step <= 0) {
+    return value;
+  }
+
+  return Math.round(value / step) * step;
+}
+
+function normalizeQuarterRotation(value: number) {
+  const normalized = ((Math.round(value / 90) * 90) % 360 + 360) % 360;
+  return normalized === 360 ? 0 : normalized;
+}
+
+function getPointerDistance(
+  firstPoint: {
+    x: number;
+    y: number;
+  },
+  secondPoint: {
+    x: number;
+    y: number;
+  },
+) {
+  return Math.hypot(secondPoint.x - firstPoint.x, secondPoint.y - firstPoint.y);
 }
 
 function pointInsideObject(x: number, y: number, object: LevelObject) {

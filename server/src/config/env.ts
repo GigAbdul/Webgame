@@ -15,6 +15,7 @@ const envSchema = z.object({
   PORT: z.coerce.number().default(4000),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   CLIENT_ORIGIN: z.string().default('http://localhost:5173'),
+  REQUEST_BODY_LIMIT: z.string().default('16mb'),
   ADMIN_EMAIL: z.string().email().default('admin@example.com'),
   ADMIN_PASSWORD: z.string().min(8).default('Admin123!'),
   ADMIN_USERNAME: z.string().min(3).default('admin'),

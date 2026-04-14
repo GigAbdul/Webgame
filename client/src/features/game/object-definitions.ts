@@ -9,7 +9,19 @@ export const levelObjectDefinitions: Record<
     defaultSize: { w: number; h: number };
     collides: boolean;
     lethal: boolean;
-    effect: 'jumpPad' | 'jumpOrb' | 'gravity' | 'speed' | 'shipMode' | 'cubeMode' | 'finish' | null;
+    effect:
+      | 'jumpPad'
+      | 'jumpOrb'
+      | 'gravity'
+      | 'speed'
+      | 'shipMode'
+      | 'cubeMode'
+      | 'finish'
+      | 'moveTrigger'
+      | 'alphaTrigger'
+      | 'toggleTrigger'
+      | 'pulseTrigger'
+      | null;
   }
 > = {
   GROUND_BLOCK: {
@@ -52,6 +64,15 @@ export const levelObjectDefinitions: Record<
     label: 'Spike',
     color: '#ff5a87',
     strokeColor: '#ffffff',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: true,
+    effect: null,
+  },
+  SAW_BLADE: {
+    label: 'Saw Blade',
+    color: '#d7ebff',
+    strokeColor: '#17304b',
     defaultSize: { w: 1, h: 1 },
     collides: false,
     lethal: true,
@@ -120,6 +141,42 @@ export const levelObjectDefinitions: Record<
     lethal: false,
     effect: 'finish',
   },
+  MOVE_TRIGGER: {
+    label: 'Move Trigger',
+    color: '#58d6ff',
+    strokeColor: '#ffffff',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: 'moveTrigger',
+  },
+  ALPHA_TRIGGER: {
+    label: 'Alpha Trigger',
+    color: '#f7e85f',
+    strokeColor: '#ffffff',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: 'alphaTrigger',
+  },
+  TOGGLE_TRIGGER: {
+    label: 'Toggle Trigger',
+    color: '#8cff8f',
+    strokeColor: '#ffffff',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: 'toggleTrigger',
+  },
+  PULSE_TRIGGER: {
+    label: 'Pulse Trigger',
+    color: '#ff8cf2',
+    strokeColor: '#ffffff',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: 'pulseTrigger',
+  },
   DECORATION_BLOCK: {
     label: 'Decoration',
     color: '#31506f',
@@ -149,10 +206,17 @@ const paintableObjectTypes = new Set<LevelObjectType>([
   'HALF_PLATFORM_BLOCK',
   'DECORATION_BLOCK',
   'SPIKE',
+  'SAW_BLADE',
 ]);
+
+const triggerObjectTypes = new Set<LevelObjectType>(['MOVE_TRIGGER', 'ALPHA_TRIGGER', 'TOGGLE_TRIGGER', 'PULSE_TRIGGER']);
 
 export function isPaintableObjectType(type: LevelObjectType) {
   return paintableObjectTypes.has(type);
+}
+
+export function isTriggerObjectType(type: LevelObjectType) {
+  return triggerObjectTypes.has(type);
 }
 
 export function getObjectPaintGroupId(object: Pick<LevelObject, 'props'> | null | undefined) {
@@ -234,6 +298,7 @@ export function createEmptyLevelData(theme = 'neon-grid'): LevelData {
       theme,
       background: 'default',
       music: 'placeholder-track-01',
+      musicOffsetMs: 0,
       version: 1,
       colorGroups: [],
     },

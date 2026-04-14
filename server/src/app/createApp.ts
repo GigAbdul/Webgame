@@ -21,7 +21,8 @@ export function createApp() {
       origin: env.NODE_ENV === 'production' ? true : env.CLIENT_ORIGIN,
     }),
   );
-  app.use(express.json({ limit: '2mb' }));
+  app.use(express.json({ limit: env.REQUEST_BODY_LIMIT }));
+  app.use(express.urlencoded({ extended: true, limit: env.REQUEST_BODY_LIMIT }));
   app.use(morgan('dev'));
   app.use(attachAuthUser);
 

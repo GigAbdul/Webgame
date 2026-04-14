@@ -6,6 +6,7 @@ export const levelObjectTypes = [
   'PLATFORM_BLOCK',
   'HALF_PLATFORM_BLOCK',
   'SPIKE',
+  'SAW_BLADE',
   'JUMP_PAD',
   'JUMP_ORB',
   'GRAVITY_PORTAL',
@@ -13,6 +14,10 @@ export const levelObjectTypes = [
   'SHIP_PORTAL',
   'CUBE_PORTAL',
   'FINISH_PORTAL',
+  'MOVE_TRIGGER',
+  'ALPHA_TRIGGER',
+  'TOGGLE_TRIGGER',
+  'PULSE_TRIGGER',
   'DECORATION_BLOCK',
   'START_MARKER',
 ] as const;
@@ -39,6 +44,7 @@ export const levelDataSchema = z.object({
     background: z.string().min(1).default('default'),
     music: z.string().min(1).default('placeholder-track-01'),
     musicLabel: z.string().min(1).optional(),
+    musicOffsetMs: z.number().min(0).default(0),
     version: z.number().int().default(1),
     colorGroups: z
       .array(
@@ -73,7 +79,19 @@ export const levelObjectDefinitions: Record<
     defaultSize: { w: number; h: number };
     collides: boolean;
     lethal: boolean;
-    effect: 'jumpPad' | 'jumpOrb' | 'gravity' | 'speed' | 'shipMode' | 'cubeMode' | 'finish' | null;
+    effect:
+      | 'jumpPad'
+      | 'jumpOrb'
+      | 'gravity'
+      | 'speed'
+      | 'shipMode'
+      | 'cubeMode'
+      | 'finish'
+      | 'moveTrigger'
+      | 'alphaTrigger'
+      | 'toggleTrigger'
+      | 'pulseTrigger'
+      | null;
   }
 > = {
   GROUND_BLOCK: {
@@ -106,6 +124,13 @@ export const levelObjectDefinitions: Record<
   },
   SPIKE: {
     label: 'Spike',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: true,
+    effect: null,
+  },
+  SAW_BLADE: {
+    label: 'Saw Blade',
     defaultSize: { w: 1, h: 1 },
     collides: false,
     lethal: true,
@@ -160,6 +185,34 @@ export const levelObjectDefinitions: Record<
     lethal: false,
     effect: 'finish',
   },
+  MOVE_TRIGGER: {
+    label: 'Move Trigger',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: 'moveTrigger',
+  },
+  ALPHA_TRIGGER: {
+    label: 'Alpha Trigger',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: 'alphaTrigger',
+  },
+  TOGGLE_TRIGGER: {
+    label: 'Toggle Trigger',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: 'toggleTrigger',
+  },
+  PULSE_TRIGGER: {
+    label: 'Pulse Trigger',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: 'pulseTrigger',
+  },
   DECORATION_BLOCK: {
     label: 'Decoration',
     defaultSize: { w: 1, h: 1 },
@@ -206,6 +259,7 @@ export function createEmptyLevelData(theme = 'neon-grid'): LevelData {
       theme,
       background: 'default',
       music: 'placeholder-track-01',
+      musicOffsetMs: 0,
       version: 1,
       colorGroups: [],
     },
@@ -236,6 +290,7 @@ export function createSampleLevelDataOne(): LevelData {
       theme: 'aurora-grid',
       background: 'city-neon',
       music: 'placeholder-track-01',
+      musicOffsetMs: 0,
       version: 1,
       colorGroups: [],
     },
@@ -275,6 +330,7 @@ export function createSampleLevelDataTwo(): LevelData {
       theme: 'molten-sunset',
       background: 'canyon',
       music: 'placeholder-track-02',
+      musicOffsetMs: 0,
       version: 1,
       colorGroups: [],
     },

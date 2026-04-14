@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { getObjectFillColor, getObjectStrokeColor } from './object-definitions';
+import { getObjectFillColor, getObjectPaintGroupId, getObjectStrokeColor } from './object-definitions';
 import {
   SHIP_FALL_ACCELERATION,
   SHIP_FLIGHT_CEILING_Y,
@@ -13,7 +13,7 @@ import {
 import { readStoredMusicVolume, resolveLevelMusic } from './level-music';
 import { drawStageObjectSprite } from './object-renderer';
 import { getStageThemePalette } from './stage-theme-palette';
-import type { LevelData } from '../../types/models';
+import type { LevelData, LevelObject } from '../../types/models';
 import { Panel } from '../../components/ui';
 import { cn } from '../../utils/cn';
 
@@ -50,7 +50,7 @@ type TrailPoint = {
 };
 
 const solidTypes = new Set(['GROUND_BLOCK', 'HALF_GROUND_BLOCK', 'PLATFORM_BLOCK', 'HALF_PLATFORM_BLOCK']);
-const hazardTypes = new Set(['SPIKE']);
+const hazardTypes = new Set(['SPIKE', 'SAW_BLADE']);
 const JUMP_BUFFER_MS = 130;
 const COYOTE_TIME_MS = 110;
 const AUTO_RESTART_DELAY_MS = 850;
@@ -93,6 +93,7 @@ export function GameCanvas({
   const [isScreenShakeEnabled, setIsScreenShakeEnabled] = useState(true);
   const playerModeLabel = getPlayerModeLabel(levelData.player.mode);
   const resolvedMusic = useMemo(() => resolveLevelMusic(levelData.meta), [levelData.meta]);
+  const musicOffsetMs = Math.max(0, Number(levelData.meta.musicOffsetMs ?? 0) || 0);
   const statusLabel =
     hud.status === 'completed' ? 'Stage Clear' : hud.status === 'failed' ? 'Attempt Lost' : 'In Run';
 
@@ -164,6 +165,7 @@ export function GameCanvas({
 
   useEffect(() => {
     const currentAudio = audioRef.current;
+    const offsetSeconds = musicOffsetMs / 1000;
 
     if (currentAudio) {
       currentAudio.pause();
@@ -181,9 +183,30 @@ export function GameCanvas({
     nextAudio.volume = readStoredMusicVolume();
     audioRef.current = nextAudio;
 
+    const applyMusicOffset = () => {
+      if (!audioRef.current || audioRef.current !== nextAudio) {
+        return;
+      }
+
+      if (!Number.isFinite(offsetSeconds) || offsetSeconds <= 0) {
+        nextAudio.currentTime = 0;
+        return;
+      }
+
+      const duration = Number.isFinite(nextAudio.duration) && nextAudio.duration > 0 ? nextAudio.duration : null;
+      const safeOffset = duration ? Math.min(offsetSeconds, Math.max(0, duration - 0.05)) : offsetSeconds;
+      nextAudio.currentTime = safeOffset;
+    };
+
+    nextAudio.addEventListener('loadedmetadata', applyMusicOffset);
+    if (nextAudio.readyState >= 1) {
+      applyMusicOffset();
+    }
+
     void nextAudio.play().catch(() => {});
 
     return () => {
+      nextAudio.removeEventListener('loadedmetadata', applyMusicOffset);
       nextAudio.pause();
       nextAudio.src = '';
 
@@ -191,7 +214,7 @@ export function GameCanvas({
         audioRef.current = null;
       }
     };
-  }, [resolvedMusic.src, runId]);
+  }, [musicOffsetMs, resolvedMusic.src, runId]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -230,6 +253,29 @@ export function GameCanvas({
     const activeTriggers = new Set<string>();
     const usedOrbs = new Set<string>();
     const trail: TrailPoint[] = [];
+    const sourceObjects = levelData.objects.map((object) => structuredClone(object));
+    let runtimeObjects = sourceObjects.map((object) => structuredClone(object));
+    const alphaOverrides = new Map<string, number>();
+    const disabledObjectIds = new Set<string>();
+    const pulseOverrides = new Map<
+      string,
+      {
+        fillColor?: string;
+        strokeColor?: string;
+        until: number;
+      }
+    >();
+    const moveAnimations = new Map<
+      string,
+      {
+        startX: number;
+        startY: number;
+        targetX: number;
+        targetY: number;
+        startedAt: number;
+        durationMs: number;
+      }
+    >();
     let animationFrame = 0;
     let lastTimestamp = 0;
     let startTime = performance.now();
@@ -241,6 +287,39 @@ export function GameCanvas({
     let shakeTime = 0;
     let shakePower = 0;
     let restartTimeout = 0;
+
+    const resetRuntimeObjects = () => {
+      runtimeObjects = sourceObjects.map((object) => structuredClone(object));
+      alphaOverrides.clear();
+      disabledObjectIds.clear();
+      pulseOverrides.clear();
+      moveAnimations.clear();
+    };
+
+    const restartMusicFromOffset = () => {
+      if (!audioRef.current) {
+        return;
+      }
+
+      const nextTime = musicOffsetMs / 1000;
+      audioRef.current.currentTime = Number.isFinite(nextTime) && nextTime > 0 ? nextTime : 0;
+      audioRef.current.volume = readStoredMusicVolume();
+      void audioRef.current.play().catch(() => {});
+    };
+
+    const getRuntimeObject = (objectId: string) => runtimeObjects.find((object) => object.id === objectId) ?? null;
+    const getObjectsInPaintGroup = (groupId: number) =>
+      runtimeObjects.filter((object) => getObjectPaintGroupId(object) === groupId);
+    const isRuntimeObjectDisabled = (object: LevelObject) => disabledObjectIds.has(object.id);
+    const getRuntimeAlpha = (object: LevelObject) => clamp(alphaOverrides.get(object.id) ?? 1, 0, 1);
+    const getRuntimeVisuals = (object: LevelObject) => {
+      const pulse = pulseOverrides.get(object.id);
+      return {
+        fillColor: pulse?.fillColor ?? getObjectFillColor(object, levelData.meta.colorGroups),
+        strokeColor: pulse?.strokeColor ?? getObjectStrokeColor(object, levelData.meta.colorGroups),
+        alpha: getRuntimeAlpha(object),
+      };
+    };
 
     const resetRun = (timestamp = performance.now()) => {
       if (restartTimeout) {
@@ -260,12 +339,9 @@ export function GameCanvas({
       player.mode = levelData.player.mode;
       player.grounded = false;
       inputHeldRef.current = false;
-      if (audioRef.current) {
-        audioRef.current.currentTime = 0;
-        audioRef.current.volume = readStoredMusicVolume();
-        void audioRef.current.play().catch(() => {});
-      }
+      restartMusicFromOffset();
       currentStatus = 'running';
+      resetRuntimeObjects();
       activeTriggers.clear();
       usedOrbs.clear();
       trail.length = 0;
@@ -307,6 +383,9 @@ export function GameCanvas({
       audio.volume = readStoredMusicVolume();
 
       if (audio.paused) {
+        if (audio.currentTime < musicOffsetMs / 1000) {
+          audio.currentTime = musicOffsetMs / 1000;
+        }
         void audio.play().catch(() => {});
       }
     };
@@ -414,6 +493,10 @@ export function GameCanvas({
       }
 
       currentStatus = 'failed';
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.currentTime = musicOffsetMs / 1000;
+      }
       bumpCamera(12, 0.24);
       const progressPercent = clampProgress((player.x / levelBounds.maxX) * 100);
 
@@ -466,6 +549,30 @@ export function GameCanvas({
       const isPaused = pauseMenuOpenRef.current && currentStatus === 'running';
 
       if (currentStatus === 'running' && !isPaused) {
+        for (const [objectId, animation] of moveAnimations) {
+          const runtimeObject = getRuntimeObject(objectId);
+
+          if (!runtimeObject) {
+            moveAnimations.delete(objectId);
+            continue;
+          }
+
+          const durationMs = Math.max(1, animation.durationMs);
+          const progress = clamp((elapsedMs - animation.startedAt) / durationMs, 0, 1);
+          runtimeObject.x = animation.startX + (animation.targetX - animation.startX) * progress;
+          runtimeObject.y = animation.startY + (animation.targetY - animation.startY) * progress;
+
+          if (progress >= 1) {
+            moveAnimations.delete(objectId);
+          }
+        }
+
+        for (const [objectId, pulse] of pulseOverrides) {
+          if (elapsedMs >= pulse.until) {
+            pulseOverrides.delete(objectId);
+          }
+        }
+
         const horizontalSpeed = BASE_HORIZONTAL_SPEED * player.speedMultiplier;
         const previousX = player.x;
         const previousY = player.y;
@@ -499,8 +606,9 @@ export function GameCanvas({
           }
         }
 
-        for (const object of levelData.objects) {
+        for (const object of runtimeObjects) {
           if (
+            isRuntimeObjectDisabled(object) ||
             !solidTypes.has(object.type) ||
             !aabbIntersects(player.x, player.y, player.w, player.h, object.x, object.y, object.w, object.h)
           ) {
@@ -568,9 +676,10 @@ export function GameCanvas({
             launchPlayer(jumpVelocity);
             jumpBufferedUntil = 0;
           } else {
-            const orb = levelData.objects.find(
+            const orb = runtimeObjects.find(
               (object) =>
                 object.type === 'JUMP_ORB' &&
+                !isRuntimeObjectDisabled(object) &&
                 !usedOrbs.has(object.id) &&
                 aabbIntersects(
                   player.x,
@@ -593,12 +702,16 @@ export function GameCanvas({
           }
         }
 
-        for (const object of levelData.objects) {
+        for (const object of runtimeObjects) {
           if (currentStatus !== 'running') {
             break;
           }
 
-          if (hazardTypes.has(object.type) && spikeIntersects(player, object)) {
+          if (isRuntimeObjectDisabled(object)) {
+            continue;
+          }
+
+          if (hazardTypes.has(object.type) && hazardIntersects(player, object)) {
             markFailed(elapsedMs);
             break;
           }
@@ -645,6 +758,76 @@ export function GameCanvas({
 
             if (object.type === 'FINISH_PORTAL') {
               markCompleted(elapsedMs);
+            }
+
+            if (
+              object.type === 'MOVE_TRIGGER' ||
+              object.type === 'ALPHA_TRIGGER' ||
+              object.type === 'TOGGLE_TRIGGER' ||
+              object.type === 'PULSE_TRIGGER'
+            ) {
+              const targetGroupId = Number(object.props.groupId ?? object.props.paintGroupId ?? 0);
+
+              if (targetGroupId > 0) {
+                const targetObjects = getObjectsInPaintGroup(targetGroupId).filter((entry) => entry.id !== object.id);
+
+                if (object.type === 'MOVE_TRIGGER') {
+                  const moveX = Number(object.props.moveX ?? 2);
+                  const moveY = Number(object.props.moveY ?? 0);
+                  const durationMs = Math.max(1, Number(object.props.durationMs ?? 650));
+
+                  for (const target of targetObjects) {
+                    moveAnimations.set(target.id, {
+                      startX: target.x,
+                      startY: target.y,
+                      targetX: target.x + moveX,
+                      targetY: target.y + moveY,
+                      startedAt: elapsedMs,
+                      durationMs,
+                    });
+                  }
+                }
+
+                if (object.type === 'ALPHA_TRIGGER') {
+                  const alpha = clamp(Number(object.props.alpha ?? 0.35), 0, 1);
+
+                  for (const target of targetObjects) {
+                    alphaOverrides.set(target.id, alpha);
+                  }
+                }
+
+                if (object.type === 'TOGGLE_TRIGGER') {
+                  const enabled = Boolean(object.props.enabled ?? false);
+
+                  for (const target of targetObjects) {
+                    if (enabled) {
+                      disabledObjectIds.delete(target.id);
+                    } else {
+                      disabledObjectIds.add(target.id);
+                    }
+                  }
+                }
+
+                if (object.type === 'PULSE_TRIGGER') {
+                  const durationMs = Math.max(1, Number(object.props.durationMs ?? 900));
+                  const fillColor =
+                    typeof object.props.fillColor === 'string' && object.props.fillColor.trim().length > 0
+                      ? object.props.fillColor
+                      : undefined;
+                  const strokeColor =
+                    typeof object.props.strokeColor === 'string' && object.props.strokeColor.trim().length > 0
+                      ? object.props.strokeColor
+                      : undefined;
+
+                  for (const target of targetObjects) {
+                    pulseOverrides.set(target.id, {
+                      fillColor,
+                      strokeColor,
+                      until: elapsedMs + durationMs,
+                    });
+                  }
+                }
+              }
             }
           }
         }
@@ -729,15 +912,33 @@ export function GameCanvas({
       context.lineTo(cameraX + width + cell * 5, verticalOffset + cell * 10 + cell);
       context.stroke();
 
-      for (const object of levelData.objects) {
+      for (const object of runtimeObjects) {
+        if (isRuntimeObjectDisabled(object)) {
+          continue;
+        }
+
+        const runtimeVisuals = getRuntimeVisuals(object);
+        if (runtimeVisuals.alpha <= 0.02) {
+          continue;
+        }
+
+        const animatedObject =
+          object.type === 'SAW_BLADE'
+            ? {
+                ...object,
+                rotation: (object.rotation ?? 0) + (Number(object.props.rotationSpeed ?? 240) * elapsedMs) / 1000,
+              }
+            : object;
+
         drawObject(
           context,
-          object,
+          animatedObject,
           cell,
           verticalOffset,
           levelData.meta.colorGroups,
           activeTriggers.has(object.id),
           usedOrbs.has(object.id),
+          runtimeVisuals,
         );
       }
 
@@ -785,7 +986,7 @@ export function GameCanvas({
       window.removeEventListener('blur', releaseHeldInput);
       canvas.removeEventListener('pointerdown', pointerDownListener);
     };
-  }, [autoRestartOnFail, fullscreen, levelBounds.maxX, levelBounds.maxY, levelData, onComplete, onFail, runId]);
+  }, [autoRestartOnFail, fullscreen, levelBounds.maxX, levelBounds.maxY, levelData, musicOffsetMs, onComplete, onFail, runId]);
 
       if (fullscreen) {
     return (
@@ -967,13 +1168,18 @@ function drawObject(
   colorGroups: LevelData['meta']['colorGroups'],
   isActive: boolean,
   isUsedOrb: boolean,
+  visualOverride?: {
+    fillColor: string;
+    strokeColor: string;
+    alpha: number;
+  },
 ) {
   const x = object.x * cell;
   const y = verticalOffset + object.y * cell;
   const w = object.w * cell;
   const h = object.h * cell;
-  const fillColor = getObjectFillColor(object, colorGroups);
-  const strokeColor = getObjectStrokeColor(object, colorGroups);
+  const fillColor = visualOverride?.fillColor ?? getObjectFillColor(object, colorGroups);
+  const strokeColor = visualOverride?.strokeColor ?? getObjectStrokeColor(object, colorGroups);
   drawStageObjectSprite({
     context,
     object,
@@ -985,6 +1191,7 @@ function drawObject(
     strokeColor,
     isActive,
     isUsedOrb,
+    alpha: visualOverride?.alpha ?? 1,
   });
 }
 
@@ -1129,6 +1336,30 @@ function spikeIntersects(player: PlayerState, object: LevelData['objects'][numbe
     Math.max(0.2, object.w - 0.36),
     Math.max(0.2, object.h - 0.26),
   );
+}
+
+function sawIntersects(player: PlayerState, object: LevelData['objects'][number]) {
+  const centerX = object.x + object.w / 2;
+  const centerY = object.y + object.h / 2;
+  const radius = Math.max(0.18, Math.min(object.w, object.h) * 0.42);
+  const nearestX = clamp(centerX, player.x, player.x + player.w);
+  const nearestY = clamp(centerY, player.y, player.y + player.h);
+  const deltaX = centerX - nearestX;
+  const deltaY = centerY - nearestY;
+
+  return deltaX * deltaX + deltaY * deltaY <= radius * radius;
+}
+
+function hazardIntersects(player: PlayerState, object: LevelData['objects'][number]) {
+  if (object.type === 'SPIKE') {
+    return spikeIntersects(player, object);
+  }
+
+  if (object.type === 'SAW_BLADE') {
+    return sawIntersects(player, object);
+  }
+
+  return false;
 }
 
 function clampProgress(value: number) {

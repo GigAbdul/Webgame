@@ -69,12 +69,21 @@ export function EditorPage() {
   }
 
   const level = levelQuery.data?.level ?? null;
+  const handleCloseEditor = () => {
+    if (window.history.length > 1) {
+      navigate(-1);
+      return;
+    }
+
+    navigate('/my-levels');
+  };
 
   return (
     <div className="editor-page-shell">
       <LevelEditor
         initialLevel={level}
         draftStorageKey={id ?? 'new'}
+        onClose={handleCloseEditor}
         onSave={(payload) => saveMutation.mutateAsync(payload).then(() => undefined)}
         onSubmit={
           id && user?.role !== 'ADMIN' && !level?.isOfficial

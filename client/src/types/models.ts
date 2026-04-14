@@ -18,6 +18,7 @@ export type LevelObjectType =
   | 'PLATFORM_BLOCK'
   | 'HALF_PLATFORM_BLOCK'
   | 'SPIKE'
+  | 'SAW_BLADE'
   | 'JUMP_PAD'
   | 'JUMP_ORB'
   | 'GRAVITY_PORTAL'
@@ -25,6 +26,10 @@ export type LevelObjectType =
   | 'SHIP_PORTAL'
   | 'CUBE_PORTAL'
   | 'FINISH_PORTAL'
+  | 'MOVE_TRIGGER'
+  | 'ALPHA_TRIGGER'
+  | 'TOGGLE_TRIGGER'
+  | 'PULSE_TRIGGER'
   | 'DECORATION_BLOCK'
   | 'START_MARKER';
 
@@ -54,6 +59,7 @@ export type LevelData = {
     background: string;
     music: string;
     musicLabel?: string;
+    musicOffsetMs?: number;
     version: number;
     colorGroups?: LevelColorGroup[];
   };

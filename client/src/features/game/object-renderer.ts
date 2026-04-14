@@ -11,6 +11,7 @@ type DrawStageObjectOptions = {
   strokeColor: string;
   isActive?: boolean;
   isUsedOrb?: boolean;
+  alpha?: number;
 };
 
 type BlockObjectType =
@@ -43,11 +44,27 @@ export function drawStageObjectSprite({
   strokeColor,
   isActive = false,
   isUsedOrb = false,
+  alpha = 1,
 }: DrawStageObjectOptions) {
   context.save();
+  context.globalAlpha = alpha;
+
+  const normalizedRotation = normalizeRotation(object.rotation ?? 0);
+  if (normalizedRotation !== 0) {
+    context.translate(x + w / 2, y + h / 2);
+    context.rotate(normalizedRotation);
+    x = -w / 2;
+    y = -h / 2;
+  }
 
   if (object.type === 'SPIKE') {
     drawSpikeSprite(context, x, y, w, h, fillColor, strokeColor);
+    context.restore();
+    return;
+  }
+
+  if (object.type === 'SAW_BLADE') {
+    drawSawSprite(context, x, y, w, h, fillColor, strokeColor);
     context.restore();
     return;
   }
@@ -72,6 +89,17 @@ export function drawStageObjectSprite({
     object.type === 'FINISH_PORTAL'
   ) {
     drawPortalSprite(context, object.type, x, y, w, h, fillColor, strokeColor, isActive);
+    context.restore();
+    return;
+  }
+
+  if (
+    object.type === 'MOVE_TRIGGER' ||
+    object.type === 'ALPHA_TRIGGER' ||
+    object.type === 'TOGGLE_TRIGGER' ||
+    object.type === 'PULSE_TRIGGER'
+  ) {
+    drawTriggerSprite(context, object.type, x, y, w, h, fillColor, strokeColor, isActive);
     context.restore();
     return;
   }
@@ -161,6 +189,58 @@ function drawSpikeSprite(
 
   context.strokeStyle = strokeColor;
   context.lineWidth = 2;
+  context.stroke();
+}
+
+function drawSawSprite(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  fillColor: string,
+  strokeColor: string,
+) {
+  const centerX = x + w / 2;
+  const centerY = y + h / 2;
+  const outerRadius = Math.max(10, Math.min(w, h) * 0.48);
+  const innerRadius = outerRadius * 0.72;
+  const toothCount = 10;
+  const gradient = context.createRadialGradient(centerX, centerY, outerRadius * 0.18, centerX, centerY, outerRadius);
+  gradient.addColorStop(0, lightenColor(fillColor, 0.34));
+  gradient.addColorStop(0.48, fillColor);
+  gradient.addColorStop(1, darkenColor(fillColor, 0.34));
+
+  context.beginPath();
+  for (let index = 0; index < toothCount * 2; index += 1) {
+    const angle = (Math.PI * index) / toothCount - Math.PI / 2;
+    const radius = index % 2 === 0 ? outerRadius : innerRadius;
+    const pointX = centerX + Math.cos(angle) * radius;
+    const pointY = centerY + Math.sin(angle) * radius;
+
+    if (index === 0) {
+      context.moveTo(pointX, pointY);
+    } else {
+      context.lineTo(pointX, pointY);
+    }
+  }
+  context.closePath();
+  context.fillStyle = gradient;
+  context.fill();
+
+  context.strokeStyle = strokeColor;
+  context.lineWidth = 2.2;
+  context.stroke();
+
+  context.fillStyle = 'rgba(255,255,255,0.18)';
+  context.beginPath();
+  context.arc(centerX, centerY, outerRadius * 0.42, 0, Math.PI * 2);
+  context.fill();
+
+  context.strokeStyle = 'rgba(255,255,255,0.72)';
+  context.lineWidth = 1.8;
+  context.beginPath();
+  context.arc(centerX, centerY, outerRadius * 0.24, 0, Math.PI * 2);
   context.stroke();
 }
 
@@ -336,6 +416,70 @@ function drawPortalGlyph(
   context.stroke();
 }
 
+function drawTriggerSprite(
+  context: CanvasRenderingContext2D,
+  type: 'MOVE_TRIGGER' | 'ALPHA_TRIGGER' | 'TOGGLE_TRIGGER' | 'PULSE_TRIGGER',
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  fillColor: string,
+  strokeColor: string,
+  isActive: boolean,
+) {
+  const radius = Math.min(w, h) * 0.22;
+  const frameGradient = context.createLinearGradient(x, y, x, y + h);
+  frameGradient.addColorStop(0, lightenColor(fillColor, 0.18));
+  frameGradient.addColorStop(1, darkenColor(fillColor, 0.3));
+  roundedRectPath(context, x, y, w, h, radius);
+  context.fillStyle = frameGradient;
+  context.fill();
+
+  context.lineWidth = 2;
+  context.strokeStyle = strokeColor;
+  roundedRectPath(context, x + 1.5, y + 1.5, Math.max(0, w - 3), Math.max(0, h - 3), Math.max(0, radius - 1));
+  context.stroke();
+
+  context.strokeStyle = isActive ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.4)';
+  context.lineWidth = 1.6;
+  roundedRectPath(context, x + w * 0.12, y + h * 0.12, w * 0.76, h * 0.76, Math.min(w, h) * 0.16);
+  context.stroke();
+
+  context.fillStyle = 'rgba(255,255,255,0.15)';
+  roundedRectPath(context, x + w * 0.18, y + h * 0.18, w * 0.64, h * 0.18, Math.min(w, h) * 0.08);
+  context.fill();
+
+  context.strokeStyle = 'rgba(255,255,255,0.92)';
+  context.lineWidth = 2.2;
+  context.beginPath();
+
+  const centerX = x + w / 2;
+  const centerY = y + h / 2;
+
+  if (type === 'MOVE_TRIGGER') {
+    drawChevronOutline(context, centerX - w * 0.1, centerY, w * 0.16, h * 0.16);
+    drawChevronOutline(context, centerX + w * 0.1, centerY, w * 0.16, h * 0.16);
+    context.moveTo(centerX - w * 0.18, centerY);
+    context.lineTo(centerX + w * 0.18, centerY);
+  } else if (type === 'ALPHA_TRIGGER') {
+    context.arc(centerX, centerY, Math.min(w, h) * 0.16, 0, Math.PI * 2);
+    context.moveTo(centerX, centerY - h * 0.2);
+    context.lineTo(centerX, centerY + h * 0.2);
+  } else if (type === 'TOGGLE_TRIGGER') {
+    context.moveTo(centerX - w * 0.16, centerY);
+    context.lineTo(centerX - w * 0.02, centerY + h * 0.14);
+    context.lineTo(centerX + w * 0.18, centerY - h * 0.12);
+  } else if (type === 'PULSE_TRIGGER') {
+    context.moveTo(centerX - w * 0.2, centerY + h * 0.02);
+    context.lineTo(centerX - w * 0.08, centerY - h * 0.08);
+    context.lineTo(centerX, centerY + h * 0.08);
+    context.lineTo(centerX + w * 0.08, centerY - h * 0.12);
+    context.lineTo(centerX + w * 0.2, centerY);
+  }
+
+  context.stroke();
+}
+
 function drawStartMarkerSprite(
   context: CanvasRenderingContext2D,
   x: number,
@@ -433,6 +577,14 @@ function mixColor(baseHex: string, mixHex: string, amount: number) {
     g: Math.round(base.g + (mix.g - base.g) * amount),
     b: Math.round(base.b + (mix.b - base.b) * amount),
   });
+}
+
+function normalizeRotation(degrees: number) {
+  if (!Number.isFinite(degrees)) {
+    return 0;
+  }
+
+  return (degrees * Math.PI) / 180;
 }
 
 function parseHexColor(hex: string) {
