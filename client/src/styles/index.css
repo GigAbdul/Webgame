@@ -5615,11 +5615,8 @@ body.editor-route-active {
   }
 
   .editor-workbench-toolbar {
-    position: sticky;
-    top: 0;
-    z-index: 12;
     padding: 14px 14px 12px;
-    backdrop-filter: blur(10px);
+    backdrop-filter: none;
   }
 
   .editor-workbench-toolbar-main {
