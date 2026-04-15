@@ -2490,19 +2490,25 @@ export function LevelEditor({
 
       {isMobilePreviewOpen ? (
         <div className="editor-mobile-preview-shell" role="dialog" aria-modal="true" aria-label="Editor preview">
-          <div className="editor-mobile-preview-bar">
-            <div>
-              <p className="font-display text-[9px] tracking-[0.18em] text-[#ffd44a]">Live Test</p>
-              <p className="editor-mobile-preview-title">Preview Run</p>
-            </div>
-            <div className="editor-mobile-preview-actions">
-              <Button variant="ghost" onClick={() => setPreviewRunSeed((current) => current + 1)}>
-                Restart
-              </Button>
-              <Button variant="ghost" onClick={() => setShowPreview(false)}>
-                Close
-              </Button>
-            </div>
+          <div className="editor-mobile-preview-actions" aria-label="Preview controls">
+            <button
+              type="button"
+              className="editor-mobile-preview-action"
+              onClick={() => setPreviewRunSeed((current) => current + 1)}
+              aria-label="Restart preview"
+              title="Restart preview"
+            >
+              <span aria-hidden="true">↻</span>
+            </button>
+            <button
+              type="button"
+              className="editor-mobile-preview-action editor-mobile-preview-action--close"
+              onClick={() => setShowPreview(false)}
+              aria-label="Close preview"
+              title="Close preview"
+            >
+              <span aria-hidden="true">&times;</span>
+            </button>
           </div>
 
           <GameCanvas
@@ -2524,6 +2530,9 @@ export function LevelEditor({
               <h3 className="font-display text-2xl text-white">Test Lane</h3>
             </div>
             <div className="editor-stage-actions">
+              <Button variant="ghost" onClick={() => setPreviewRunSeed((current) => current + 1)}>
+                Restart
+              </Button>
               <Button variant="ghost" onClick={() => setShowPreview(false)}>
                 Hide Preview
               </Button>

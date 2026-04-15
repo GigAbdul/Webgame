@@ -90,6 +90,8 @@ export function GameCanvas({
   const onFailRef = useRef(onFail);
   const onCompleteRef = useRef(onComplete);
   const inputHeldRef = useRef(false);
+  const keyboardInputHeldRef = useRef(false);
+  const activePointerIdsRef = useRef<Set<number>>(new Set());
   const pauseMenuOpenRef = useRef(false);
   const pauseSettingsOpenRef = useRef(false);
   const pauseStartedAtRef = useRef<number | null>(null);
@@ -265,15 +267,16 @@ export function GameCanvas({
       return;
     }
 
-    const width = 960;
-    const height = 540;
     const isExternallyManagedRun = Boolean(onFail || onComplete);
     const isLowPowerDevice =
       typeof window !== 'undefined' && (window.matchMedia('(pointer: coarse)').matches || window.innerWidth < 820);
+    const isMobilePreviewPerformanceMode = fullscreen && autoRestartOnFail && previewStartPosEnabled && isLowPowerDevice;
+    const width = isMobilePreviewPerformanceMode ? 800 : 960;
+    const height = isMobilePreviewPerformanceMode ? 450 : 540;
     canvas.width = width;
     canvas.height = height;
 
-    const cell = 36;
+    const cell = (36 * width) / 960;
     const verticalOffset = Math.max(40, height - levelBounds.maxY * cell - 50);
     const player: PlayerState = {
       x: previewBootstrap.startX,
@@ -328,6 +331,16 @@ export function GameCanvas({
     let shakeTime = 0;
     let shakePower = 0;
     let restartTimeout = 0;
+
+    const syncInputHeldState = () => {
+      inputHeldRef.current = keyboardInputHeldRef.current || activePointerIdsRef.current.size > 0;
+    };
+
+    const releaseAllHeldInput = () => {
+      keyboardInputHeldRef.current = false;
+      activePointerIdsRef.current.clear();
+      syncInputHeldState();
+    };
 
     const rebuildRuntimeObjectBuckets = () => {
       runtimeObjectBuckets = buildRuntimeObjectBuckets(runtimeObjects);
@@ -434,7 +447,7 @@ export function GameCanvas({
       player.speedMultiplier = previewBootstrap.speedMultiplier;
       player.mode = previewBootstrap.mode;
       player.grounded = false;
-      inputHeldRef.current = false;
+      releaseAllHeldInput();
       restartMusicFromOffset();
       currentStatus = 'running';
       resetRuntimeObjects();
@@ -546,7 +559,8 @@ export function GameCanvas({
 
       if (GAMEPLAY_INPUT_CODES.has(event.code)) {
         event.preventDefault();
-        inputHeldRef.current = true;
+        keyboardInputHeldRef.current = true;
+        syncInputHeldState();
         ensureAudioPlayback();
         if (player.mode === 'cube') {
           queueJump();
@@ -570,16 +584,22 @@ export function GameCanvas({
 
     const keyUpListener = (event: KeyboardEvent) => {
       if (GAMEPLAY_INPUT_CODES.has(event.code)) {
-        inputHeldRef.current = false;
+        keyboardInputHeldRef.current = false;
+        syncInputHeldState();
       }
     };
 
-    const pointerDownListener = () => {
+    const pointerDownListener = (event: PointerEvent) => {
       if (pauseMenuOpenRef.current) {
         return;
       }
 
-      inputHeldRef.current = true;
+      if (event.pointerType === 'mouse' && event.button !== 0) {
+        return;
+      }
+
+      activePointerIdsRef.current.add(event.pointerId);
+      syncInputHeldState();
       ensureAudioPlayback();
 
       if (currentStatus === 'running') {
@@ -594,14 +614,39 @@ export function GameCanvas({
       }
     };
 
-    const releaseHeldInput = () => {
-      inputHeldRef.current = false;
+    const releaseHeldInput = (event?: PointerEvent) => {
+      if (event && activePointerIdsRef.current.has(event.pointerId)) {
+        activePointerIdsRef.current.delete(event.pointerId);
+      } else if (!event) {
+        activePointerIdsRef.current.clear();
+      }
+      syncInputHeldState();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') {
+        releaseAllHeldInput();
+      }
+    };
+
+    const handleTouchRelease = () => {
+      activePointerIdsRef.current.clear();
+      syncInputHeldState();
+    };
+
+    const handleWindowBlur = () => {
+      releaseAllHeldInput();
     };
 
     window.addEventListener('keydown', keyListener);
     window.addEventListener('keyup', keyUpListener);
     window.addEventListener('pointerup', releaseHeldInput);
-    window.addEventListener('blur', releaseHeldInput);
+    window.addEventListener('pointercancel', releaseHeldInput);
+    window.addEventListener('blur', handleWindowBlur);
+    window.addEventListener('pagehide', releaseAllHeldInput);
+    window.addEventListener('touchend', handleTouchRelease, { passive: true });
+    window.addEventListener('touchcancel', handleTouchRelease, { passive: true });
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     canvas.addEventListener('pointerdown', pointerDownListener);
 
     const markFailed = (elapsedMs: number) => {
@@ -1054,7 +1099,7 @@ export function GameCanvas({
           size: 0.82,
         });
 
-        if (trail.length > (isLowPowerDevice ? 6 : 12)) {
+        if (trail.length > (isMobilePreviewPerformanceMode ? 3 : isLowPowerDevice ? 6 : 12)) {
           trail.shift();
         }
 
@@ -1087,7 +1132,15 @@ export function GameCanvas({
       }
 
       context.clearRect(0, 0, width, height);
-      drawBackdrop(context, width, height, elapsedMs, levelData.meta.theme, isLowPowerDevice);
+      drawBackdrop(
+        context,
+        width,
+        height,
+        elapsedMs,
+        levelData.meta.theme,
+        isLowPowerDevice,
+        isMobilePreviewPerformanceMode,
+      );
 
       context.save();
       context.translate(-(cameraX + shakeOffsetX), 0);
@@ -1181,10 +1234,15 @@ export function GameCanvas({
       window.removeEventListener('keydown', keyListener);
       window.removeEventListener('keyup', keyUpListener);
       window.removeEventListener('pointerup', releaseHeldInput);
-      window.removeEventListener('blur', releaseHeldInput);
+      window.removeEventListener('pointercancel', releaseHeldInput);
+      window.removeEventListener('blur', handleWindowBlur);
+      window.removeEventListener('pagehide', releaseAllHeldInput);
+      window.removeEventListener('touchend', handleTouchRelease);
+      window.removeEventListener('touchcancel', handleTouchRelease);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       canvas.removeEventListener('pointerdown', pointerDownListener);
     };
-  }, [autoRestartOnFail, fullscreen, levelBounds.maxX, levelBounds.maxY, levelData, onComplete, onFail, previewBootstrap, runId, runtimeMusicOffsetMs]);
+  }, [autoRestartOnFail, fullscreen, levelBounds.maxX, levelBounds.maxY, levelData, onComplete, onFail, previewBootstrap, previewStartPosEnabled, runId, runtimeMusicOffsetMs]);
 
       if (fullscreen) {
     return (
@@ -1953,6 +2011,7 @@ function drawBackdrop(
   elapsedMs: number,
   theme: string,
   lowPower = false,
+  ultraLowPower = false,
 ) {
   const stageTheme = getStageThemePalette(theme);
   const gradient = context.createLinearGradient(0, 0, 0, height);
@@ -1968,9 +2027,9 @@ function drawBackdrop(
   context.fillStyle = glow;
   context.fillRect(0, 0, width, height);
 
-  const drift = (elapsedMs / 1000) * 16;
-  const starCount = lowPower ? 24 : 56;
-  const panelStride = lowPower ? 156 : 120;
+  const drift = (elapsedMs / 1000) * (ultraLowPower ? 10 : 16);
+  const starCount = ultraLowPower ? 12 : lowPower ? 24 : 56;
+  const panelStride = ultraLowPower ? 196 : lowPower ? 156 : 120;
 
   context.fillStyle = stageTheme.runtimeStarColor;
   for (let index = 0; index < starCount; index += 1) {
@@ -1981,9 +2040,12 @@ function drawBackdrop(
   }
 
   context.fillStyle = stageTheme.runtimePanelTint;
+  const panelYStride = ultraLowPower ? 168 : 120;
+  const panelSize = ultraLowPower ? 64 : 82;
+
   for (let x = -120; x < width + 120; x += panelStride) {
-    for (let y = 18; y < height; y += 120) {
-      context.fillRect(x + (drift % 120), y, 82, 82);
+    for (let y = 18; y < height; y += panelYStride) {
+      context.fillRect(x + (drift % panelStride), y, panelSize, panelSize);
     }
   }
 
