@@ -50,8 +50,22 @@ type DragState =
       objectId: string;
       offsetX: number;
       offsetY: number;
+      originX: number;
+      originY: number;
+    }
+  | {
+      mode: 'box-select';
+      startScreenX: number;
+      startScreenY: number;
     }
   | null;
+
+type SelectionBox = {
+  startScreenX: number;
+  startScreenY: number;
+  endScreenX: number;
+  endScreenY: number;
+};
 
 type TouchGestureState = {
   startDistance: number;
@@ -111,6 +125,7 @@ const EDITOR_DEFAULT_PAN_X = 60;
 const EDITOR_DEFAULT_PAN_Y = 80;
 const EDITOR_SCROLL_PADDING_UNITS = 6;
 const MAX_CUSTOM_MUSIC_FILE_SIZE_BYTES = 8 * 1024 * 1024;
+const MAX_EDITOR_HISTORY_STEPS = 40;
 
 type EditorInitialState = {
   title: string;
@@ -213,6 +228,9 @@ export function LevelEditor({
   const [historyIndex, setHistoryIndex] = useState(0);
   const [selectedTool, setSelectedTool] = useState<EditorTool>('select');
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
+  const [selectedObjectIds, setSelectedObjectIds] = useState<string[]>([]);
+  const [dragPreviewPosition, setDragPreviewPosition] = useState<{ objectId: string; x: number; y: number } | null>(null);
+  const [selectionBox, setSelectionBox] = useState<SelectionBox | null>(null);
   const [activePaletteGroup, setActivePaletteGroup] = useState<string>('Blocks');
   const [paletteDrawerGroup, setPaletteDrawerGroup] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
@@ -233,6 +251,7 @@ export function LevelEditor({
   const dragRef = useRef<DragState>(null);
   const isSpacePressedRef = useRef(false);
   const liveLevelDataRef = useRef(levelData);
+  const dragPreviewPositionRef = useRef<{ objectId: string; x: number; y: number } | null>(null);
   const touchPointsRef = useRef(new Map<number, { x: number; y: number }>());
   const touchGestureRef = useRef<TouchGestureState | null>(null);
 
@@ -254,6 +273,10 @@ export function LevelEditor({
     setHistoryIndex(0);
     setSelectedTool('select');
     setSelectedObjectId(null);
+    setSelectedObjectIds([]);
+    dragPreviewPositionRef.current = null;
+    setDragPreviewPosition(null);
+    setSelectionBox(null);
     setActivePaletteGroup('Blocks');
     setPaletteDrawerGroup(null);
     setZoom(1);
@@ -273,6 +296,24 @@ export function LevelEditor({
     liveLevelDataRef.current = levelData;
   }, [levelData]);
 
+  const applySelection = useCallback((nextIds: string[], nextPrimaryId?: string | null) => {
+    const uniqueIds = [...new Set(nextIds)];
+    const primaryId =
+      nextPrimaryId && uniqueIds.includes(nextPrimaryId)
+        ? nextPrimaryId
+        : uniqueIds[0] ?? null;
+
+    setSelectedObjectIds(uniqueIds);
+    setSelectedObjectId(primaryId);
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    applySelection([], null);
+    dragPreviewPositionRef.current = null;
+    setDragPreviewPosition(null);
+    setSelectionBox(null);
+  }, [applySelection]);
+
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       writeLocalEditorDraft(draftStorageKey, {
@@ -282,16 +323,45 @@ export function LevelEditor({
         dataJson: levelData,
         levelId: initialLevel?.id ?? null,
       });
-    }, 250);
+    }, 1200);
 
     return () => {
       window.clearTimeout(timeoutId);
     };
   }, [description, draftStorageKey, initialLevel?.id, levelData, theme, title]);
 
-  const selectedObject = useMemo(
-    () => levelData.objects.find((object) => object.id === selectedObjectId) ?? null,
-    [levelData.objects, selectedObjectId],
+  const selectedObject = useMemo(() => {
+    const baseObject = levelData.objects.find((object) => object.id === selectedObjectId) ?? null;
+
+    if (!baseObject) {
+      return null;
+    }
+
+    if (dragPreviewPosition?.objectId === baseObject.id) {
+      return {
+        ...baseObject,
+        x: dragPreviewPosition.x,
+        y: dragPreviewPosition.y,
+      };
+    }
+
+    return baseObject;
+  }, [dragPreviewPosition, levelData.objects, selectedObjectId]);
+  const selectedObjectIdSet = useMemo(() => new Set(selectedObjectIds), [selectedObjectIds]);
+  const selectedObjects = useMemo(
+    () =>
+      levelData.objects.filter((object) => selectedObjectIdSet.has(object.id)).map((object) => {
+        if (dragPreviewPosition?.objectId === object.id) {
+          return {
+            ...object,
+            x: dragPreviewPosition.x,
+            y: dragPreviewPosition.y,
+          };
+        }
+
+        return object;
+      }),
+    [dragPreviewPosition, levelData.objects, selectedObjectIdSet],
   );
   const selectedDefinition = useMemo(
     () => (selectedObject ? levelObjectDefinitions[selectedObject.type] : null),
@@ -307,21 +377,33 @@ export function LevelEditor({
   const stageThemePalette = useMemo(() => getStageThemePalette(theme), [theme]);
   const colorGroups = useMemo(() => levelData.meta.colorGroups ?? [], [levelData.meta.colorGroups]);
   const resolvedMusic = useMemo(() => resolveLevelMusic(levelData.meta), [levelData.meta]);
-  const selectionLabel = selectedObject ? selectedDefinition?.label ?? selectedObject.type : 'Nothing selected';
-  const paintableSelectedObject =
-    selectedObject && isPaintableObjectType(selectedObject.type) ? selectedObject : null;
-  const selectedTriggerObject = selectedObject && isTriggerObjectType(selectedObject.type) ? selectedObject : null;
+  const selectionLabel =
+    selectedObjects.length > 1
+      ? `${selectedObjects.length} objects`
+      : selectedObject
+        ? selectedDefinition?.label ?? selectedObject.type
+        : 'Nothing selected';
+  const paintableSelectedObject = selectedObject && isPaintableObjectType(selectedObject.type) ? selectedObject : null;
+  const paintableSelectedObjects = useMemo(
+    () => selectedObjects.filter((object) => isPaintableObjectType(object.type)),
+    [selectedObjects],
+  );
+  const selectedTriggerObject =
+    selectedObjects.length === 1 && selectedObject && isTriggerObjectType(selectedObject.type) ? selectedObject : null;
   const selectedPaintGroupId = getObjectPaintGroupId(paintableSelectedObject);
   const normalizedSelectedRotation = normalizeQuarterRotation(selectedObject?.rotation ?? 0);
   const activePaintTool =
     selectedTool !== 'select' && selectedTool !== 'pan' && isPaintableObjectType(selectedTool) ? selectedTool : null;
-  const canOpenPaintPopup = Boolean(paintableSelectedObject || activePaintTool || colorGroups.length > 0);
+  const canOpenPaintPopup = Boolean(paintableSelectedObjects.length > 0 || activePaintTool || colorGroups.length > 0);
   const canUndo = historyIndex > 0;
   const canRedo = historyIndex < history.length - 1;
   const historyPosition = `${historyIndex + 1}/${history.length}`;
-  const selectionSummary = selectedObject
-    ? `${selectedDefinition?.label ?? selectedObject.type} at ${selectedObject.x}, ${selectedObject.y}`
-    : 'No object selected';
+  const selectionSummary =
+    selectedObjects.length > 1
+      ? `${selectedObjects.length} objects selected`
+      : selectedObject
+        ? `${selectedDefinition?.label ?? selectedObject.type} at ${selectedObject.x}, ${selectedObject.y}`
+        : 'No object selected';
   const objectCount = String(levelData.objects.length);
   const musicOffsetMsValue = Math.max(0, Number(levelData.meta.musicOffsetMs ?? 0) || 0);
   const stageCell = levelData.meta.gridSize * zoom;
@@ -329,15 +411,48 @@ export function LevelEditor({
   const horizontalScrollMax = Math.max(0, levelData.meta.lengthUnits + EDITOR_SCROLL_PADDING_UNITS - visibleStageUnits);
   const horizontalScrollValue = clamp((EDITOR_DEFAULT_PAN_X - pan.x) / stageCell, 0, horizontalScrollMax);
 
+  const commitLevelData = useCallback(
+    (next: LevelData, options?: { pushHistory?: boolean }) => {
+      const normalized = syncDerivedLevelData(next);
+      const shouldPushHistory = options?.pushHistory ?? true;
+
+      if (shouldPushHistory) {
+        const trimmedHistory = history.slice(0, historyIndex + 1);
+        const nextHistory = [...trimmedHistory, normalized];
+        const cappedHistory =
+          nextHistory.length > MAX_EDITOR_HISTORY_STEPS
+            ? nextHistory.slice(nextHistory.length - MAX_EDITOR_HISTORY_STEPS)
+            : nextHistory;
+
+        setHistory(cappedHistory);
+        setHistoryIndex(cappedHistory.length - 1);
+      }
+
+      liveLevelDataRef.current = normalized;
+      setLevelData(normalized);
+    },
+    [history, historyIndex],
+  );
+
   useEffect(() => {
     setActivePaletteGroup(getPaletteGroupTitle(selectedTool));
   }, [selectedTool]);
 
   useEffect(() => {
-    if (!paintableSelectedObject) {
+    if (!paintableSelectedObjects.length && !activePaintTool && colorGroups.length === 0) {
       setIsPaintPopupOpen(false);
     }
-  }, [paintableSelectedObject]);
+  }, [activePaintTool, colorGroups.length, paintableSelectedObjects.length]);
+
+  useEffect(() => {
+    const availableIds = new Set(levelData.objects.map((object) => object.id));
+    const nextIds = selectedObjectIds.filter((id) => availableIds.has(id));
+    const nextPrimaryId = selectedObjectId && availableIds.has(selectedObjectId) ? selectedObjectId : nextIds[0] ?? null;
+
+    if (nextIds.length !== selectedObjectIds.length || nextPrimaryId !== selectedObjectId) {
+      applySelection(nextIds, nextPrimaryId);
+    }
+  }, [applySelection, levelData.objects, selectedObjectId, selectedObjectIds]);
 
   useEffect(() => {
     if (activePaintGroupId && !getColorGroupById(colorGroups, activePaintGroupId)) {
@@ -407,7 +522,11 @@ export function LevelEditor({
         event.preventDefault();
         if (historyIndex > 0) {
           const nextIndex = historyIndex - 1;
+          setSelectionBox(null);
+          dragPreviewPositionRef.current = null;
+          setDragPreviewPosition(null);
           setHistoryIndex(nextIndex);
+          liveLevelDataRef.current = history[nextIndex];
           setLevelData(history[nextIndex]);
         }
       }
@@ -419,55 +538,61 @@ export function LevelEditor({
         event.preventDefault();
         if (historyIndex < history.length - 1) {
           const nextIndex = historyIndex + 1;
+          setSelectionBox(null);
+          dragPreviewPositionRef.current = null;
+          setDragPreviewPosition(null);
           setHistoryIndex(nextIndex);
+          liveLevelDataRef.current = history[nextIndex];
           setLevelData(history[nextIndex]);
         }
       }
 
       if ((event.ctrlKey || event.metaKey) && event.code === 'KeyD' && selectedObject) {
         event.preventDefault();
-        if (selectedObject.type === 'START_MARKER' || selectedObject.type === 'FINISH_PORTAL') {
+        const next = structuredClone(liveLevelDataRef.current);
+        const selectedIdsSet = new Set(selectedObjectIds);
+        const cloneIds: string[] = [];
+
+        for (const source of next.objects.filter((object) => selectedIdsSet.has(object.id))) {
+          if (source.type === 'START_MARKER' || source.type === 'FINISH_PORTAL') {
+            continue;
+          }
+
+          const clone = structuredClone(source);
+          clone.id = `${clone.id}-copy-${Date.now()}-${cloneIds.length}`;
+          clone.x += 1;
+          next.objects.push(clone);
+          cloneIds.push(clone.id);
+        }
+
+        if (!cloneIds.length) {
           return;
         }
 
-        const next = structuredClone(levelData);
-        const clone = structuredClone(selectedObject);
-        clone.id = `${clone.id}-copy-${Date.now()}`;
-        clone.x += 1;
-        next.objects.push(clone);
-        syncDerivedLevelData(next);
-
-        const trimmedHistory = history.slice(0, historyIndex + 1);
-        const nextHistory = [...trimmedHistory, next];
-        setHistory(nextHistory);
-        setHistoryIndex(nextHistory.length - 1);
-        setLevelData(next);
-        setSelectedObjectId(clone.id);
+        commitLevelData(next);
+        applySelection(cloneIds, cloneIds[0]);
       }
 
-      if ((event.key === 'Delete' || event.key === 'Backspace') && selectedObjectId) {
+      if ((event.key === 'Delete' || event.key === 'Backspace') && selectedObjectIds.length) {
         event.preventDefault();
-        if (selectedObject?.type === 'START_MARKER' || selectedObject?.type === 'FINISH_PORTAL') {
-          return;
-        }
+        const next = structuredClone(liveLevelDataRef.current);
+        const selectedIdsSet = new Set(selectedObjectIds);
+        next.objects = next.objects.filter((object) => {
+          if (!selectedIdsSet.has(object.id)) {
+            return true;
+          }
 
-        const next = structuredClone(levelData);
-        next.objects = next.objects.filter((object) => object.id !== selectedObjectId);
-        syncDerivedLevelData(next);
-
-        const trimmedHistory = history.slice(0, historyIndex + 1);
-        const nextHistory = [...trimmedHistory, next];
-        setHistory(nextHistory);
-        setHistoryIndex(nextHistory.length - 1);
-        setLevelData(next);
-        setSelectedObjectId(null);
+          return object.type === 'START_MARKER' || object.type === 'FINISH_PORTAL';
+        });
+        commitLevelData(next);
+        clearSelection();
       }
 
       if (event.key === 'Escape') {
-        setSelectedObjectId(null);
+        clearSelection();
       }
 
-      if (!showPreview && selectedObjectId && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+      if (!showPreview && selectedObjectIds.length && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
         event.preventDefault();
         const delta = {
           ArrowUp: { x: 0, y: -1 },
@@ -476,12 +601,18 @@ export function LevelEditor({
           ArrowRight: { x: 1, y: 0 },
         }[event.key]!;
 
-        const next = structuredClone(levelData);
-        const object = next.objects.find((entry) => entry.id === selectedObjectId);
+        const next = structuredClone(liveLevelDataRef.current);
+        const selectedIdsSet = new Set(selectedObjectIds);
+        let movedAny = false;
 
-        if (object) {
+        for (const object of next.objects) {
+          if (!selectedIdsSet.has(object.id)) {
+            continue;
+          }
+
           object.x += delta.x;
           object.y += delta.y;
+          movedAny = true;
 
           if (object.type === 'START_MARKER') {
             next.player.startX = object.x;
@@ -492,14 +623,10 @@ export function LevelEditor({
             next.finish.x = object.x;
             next.finish.y = object.y;
           }
+        }
 
-          syncDerivedLevelData(next);
-
-          const trimmedHistory = history.slice(0, historyIndex + 1);
-          const nextHistory = [...trimmedHistory, next];
-          setHistory(nextHistory);
-          setHistoryIndex(nextHistory.length - 1);
-          setLevelData(next);
+        if (movedAny) {
+          commitLevelData(next);
         }
       }
     };
@@ -517,7 +644,7 @@ export function LevelEditor({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [history, historyIndex, levelData, selectedObject, selectedObjectId, showPreview]);
+  }, [applySelection, clearSelection, commitLevelData, history, historyIndex, selectedObject, selectedObjectIds, showPreview]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -603,15 +730,23 @@ export function LevelEditor({
     }
 
     for (const object of levelData.objects) {
-      const { x, y } = worldToScreen(object.x, object.y, pan.x, pan.y, cell);
-      const w = object.w * cell;
-      const h = object.h * cell;
-      const fillColor = getObjectFillColor(object, colorGroups);
-      const strokeColor = getObjectStrokeColor(object, colorGroups);
+      const drawableObject =
+        dragPreviewPosition?.objectId === object.id
+          ? {
+              ...object,
+              x: dragPreviewPosition.x,
+              y: dragPreviewPosition.y,
+            }
+          : object;
+      const { x, y } = worldToScreen(drawableObject.x, drawableObject.y, pan.x, pan.y, cell);
+      const w = drawableObject.w * cell;
+      const h = drawableObject.h * cell;
+      const fillColor = getObjectFillColor(drawableObject, colorGroups);
+      const strokeColor = getObjectStrokeColor(drawableObject, colorGroups);
 
       drawStageObjectSprite({
         context,
-        object,
+        object: drawableObject,
         x,
         y,
         w,
@@ -620,26 +755,38 @@ export function LevelEditor({
         strokeColor,
       });
 
-      if (object.id === selectedObjectId) {
-        context.strokeStyle = '#ffffff';
-        context.lineWidth = 2;
+      if (selectedObjectIdSet.has(drawableObject.id)) {
+        context.strokeStyle = drawableObject.id === selectedObjectId ? '#ffffff' : 'rgba(130, 246, 255, 0.86)';
+        context.lineWidth = drawableObject.id === selectedObjectId ? 2 : 1.5;
         context.strokeRect(x - 2, y - 2, w + 4, h + 4);
       }
     }
-  }, [canvasViewport.height, canvasViewport.width, colorGroups, levelData, pan, selectedObjectId, zoom]);
 
-  const updateLevelData = (mutator: (draft: LevelData) => void) => {
-    const next = structuredClone(levelData);
-    mutator(next);
-    syncDerivedLevelData(next);
+    if (selectionBox) {
+      const left = Math.min(selectionBox.startScreenX, selectionBox.endScreenX);
+      const top = Math.min(selectionBox.startScreenY, selectionBox.endScreenY);
+      const width = Math.abs(selectionBox.endScreenX - selectionBox.startScreenX);
+      const height = Math.abs(selectionBox.endScreenY - selectionBox.startScreenY);
 
-    const trimmedHistory = history.slice(0, historyIndex + 1);
-    const nextHistory = [...trimmedHistory, next];
+      context.save();
+      context.fillStyle = 'rgba(130, 246, 255, 0.14)';
+      context.strokeStyle = 'rgba(255, 255, 255, 0.92)';
+      context.lineWidth = 2;
+      context.setLineDash([7, 5]);
+      context.fillRect(left, top, width, height);
+      context.strokeRect(left, top, width, height);
+      context.restore();
+    }
+  }, [canvasViewport.height, canvasViewport.width, colorGroups, dragPreviewPosition, levelData, pan, selectedObjectId, selectedObjectIdSet, selectionBox, zoom]);
 
-    setHistory(nextHistory);
-    setHistoryIndex(nextHistory.length - 1);
-    setLevelData(next);
-  };
+  const updateLevelData = useCallback(
+    (mutator: (draft: LevelData) => void, options?: { pushHistory?: boolean }) => {
+      const next = structuredClone(liveLevelDataRef.current);
+      mutator(next);
+      commitLevelData(next, options);
+    },
+    [commitLevelData],
+  );
 
   const performUndo = () => {
     if (historyIndex === 0) {
@@ -647,7 +794,10 @@ export function LevelEditor({
     }
 
     const nextIndex = historyIndex - 1;
+    dragPreviewPositionRef.current = null;
+    setDragPreviewPosition(null);
     setHistoryIndex(nextIndex);
+    liveLevelDataRef.current = history[nextIndex];
     setLevelData(history[nextIndex]);
   };
 
@@ -657,7 +807,10 @@ export function LevelEditor({
     }
 
     const nextIndex = historyIndex + 1;
+    dragPreviewPositionRef.current = null;
+    setDragPreviewPosition(null);
     setHistoryIndex(nextIndex);
+    liveLevelDataRef.current = history[nextIndex];
     setLevelData(history[nextIndex]);
   };
 
@@ -707,53 +860,64 @@ export function LevelEditor({
       };
 
       draft.objects.push(object);
-      setSelectedObjectId(object.id);
+      applySelection([object.id], object.id);
     });
   };
 
   const duplicateSelected = () => {
-    if (!selectedObject) {
-      return;
-    }
-
-    if (selectedObject.type === 'START_MARKER' || selectedObject.type === 'FINISH_PORTAL') {
+    if (!selectedObjectIds.length) {
       return;
     }
 
     updateLevelData((draft) => {
-      const clone = structuredClone(selectedObject);
-      clone.id = `${clone.id}-copy-${Date.now()}`;
-      clone.x += 1;
-      draft.objects.push(clone);
-      setSelectedObjectId(clone.id);
+      const selectedIdsSet = new Set(selectedObjectIds);
+      const cloneIds: string[] = [];
+
+      for (const source of draft.objects.filter((object) => selectedIdsSet.has(object.id))) {
+        if (source.type === 'START_MARKER' || source.type === 'FINISH_PORTAL') {
+          continue;
+        }
+
+        const clone = structuredClone(source);
+        clone.id = `${clone.id}-copy-${Date.now()}-${cloneIds.length}`;
+        clone.x += 1;
+        draft.objects.push(clone);
+        cloneIds.push(clone.id);
+      }
+
+      if (cloneIds.length) {
+        applySelection(cloneIds, cloneIds[0]);
+      }
     });
   };
 
   const deleteSelected = () => {
-    if (!selectedObjectId) {
-      return;
-    }
-
-    if (selectedObject?.type === 'START_MARKER' || selectedObject?.type === 'FINISH_PORTAL') {
+    if (!selectedObjectIds.length) {
       return;
     }
 
     updateLevelData((draft) => {
-      draft.objects = draft.objects.filter((object) => object.id !== selectedObjectId);
+      const selectedIdsSet = new Set(selectedObjectIds);
+      draft.objects = draft.objects.filter((object) => {
+        if (!selectedIdsSet.has(object.id)) {
+          return true;
+        }
+
+        return object.type === 'START_MARKER' || object.type === 'FINISH_PORTAL';
+      });
     });
-    setSelectedObjectId(null);
+    clearSelection();
   };
 
   const applyThemePreset = (nextTheme: string) => {
     setTheme(nextTheme);
-    setLevelData((current) => ({
-      ...current,
-      meta: {
-        ...current.meta,
+    updateLevelData((draft) => {
+      draft.meta = {
+        ...draft.meta,
         theme: nextTheme,
         background: nextTheme,
-      },
-    }));
+      };
+    });
   };
 
   const setPlayerMode = (nextMode: LevelData['player']['mode']) => {
@@ -977,40 +1141,38 @@ export function LevelEditor({
   };
 
   const resetSelectedObjectPaint = () => {
-    if (!selectedObjectId) {
+    if (!paintableSelectedObjects.length) {
       return;
     }
 
     updateLevelData((draft) => {
-      const object = draft.objects.find((entry) => entry.id === selectedObjectId);
+      const selectedIdsSet = new Set(paintableSelectedObjects.map((object) => object.id));
 
-      if (!object || !isPaintableObjectType(object.type)) {
-        return;
+      for (const object of draft.objects) {
+        if (!selectedIdsSet.has(object.id) || !isPaintableObjectType(object.type)) {
+          continue;
+        }
+
+        const nextProps = { ...object.props };
+        delete nextProps.paintGroupId;
+        delete nextProps.fillColor;
+        delete nextProps.strokeColor;
+        object.props = nextProps;
       }
-
-      const nextProps = { ...object.props };
-      delete nextProps.paintGroupId;
-      delete nextProps.fillColor;
-      delete nextProps.strokeColor;
-      object.props = nextProps;
     });
   };
 
   const assignSelectedObjectToPaintGroup = (groupId: number) => {
-    if (!paintableSelectedObject) {
+    if (!paintableSelectedObjects.length) {
       return;
     }
 
     updateLevelData((draft) => {
-      const object = draft.objects.find((entry) => entry.id === paintableSelectedObject.id);
-
-      if (!object || !isPaintableObjectType(object.type)) {
-        return;
-      }
-
+      const selectedIdsSet = new Set(paintableSelectedObjects.map((object) => object.id));
       const currentGroups = draft.meta.colorGroups ?? [];
-      const fillColor = getObjectFillColor(object, currentGroups);
-      const strokeColor = getObjectStrokeColor(object, currentGroups);
+      const anchorObject = paintableSelectedObjects[0];
+      const fillColor = getObjectFillColor(anchorObject, currentGroups);
+      const strokeColor = getObjectStrokeColor(anchorObject, currentGroups);
       const nextGroups = currentGroups.filter((group) => group.id !== groupId);
       nextGroups.push({
         id: groupId,
@@ -1019,37 +1181,46 @@ export function LevelEditor({
       });
       nextGroups.sort((left, right) => left.id - right.id);
       draft.meta.colorGroups = nextGroups;
-      object.props = {
-        ...object.props,
-        paintGroupId: groupId,
-      };
-      delete object.props.fillColor;
-      delete object.props.strokeColor;
+
+      for (const object of draft.objects) {
+        if (!selectedIdsSet.has(object.id) || !isPaintableObjectType(object.type)) {
+          continue;
+        }
+
+        object.props = {
+          ...object.props,
+          paintGroupId: groupId,
+        };
+        delete object.props.fillColor;
+        delete object.props.strokeColor;
+      }
     });
 
     setActivePaintGroupId(groupId);
   };
 
   const detachSelectedObjectFromPaintGroup = () => {
-    if (!paintableSelectedObject) {
+    if (!paintableSelectedObjects.length) {
       return;
     }
 
     updateLevelData((draft) => {
-      const object = draft.objects.find((entry) => entry.id === paintableSelectedObject.id);
+      const selectedIdsSet = new Set(paintableSelectedObjects.map((object) => object.id));
 
-      if (!object || !isPaintableObjectType(object.type)) {
-        return;
+      for (const object of draft.objects) {
+        if (!selectedIdsSet.has(object.id) || !isPaintableObjectType(object.type)) {
+          continue;
+        }
+
+        const fillColor = getObjectFillColor(object, draft.meta.colorGroups ?? []);
+        const strokeColor = getObjectStrokeColor(object, draft.meta.colorGroups ?? []);
+        object.props = {
+          ...object.props,
+          fillColor,
+          strokeColor,
+        };
+        delete object.props.paintGroupId;
       }
-
-      const fillColor = getObjectFillColor(object, draft.meta.colorGroups ?? []);
-      const strokeColor = getObjectStrokeColor(object, draft.meta.colorGroups ?? []);
-      object.props = {
-        ...object.props,
-        fillColor,
-        strokeColor,
-      };
-      delete object.props.paintGroupId;
     });
   };
 
@@ -1089,6 +1260,25 @@ export function LevelEditor({
     });
 
     if (event.button === 2) {
+      if (selectedTool === 'select') {
+        event.preventDefault();
+        event.stopPropagation();
+        event.currentTarget.setPointerCapture(event.pointerId);
+        dragPreviewPositionRef.current = null;
+        setDragPreviewPosition(null);
+        const nextSelectionBox = {
+          startScreenX: screenX,
+          startScreenY: screenY,
+          endScreenX: screenX,
+          endScreenY: screenY,
+        };
+        dragRef.current = {
+          mode: 'box-select',
+          startScreenX: screenX,
+          startScreenY: screenY,
+        };
+        setSelectionBox(nextSelectionBox);
+      }
       return;
     }
 
@@ -1133,15 +1323,26 @@ export function LevelEditor({
         .reverse()
         .find((object) => pointInsideObject(world.x, world.y, object));
 
-      setSelectedObjectId(hitObject?.id ?? null);
-
       if (hitObject) {
+        applySelection([hitObject.id], hitObject.id);
+        setSelectionBox(null);
+        const previewPosition = {
+          objectId: hitObject.id,
+          x: hitObject.x,
+          y: hitObject.y,
+        };
+        dragPreviewPositionRef.current = previewPosition;
+        setDragPreviewPosition(previewPosition);
         dragRef.current = {
           mode: 'move',
           objectId: hitObject.id,
           offsetX: world.x - hitObject.x,
           offsetY: world.y - hitObject.y,
+          originX: hitObject.x,
+          originY: hitObject.y,
         };
+      } else {
+        clearSelection();
       }
 
       return;
@@ -1230,30 +1431,37 @@ export function LevelEditor({
       return;
     }
 
-    if (dragState.mode === 'move') {
-      const nextX = Math.round(world.x - dragState.offsetX);
-      const nextY = Math.round(world.y - dragState.offsetY);
-      setLevelData((current) => {
-        const next = structuredClone(current);
-        const object = next.objects.find((entry) => entry.id === dragState.objectId);
-
-        if (object) {
-          object.x = nextX;
-          object.y = nextY;
-
-          if (object.type === 'START_MARKER') {
-            next.player.startX = object.x;
-            next.player.startY = object.y;
-          }
-
-          if (object.type === 'FINISH_PORTAL') {
-            next.finish.x = object.x;
-            next.finish.y = object.y;
-          }
-        }
-
-        return syncDerivedLevelData(next);
+    if (dragState.mode === 'box-select') {
+      setSelectionBox({
+        startScreenX: dragState.startScreenX,
+        startScreenY: dragState.startScreenY,
+        endScreenX: screenX,
+        endScreenY: screenY,
       });
+      return;
+    }
+
+    if (dragState.mode === 'move') {
+      const nextX = Math.floor(world.x - dragState.offsetX);
+      const nextY = Math.floor(world.y - dragState.offsetY);
+      const currentPreview = dragPreviewPositionRef.current;
+
+      if (
+        currentPreview?.objectId === dragState.objectId &&
+        currentPreview.x === nextX &&
+        currentPreview.y === nextY
+      ) {
+        return;
+      }
+
+      const nextPreviewPosition = {
+        objectId: dragState.objectId,
+        x: nextX,
+        y: nextY,
+      };
+
+      dragPreviewPositionRef.current = nextPreviewPosition;
+      setDragPreviewPosition(nextPreviewPosition);
     }
   };
 
@@ -1266,18 +1474,71 @@ export function LevelEditor({
       }
     }
 
-    if (dragRef.current?.mode === 'move') {
-      const next = syncDerivedLevelData(structuredClone(liveLevelDataRef.current));
-      const trimmedHistory = history.slice(0, historyIndex + 1);
-      const nextHistory = [...trimmedHistory, next];
-      setHistory(nextHistory);
-      setHistoryIndex(nextHistory.length - 1);
+    const dragState = dragRef.current;
+
+    if (dragState?.mode === 'box-select') {
+      const nextSelectionBox =
+        selectionBox ??
+        ({
+          startScreenX: dragState.startScreenX,
+          startScreenY: dragState.startScreenY,
+          endScreenX: dragState.startScreenX,
+          endScreenY: dragState.startScreenY,
+        } satisfies SelectionBox);
+      const normalizedBox = normalizeSelectionBox(nextSelectionBox);
+      const cell = levelData.meta.gridSize * zoom;
+      const matchedIds = [...levelData.objects]
+        .filter((object) => {
+          const { x, y } = worldToScreen(object.x, object.y, pan.x, pan.y, cell);
+          return rectanglesIntersect(normalizedBox, {
+            left: x,
+            top: y,
+            right: x + object.w * cell,
+            bottom: y + object.h * cell,
+          });
+        })
+        .map((object) => object.id);
+
+      applySelection(matchedIds, matchedIds[matchedIds.length - 1] ?? null);
+    }
+
+    if (dragState?.mode === 'move') {
+      const previewPosition = dragPreviewPositionRef.current;
+
+      if (
+        previewPosition &&
+        previewPosition.objectId === dragState.objectId &&
+        (previewPosition.x !== dragState.originX || previewPosition.y !== dragState.originY)
+      ) {
+        const next = structuredClone(liveLevelDataRef.current);
+        const object = next.objects.find((entry) => entry.id === dragState.objectId);
+
+        if (object) {
+          object.x = previewPosition.x;
+          object.y = previewPosition.y;
+
+          if (object.type === 'START_MARKER') {
+            next.player.startX = object.x;
+            next.player.startY = object.y;
+          }
+
+          if (object.type === 'FINISH_PORTAL') {
+            next.finish.x = object.x;
+            next.finish.y = object.y;
+          }
+        }
+
+        commitLevelData(next);
+      }
     }
 
     if (event && event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
 
+    dragPreviewPositionRef.current = null;
+    setDragPreviewPosition(null);
+    setSelectionBox(null);
     dragRef.current = null;
   };
 
@@ -1475,6 +1736,7 @@ export function LevelEditor({
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerUp}
             onPointerLeave={handlePointerUp}
+            onContextMenu={(event) => event.preventDefault()}
             onAuxClick={(event) => {
               if (event.button === 1) {
                 event.preventDefault();
@@ -2015,6 +2277,46 @@ export function LevelEditor({
                 </div>
               </div>
             </div>
+
+            {paintableSelectedObjects.length ? (
+              <div className="editor-inline-card space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="editor-color-control-label">Assign Group</span>
+                  <Badge tone="accent">
+                    {paintableSelectedObjects.length > 1
+                      ? `${paintableSelectedObjects.length} objects`
+                      : selectedPaintGroupId
+                        ? `Group ${selectedPaintGroupId}`
+                        : 'Direct'}
+                  </Badge>
+                </div>
+                <div className="editor-inline-actions">
+                  {Array.from({ length: PAINT_GROUP_SLOT_COUNT }, (_, index) => {
+                    const groupId = index + 1;
+                    const isActive = selectedPaintGroupId === groupId;
+
+                    return (
+                      <Button
+                        key={groupId}
+                        variant={isActive ? 'primary' : 'ghost'}
+                        className="min-w-[4.25rem]"
+                        onClick={() => assignSelectedObjectToPaintGroup(groupId)}
+                      >
+                        Group {groupId}
+                      </Button>
+                    );
+                  })}
+                </div>
+                <div className="editor-inline-actions">
+                  <Button variant="ghost" onClick={() => setIsPaintPopupOpen(true)}>
+                    Open Paint
+                  </Button>
+                  <Button variant="ghost" onClick={detachSelectedObjectFromPaintGroup}>
+                    Detach Group
+                  </Button>
+                </div>
+              </div>
+            ) : null}
 
             {selectedObject.type === 'JUMP_PAD' ? (
               <div className="grid gap-3 sm:grid-cols-2">
@@ -2608,6 +2910,32 @@ function roundToStep(value: number, step: number) {
 function normalizeQuarterRotation(value: number) {
   const normalized = ((Math.round(value / 90) * 90) % 360 + 360) % 360;
   return normalized === 360 ? 0 : normalized;
+}
+
+function normalizeSelectionBox(selectionBox: SelectionBox) {
+  return {
+    left: Math.min(selectionBox.startScreenX, selectionBox.endScreenX),
+    top: Math.min(selectionBox.startScreenY, selectionBox.endScreenY),
+    right: Math.max(selectionBox.startScreenX, selectionBox.endScreenX),
+    bottom: Math.max(selectionBox.startScreenY, selectionBox.endScreenY),
+  };
+}
+
+function rectanglesIntersect(
+  left: {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+  },
+  right: {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+  },
+) {
+  return left.left <= right.right && left.right >= right.left && left.top <= right.bottom && left.bottom >= right.top;
 }
 
 function getPointerDistance(
