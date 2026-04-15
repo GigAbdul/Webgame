@@ -17,6 +17,9 @@ export type LevelObjectType =
   | 'HALF_GROUND_BLOCK'
   | 'PLATFORM_BLOCK'
   | 'HALF_PLATFORM_BLOCK'
+  | 'ARROW_RAMP_ASC'
+  | 'ARROW_RAMP_DESC'
+  | 'DASH_BLOCK'
   | 'SPIKE'
   | 'SAW_BLADE'
   | 'JUMP_PAD'
@@ -25,6 +28,7 @@ export type LevelObjectType =
   | 'SPEED_PORTAL'
   | 'SHIP_PORTAL'
   | 'CUBE_PORTAL'
+  | 'ARROW_PORTAL'
   | 'FINISH_PORTAL'
   | 'MOVE_TRIGGER'
   | 'ALPHA_TRIGGER'
@@ -43,6 +47,7 @@ export type LevelObject = {
   h: number;
   rotation: number;
   layer: 'gameplay' | 'decoration';
+  editorLayer: 1 | 2;
   props: Record<string, unknown>;
 };
 
@@ -67,7 +72,7 @@ export type LevelData = {
   player: {
     startX: number;
     startY: number;
-    mode: 'cube' | 'ship';
+    mode: 'cube' | 'ship' | 'arrow';
     baseSpeed: number;
     gravity: number;
   };

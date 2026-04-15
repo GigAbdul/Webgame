@@ -22,6 +22,8 @@ import { readLocalEditorDraft, writeLocalEditorDraft } from './local-draft-stora
 import { cn } from '../../utils/cn';
 
 type EditorTool = 'select' | 'pan' | LevelObjectType;
+type PlacementMode = 'single' | 'drag';
+type EditorLayerId = 1 | 2;
 
 type LevelEditorProps = {
   initialLevel?: Level | null;
@@ -58,6 +60,10 @@ type DragState =
       startScreenX: number;
       startScreenY: number;
     }
+  | {
+      mode: 'paint';
+      tool: LevelObjectType;
+    }
   | null;
 
 type SelectionBox = {
@@ -86,10 +92,22 @@ const themePresets = [
 
 const paletteGroups: Array<{ title: string; items: EditorTool[] }> = [
   { title: 'Controls', items: ['select', 'pan'] },
-  { title: 'Blocks', items: ['GROUND_BLOCK', 'HALF_GROUND_BLOCK', 'PLATFORM_BLOCK', 'HALF_PLATFORM_BLOCK', 'DECORATION_BLOCK'] },
+  {
+    title: 'Blocks',
+    items: [
+      'GROUND_BLOCK',
+      'HALF_GROUND_BLOCK',
+      'PLATFORM_BLOCK',
+      'HALF_PLATFORM_BLOCK',
+      'ARROW_RAMP_ASC',
+      'ARROW_RAMP_DESC',
+      'DECORATION_BLOCK',
+    ],
+  },
+  { title: 'Helpers', items: ['DASH_BLOCK'] },
   { title: 'Obstacles', items: ['SPIKE', 'SAW_BLADE'] },
   { title: 'Boosts', items: ['JUMP_PAD', 'JUMP_ORB'] },
-  { title: 'Portals', items: ['GRAVITY_PORTAL', 'SPEED_PORTAL', 'SHIP_PORTAL', 'CUBE_PORTAL', 'FINISH_PORTAL'] },
+  { title: 'Portals', items: ['GRAVITY_PORTAL', 'SPEED_PORTAL', 'SHIP_PORTAL', 'CUBE_PORTAL', 'ARROW_PORTAL', 'FINISH_PORTAL'] },
   { title: 'Triggers', items: ['MOVE_TRIGGER', 'ALPHA_TRIGGER', 'TOGGLE_TRIGGER', 'PULSE_TRIGGER'] },
   { title: 'Run Points', items: ['START_MARKER', 'START_POS'] },
 ];
@@ -101,6 +119,9 @@ const toolDescriptions: Record<EditorTool, string> = {
   HALF_GROUND_BLOCK: 'Half-height floor piece',
   PLATFORM_BLOCK: 'Extra landable block',
   HALF_PLATFORM_BLOCK: 'Half-height platform piece',
+  ARROW_RAMP_ASC: 'Diagonal wall for arrow routes',
+  ARROW_RAMP_DESC: 'Opposite diagonal wall for arrow routes',
+  DASH_BLOCK: 'Editor-only safe zone for arrow contact on floor and ceiling blocks',
   SPIKE: 'Primary hazard',
   SAW_BLADE: 'Rotating circular hazard',
   JUMP_PAD: 'Forces an upward bounce',
@@ -109,6 +130,7 @@ const toolDescriptions: Record<EditorTool, string> = {
   SPEED_PORTAL: 'Changes run speed',
   SHIP_PORTAL: 'Switches into ship mode',
   CUBE_PORTAL: 'Returns to cube mode',
+  ARROW_PORTAL: 'Switches into arrow mode',
   FINISH_PORTAL: 'Level completion',
   MOVE_TRIGGER: 'Moves a paint group during the run',
   ALPHA_TRIGGER: 'Changes group opacity',
@@ -137,6 +159,10 @@ type EditorInitialState = {
 };
 
 function syncDerivedLevelData(next: LevelData) {
+  for (const object of next.objects) {
+    object.editorLayer = object.editorLayer === 2 ? 2 : 1;
+  }
+
   const maxX = Math.max(next.finish.x + 16, ...next.objects.map((object) => object.x + object.w + 12));
   next.meta.lengthUnits = Math.max(60, Math.ceil(maxX));
   return next;
@@ -144,6 +170,24 @@ function syncDerivedLevelData(next: LevelData) {
 
 function getPaletteGroupTitle(tool: EditorTool) {
   return paletteGroups.find((group) => group.items.includes(tool))?.title ?? 'Blocks';
+}
+
+function canUseDragPlacementTool(tool: EditorTool): tool is LevelObjectType {
+  return (
+    tool !== 'select' &&
+    tool !== 'pan' &&
+    tool !== 'START_MARKER' &&
+    tool !== 'START_POS' &&
+    tool !== 'FINISH_PORTAL' &&
+    tool !== 'MOVE_TRIGGER' &&
+    tool !== 'ALPHA_TRIGGER' &&
+    tool !== 'TOGGLE_TRIGGER' &&
+    tool !== 'PULSE_TRIGGER'
+  );
+}
+
+function getPlacementStrokeKey(type: LevelObjectType, x: number, y: number, editorLayer: EditorLayerId) {
+  return `${editorLayer}:${type}:${x}:${y}`;
 }
 
 function isHexColor(value: unknown): value is string {
@@ -234,6 +278,9 @@ export function LevelEditor({
   const [selectionBox, setSelectionBox] = useState<SelectionBox | null>(null);
   const [activePaletteGroup, setActivePaletteGroup] = useState<string>('Blocks');
   const [paletteDrawerGroup, setPaletteDrawerGroup] = useState<string | null>(null);
+  const [placementMode, setPlacementMode] = useState<PlacementMode>('single');
+  const [hasLayerTwo, setHasLayerTwo] = useState(initialEditorState.levelData.objects.some((object) => object.editorLayer === 2));
+  const [activeEditorLayer, setActiveEditorLayer] = useState<EditorLayerId>(1);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: EDITOR_DEFAULT_PAN_X, y: EDITOR_DEFAULT_PAN_Y });
   const [cursorWorld, setCursorWorld] = useState({ x: 0, y: 0 });
@@ -255,6 +302,8 @@ export function LevelEditor({
   const dragPreviewPositionRef = useRef<{ objectId: string; x: number; y: number } | null>(null);
   const touchPointsRef = useRef(new Map<number, { x: number; y: number }>());
   const touchGestureRef = useRef<TouchGestureState | null>(null);
+  const paintStrokeCellsRef = useRef<Set<string>>(new Set());
+  const paintStrokeDirtyRef = useRef(false);
 
   const loadedDraftStorageKeyRef = useRef(draftStorageKey);
 
@@ -280,6 +329,8 @@ export function LevelEditor({
     setSelectionBox(null);
     setActivePaletteGroup('Blocks');
     setPaletteDrawerGroup(null);
+    setHasLayerTwo(nextEditorState.levelData.objects.some((object) => object.editorLayer === 2));
+    setActiveEditorLayer(1);
     setZoom(1);
     setPan({ x: EDITOR_DEFAULT_PAN_X, y: EDITOR_DEFAULT_PAN_Y });
     setCursorWorld({ x: 0, y: 0 });
@@ -396,6 +447,9 @@ export function LevelEditor({
   const activePaintTool =
     selectedTool !== 'select' && selectedTool !== 'pan' && isPaintableObjectType(selectedTool) ? selectedTool : null;
   const canOpenPaintPopup = Boolean(paintableSelectedObjects.length > 0 || activePaintTool || colorGroups.length > 0);
+  const placementModeLabel = placementMode === 'drag' ? 'Drag' : 'Single';
+  const dragPlacementAvailable = canUseDragPlacementTool(selectedTool);
+  const activeEditorLayerLabel = `Layer ${activeEditorLayer}`;
   const canUndo = historyIndex > 0;
   const canRedo = historyIndex < history.length - 1;
   const historyPosition = `${historyIndex + 1}/${history.length}`;
@@ -467,6 +521,12 @@ export function LevelEditor({
       setActivePaintGroupId(null);
     }
   }, [activePaintGroupId, colorGroups]);
+
+  useEffect(() => {
+    if (!hasLayerTwo && activeEditorLayer !== 1) {
+      setActiveEditorLayer(1);
+    }
+  }, [activeEditorLayer, hasLayerTwo]);
 
   useEffect(() => {
     const stageFrame = stageFrameRef.current;
@@ -737,7 +797,12 @@ export function LevelEditor({
       context.stroke();
     }
 
-    for (const object of levelData.objects) {
+    const orderedObjects = [
+      ...levelData.objects.filter((object) => object.editorLayer === activeEditorLayer),
+      ...levelData.objects.filter((object) => object.editorLayer !== activeEditorLayer),
+    ];
+
+    for (const object of orderedObjects) {
       const drawableObject =
         dragPreviewPosition?.objectId === object.id
           ? {
@@ -751,7 +816,12 @@ export function LevelEditor({
       const h = drawableObject.h * cell;
       const fillColor = getObjectFillColor(drawableObject, colorGroups);
       const strokeColor = getObjectStrokeColor(drawableObject, colorGroups);
+      const isInactiveEditorLayer = drawableObject.editorLayer !== activeEditorLayer;
 
+      context.save();
+      if (isInactiveEditorLayer) {
+        context.filter = 'brightness(0.72) saturate(0.86)';
+      }
       drawStageObjectSprite({
         context,
         object: drawableObject,
@@ -761,7 +831,9 @@ export function LevelEditor({
         h,
         fillColor,
         strokeColor,
+        alpha: isInactiveEditorLayer ? 0.35 : 1,
       });
+      context.restore();
 
       if (selectedObjectIdSet.has(drawableObject.id)) {
         context.strokeStyle = drawableObject.id === selectedObjectId ? '#ffffff' : 'rgba(130, 246, 255, 0.86)';
@@ -785,7 +857,19 @@ export function LevelEditor({
       context.strokeRect(left, top, width, height);
       context.restore();
     }
-  }, [canvasViewport.height, canvasViewport.width, colorGroups, dragPreviewPosition, levelData, pan, selectedObjectId, selectedObjectIdSet, selectionBox, zoom]);
+  }, [
+    activeEditorLayer,
+    canvasViewport.height,
+    canvasViewport.width,
+    colorGroups,
+    dragPreviewPosition,
+    levelData,
+    pan,
+    selectedObjectId,
+    selectedObjectIdSet,
+    selectionBox,
+    zoom,
+  ]);
 
   const updateLevelData = useCallback(
     (mutator: (draft: LevelData) => void, options?: { pushHistory?: boolean }) => {
@@ -822,54 +906,94 @@ export function LevelEditor({
     setLevelData(history[nextIndex]);
   };
 
-  const placeObject = (type: LevelObjectType, x: number, y: number) => {
-    updateLevelData((draft) => {
-      if (type === 'START_MARKER') {
-        draft.player.startX = x;
-        draft.player.startY = y;
-        draft.objects = draft.objects.filter((object) => object.type !== 'START_MARKER');
+  const placeObject = (
+    type: LevelObjectType,
+    x: number,
+    y: number,
+    options?: { pushHistory?: boolean; selectPlacedObject?: boolean; trackStroke?: boolean },
+  ) => {
+    const placementKey = getPlacementStrokeKey(type, x, y, activeEditorLayer);
+
+    if (options?.trackStroke && paintStrokeCellsRef.current.has(placementKey)) {
+      return false;
+    }
+
+    if (
+      (type === 'START_MARKER' && liveLevelDataRef.current.player.startX === x && liveLevelDataRef.current.player.startY === y) ||
+      (type === 'FINISH_PORTAL' && liveLevelDataRef.current.finish.x === x && liveLevelDataRef.current.finish.y === y) ||
+      liveLevelDataRef.current.objects.some(
+        (object) =>
+          object.type === type &&
+          object.x === x &&
+          object.y === y &&
+          object.editorLayer === activeEditorLayer,
+      )
+    ) {
+      if (options?.trackStroke) {
+        paintStrokeCellsRef.current.add(placementKey);
       }
 
-      if (type === 'FINISH_PORTAL') {
-        draft.finish = { x, y };
-        draft.objects = draft.objects.filter((object) => object.type !== 'FINISH_PORTAL');
-      }
+      return false;
+    }
 
-      const definition = levelObjectDefinitions[type];
-      const triggerDefaults: Record<string, unknown> =
-        type === 'MOVE_TRIGGER'
-          ? { groupId: 1, moveX: 2, moveY: 0, durationMs: 650 }
-          : type === 'ALPHA_TRIGGER'
-            ? { groupId: 1, alpha: 0.35 }
-            : type === 'TOGGLE_TRIGGER'
-              ? { groupId: 1, enabled: false }
-              : type === 'PULSE_TRIGGER'
-                ? { groupId: 1, fillColor: '#ffffff', strokeColor: '#ffffff', durationMs: 900 }
-                : type === 'SAW_BLADE'
-                  ? { rotationSpeed: 240 }
+    const next = structuredClone(liveLevelDataRef.current);
+
+    if (type === 'START_MARKER') {
+      next.player.startX = x;
+      next.player.startY = y;
+      next.objects = next.objects.filter((object) => object.type !== 'START_MARKER');
+    }
+
+    if (type === 'FINISH_PORTAL') {
+      next.finish = { x, y };
+      next.objects = next.objects.filter((object) => object.type !== 'FINISH_PORTAL');
+    }
+
+    const definition = levelObjectDefinitions[type];
+    const triggerDefaults: Record<string, unknown> =
+      type === 'MOVE_TRIGGER'
+        ? { groupId: 1, moveX: 2, moveY: 0, durationMs: 650 }
+        : type === 'ALPHA_TRIGGER'
+          ? { groupId: 1, alpha: 0.35 }
+          : type === 'TOGGLE_TRIGGER'
+            ? { groupId: 1, enabled: false }
+            : type === 'PULSE_TRIGGER'
+              ? { groupId: 1, fillColor: '#ffffff', strokeColor: '#ffffff', durationMs: 900 }
+              : type === 'SAW_BLADE'
+                ? { rotationSpeed: 240 }
                 : {};
-      const object: LevelObject = {
-        id: `${type.toLowerCase()}-${Date.now()}`,
-        type,
-        x,
-        y,
-        w: definition.defaultSize.w,
-        h: definition.defaultSize.h,
-        rotation: 0,
-        layer: type === 'DECORATION_BLOCK' ? 'decoration' : 'gameplay',
-        props: {
-          ...triggerDefaults,
-          ...(isPaintableObjectType(type) && activePaintGroupId
-            ? {
-                paintGroupId: activePaintGroupId,
-              }
-            : {}),
-        },
-      };
+    const object: LevelObject = {
+      id: `${type.toLowerCase()}-${Date.now()}`,
+      type,
+      x,
+      y,
+      w: definition.defaultSize.w,
+      h: definition.defaultSize.h,
+      rotation: 0,
+      layer: type === 'DECORATION_BLOCK' ? 'decoration' : 'gameplay',
+      editorLayer: activeEditorLayer,
+      props: {
+        ...triggerDefaults,
+        ...(isPaintableObjectType(type) && activePaintGroupId
+          ? {
+              paintGroupId: activePaintGroupId,
+            }
+          : {}),
+      },
+    };
 
-      draft.objects.push(object);
+    next.objects.push(object);
+
+    if (options?.trackStroke) {
+      paintStrokeCellsRef.current.add(placementKey);
+    }
+
+    if (options?.selectPlacedObject ?? true) {
       applySelection([object.id], object.id);
-    });
+    }
+
+    commitLevelData(next, { pushHistory: options?.pushHistory ?? true });
+    return true;
   };
 
   const duplicateSelected = () => {
@@ -1003,6 +1127,24 @@ export function LevelEditor({
   const updateSelectedObjectLayer = (nextLayer: LevelObject['layer']) => {
     updateSelectedObject((object) => {
       object.layer = nextLayer;
+    });
+  };
+
+  const updateSelectedObjectEditorLayer = (nextEditorLayer: EditorLayerId) => {
+    if (nextEditorLayer === 2) {
+      setHasLayerTwo(true);
+    }
+
+    updateLevelData((draft) => {
+      const selectedIdsSet = new Set(selectedObjectIds);
+
+      for (const object of draft.objects) {
+        if (!selectedIdsSet.has(object.id)) {
+          continue;
+        }
+
+        object.editorLayer = nextEditorLayer;
+      }
     });
   };
 
@@ -1328,6 +1470,7 @@ export function LevelEditor({
 
     if (selectedTool === 'select') {
       const hitObject = [...levelData.objects]
+        .filter((object) => object.editorLayer === activeEditorLayer)
         .reverse()
         .find((object) => pointInsideObject(world.x, world.y, object));
 
@@ -1353,6 +1496,22 @@ export function LevelEditor({
         clearSelection();
       }
 
+      return;
+    }
+
+    if (placementMode === 'drag' && canUseDragPlacementTool(selectedTool)) {
+      paintStrokeCellsRef.current = new Set();
+      paintStrokeDirtyRef.current = false;
+      dragRef.current = {
+        mode: 'paint',
+        tool: selectedTool,
+      };
+      paintStrokeDirtyRef.current =
+        placeObject(selectedTool, Math.floor(world.x), Math.floor(world.y), {
+          pushHistory: false,
+          selectPlacedObject: false,
+          trackStroke: true,
+        }) || paintStrokeDirtyRef.current;
       return;
     }
 
@@ -1449,6 +1608,16 @@ export function LevelEditor({
       return;
     }
 
+    if (dragState.mode === 'paint') {
+      paintStrokeDirtyRef.current =
+        placeObject(dragState.tool, Math.floor(world.x), Math.floor(world.y), {
+          pushHistory: false,
+          selectPlacedObject: false,
+          trackStroke: true,
+        }) || paintStrokeDirtyRef.current;
+      return;
+    }
+
     if (dragState.mode === 'move') {
       const nextX = Math.floor(world.x - dragState.offsetX);
       const nextY = Math.floor(world.y - dragState.offsetY);
@@ -1497,6 +1666,10 @@ export function LevelEditor({
       const cell = levelData.meta.gridSize * zoom;
       const matchedIds = [...levelData.objects]
         .filter((object) => {
+          if (object.editorLayer !== activeEditorLayer) {
+            return false;
+          }
+
           const { x, y } = worldToScreen(object.x, object.y, pan.x, pan.y, cell);
           return rectanglesIntersect(normalizedBox, {
             left: x,
@@ -1540,6 +1713,15 @@ export function LevelEditor({
       }
     }
 
+    if (dragState?.mode === 'paint') {
+      if (paintStrokeDirtyRef.current) {
+        commitLevelData(structuredClone(liveLevelDataRef.current));
+      }
+
+      paintStrokeCellsRef.current = new Set();
+      paintStrokeDirtyRef.current = false;
+    }
+
     if (event && event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
@@ -1566,6 +1748,22 @@ export function LevelEditor({
     setSelectedTool(tool);
     setActivePaletteGroup(getPaletteGroupTitle(tool));
     setPaletteDrawerGroup(null);
+  };
+
+  const handleEditorLayerSelect = (nextLayer: EditorLayerId) => {
+    if (nextLayer === 2 && !hasLayerTwo) {
+      return;
+    }
+
+    setActiveEditorLayer(nextLayer);
+    clearSelection();
+  };
+
+  const handleAddLayerTwo = () => {
+    setHasLayerTwo(true);
+    setActiveEditorLayer(2);
+    clearSelection();
+    setMessage('Layer 2 enabled. Layer 1 is now dimmed while you build on top.');
   };
 
   const handlePaletteGroupClick = (groupTitle: string) => {
@@ -1710,6 +1908,7 @@ export function LevelEditor({
 
         <div className="editor-workbench-toolbar-meta">
           <HintChip label="Tool" value={activeToolLabel} />
+          <HintChip label="Build Layer" value={activeEditorLayerLabel} />
           <HintChip label="Selected" value={selectionLabel} />
           <HintChip label="History" value={historyPosition} />
           <HintChip label="Theme" value={theme} />
@@ -1733,6 +1932,8 @@ export function LevelEditor({
             <div className="editor-canvas-hud-bar">
               <HintChip label="Tool" value={activeToolLabel} />
               <HintChip label="Selected" value={selectionSummary} />
+              <HintChip label="Layer" value={activeEditorLayerLabel} />
+              <HintChip label="Place" value={placementModeLabel} />
               <HintChip label="Zoom" value={`${zoom.toFixed(2)}x`} />
               <HintChip label="Cursor" value={`${cursorWorld.x}, ${cursorWorld.y}`} />
             </div>
@@ -1808,6 +2009,54 @@ export function LevelEditor({
                 disabled={!canOpenPaintPopup}
               >
                 Paint
+              </button>
+              {!hasLayerTwo ? (
+                <button
+                  type="button"
+                  className="editor-canvas-rail-button"
+                  onClick={handleAddLayerTwo}
+                  title="Enable a second build layer"
+                >
+                  Add L2
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className={cn('editor-canvas-rail-button', activeEditorLayer === 1 ? 'is-active' : '')}
+                onClick={() => handleEditorLayerSelect(1)}
+                title="Build on layer 1"
+              >
+                Layer 1
+              </button>
+              {hasLayerTwo ? (
+                <button
+                  type="button"
+                  className={cn('editor-canvas-rail-button', activeEditorLayer === 2 ? 'is-active' : '')}
+                  onClick={() => handleEditorLayerSelect(2)}
+                  title="Build on layer 2"
+                >
+                  Layer 2
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className={cn('editor-canvas-rail-button', placementMode === 'single' ? 'is-active' : '')}
+                onClick={() => setPlacementMode('single')}
+                title="Place one object per click"
+              >
+                Single
+              </button>
+              <button
+                type="button"
+                className={cn('editor-canvas-rail-button', placementMode === 'drag' ? 'is-active' : '')}
+                onClick={() => setPlacementMode('drag')}
+                title={
+                  dragPlacementAvailable
+                    ? 'Hold and drag through new cells to place continuously'
+                    : 'Drag mode works with blocks, hazards, boosts, and most portals'
+                }
+              >
+                Drag
               </button>
               <button
                 type="button"
@@ -2068,6 +2317,40 @@ export function LevelEditor({
                 )}
               </div>
 
+              <div className="editor-inline-actions">
+                {!hasLayerTwo ? (
+                  <Button variant="ghost" onClick={handleAddLayerTwo}>
+                    Add Layer 2
+                  </Button>
+                ) : null}
+                <Button
+                  variant={activeEditorLayer === 1 ? 'primary' : 'ghost'}
+                  onClick={() => handleEditorLayerSelect(1)}
+                >
+                  Build Layer 1
+                </Button>
+                {hasLayerTwo ? (
+                  <Button
+                    variant={activeEditorLayer === 2 ? 'primary' : 'ghost'}
+                    onClick={() => handleEditorLayerSelect(2)}
+                  >
+                    Build Layer 2
+                  </Button>
+                ) : null}
+                <Button
+                  variant={placementMode === 'single' ? 'primary' : 'ghost'}
+                  onClick={() => setPlacementMode('single')}
+                >
+                  Single Place
+                </Button>
+                <Button
+                  variant={placementMode === 'drag' ? 'primary' : 'ghost'}
+                  onClick={() => setPlacementMode('drag')}
+                >
+                  Drag Place
+                </Button>
+              </div>
+
               {paletteDrawer ? (
                 <div className="editor-canvas-toolstrip-row">
                   {paletteDrawer.items.map((tool) => (
@@ -2293,7 +2576,7 @@ export function LevelEditor({
               </div>
             </div>
 
-            <div className="grid gap-3 lg:grid-cols-[1.1fr_0.9fr]">
+            <div className="grid gap-3 lg:grid-cols-3">
               <div className="editor-inline-card">
                 <div className="flex items-center justify-between gap-3">
                   <span className="editor-color-control-label">Rotation</span>
@@ -2311,7 +2594,28 @@ export function LevelEditor({
 
               <div className="editor-inline-card">
                 <div className="flex items-center justify-between gap-3">
-                  <span className="editor-color-control-label">Layer</span>
+                  <span className="editor-color-control-label">Build Layer</span>
+                  <Badge tone="accent">Layer {selectedObject.editorLayer}</Badge>
+                </div>
+                <div className="editor-inline-actions">
+                  <Button
+                    variant={selectedObject.editorLayer === 1 ? 'primary' : 'ghost'}
+                    onClick={() => updateSelectedObjectEditorLayer(1)}
+                  >
+                    Layer 1
+                  </Button>
+                  <Button
+                    variant={selectedObject.editorLayer === 2 ? 'primary' : 'ghost'}
+                    onClick={() => updateSelectedObjectEditorLayer(2)}
+                  >
+                    Layer 2
+                  </Button>
+                </div>
+              </div>
+
+              <div className="editor-inline-card">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="editor-color-control-label">Runtime Layer</span>
                   <Badge tone="default">{selectedObject.layer}</Badge>
                 </div>
                 <div className="editor-inline-actions">
@@ -2722,8 +3026,8 @@ export function LevelEditor({
         <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
           <div>
             <FieldLabel>Player Mode</FieldLabel>
-            <div className="grid grid-cols-2 gap-2">
-              {(['cube', 'ship'] as const).map((mode) => (
+            <div className="grid grid-cols-3 gap-2">
+              {(['cube', 'ship', 'arrow'] as const).map((mode) => (
                 <button
                   key={mode}
                   type="button"
@@ -2742,7 +3046,11 @@ export function LevelEditor({
                       levelData.player.mode === mode ? 'text-[#173300]/80' : 'text-white/60',
                     )}
                   >
-                    {mode === 'ship' ? 'Hold to climb, release to descend' : 'Classic jump timing'}
+                    {mode === 'ship'
+                      ? 'Hold to climb, release to descend'
+                      : mode === 'arrow'
+                        ? 'Hold to rise, release to dive'
+                        : 'Classic jump timing'}
                   </span>
                 </button>
               ))}
@@ -2873,6 +3181,7 @@ function ToolButtonPreview({ tool, active }: { tool: EditorTool; active: boolean
       h: definition.defaultSize.h,
       rotation: 0,
       layer: tool === 'DECORATION_BLOCK' ? 'decoration' : 'gameplay',
+      editorLayer: 1,
       props: {},
     };
 

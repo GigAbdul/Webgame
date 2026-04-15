@@ -16,6 +16,7 @@ export const levelObjectDefinitions: Record<
       | 'speed'
       | 'shipMode'
       | 'cubeMode'
+      | 'arrowMode'
       | 'finish'
       | 'moveTrigger'
       | 'alphaTrigger'
@@ -57,6 +58,33 @@ export const levelObjectDefinitions: Record<
     strokeColor: '#103428',
     defaultSize: { w: 1, h: 0.5 },
     collides: true,
+    lethal: false,
+    effect: null,
+  },
+  ARROW_RAMP_ASC: {
+    label: 'Arrow Ramp /',
+    color: '#8ecbff',
+    strokeColor: '#0f1b31',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: true,
+    effect: null,
+  },
+  ARROW_RAMP_DESC: {
+    label: 'Arrow Ramp \\',
+    color: '#8ecbff',
+    strokeColor: '#0f1b31',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: true,
+    effect: null,
+  },
+  DASH_BLOCK: {
+    label: 'Dash Block',
+    color: '#6ff9ff',
+    strokeColor: '#0f1b31',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
     lethal: false,
     effect: null,
   },
@@ -131,6 +159,15 @@ export const levelObjectDefinitions: Record<
     collides: false,
     lethal: false,
     effect: 'cubeMode',
+  },
+  ARROW_PORTAL: {
+    label: 'Arrow',
+    color: '#5ee7ff',
+    strokeColor: '#ffffff',
+    defaultSize: { w: 1, h: 2 },
+    collides: false,
+    lethal: false,
+    effect: 'arrowMode',
   },
   FINISH_PORTAL: {
     label: 'Finish',
@@ -213,6 +250,8 @@ const paintableObjectTypes = new Set<LevelObjectType>([
   'HALF_GROUND_BLOCK',
   'PLATFORM_BLOCK',
   'HALF_PLATFORM_BLOCK',
+  'ARROW_RAMP_ASC',
+  'ARROW_RAMP_DESC',
   'DECORATION_BLOCK',
   'SPIKE',
   'SAW_BLADE',
@@ -295,6 +334,7 @@ function makeObject(id: string, type: LevelObjectType, x: number, y: number) {
     h: definition.defaultSize.h,
     rotation: 0,
     layer: type === 'DECORATION_BLOCK' ? ('decoration' as const) : ('gameplay' as const),
+    editorLayer: 1 as const,
     props: {},
   };
 }

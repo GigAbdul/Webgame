@@ -5,6 +5,9 @@ export const levelObjectTypes = [
   'HALF_GROUND_BLOCK',
   'PLATFORM_BLOCK',
   'HALF_PLATFORM_BLOCK',
+  'ARROW_RAMP_ASC',
+  'ARROW_RAMP_DESC',
+  'DASH_BLOCK',
   'SPIKE',
   'SAW_BLADE',
   'JUMP_PAD',
@@ -13,6 +16,7 @@ export const levelObjectTypes = [
   'SPEED_PORTAL',
   'SHIP_PORTAL',
   'CUBE_PORTAL',
+  'ARROW_PORTAL',
   'FINISH_PORTAL',
   'MOVE_TRIGGER',
   'ALPHA_TRIGGER',
@@ -34,6 +38,7 @@ export const levelObjectSchema = z.object({
   h: z.number().positive(),
   rotation: z.number().default(0),
   layer: z.enum(['gameplay', 'decoration']).default('gameplay'),
+  editorLayer: z.number().int().min(1).max(2).default(1),
   props: z.record(z.any()).default({}),
 });
 
@@ -60,7 +65,7 @@ export const levelDataSchema = z.object({
   player: z.object({
     startX: z.number(),
     startY: z.number(),
-    mode: z.enum(['cube', 'ship']).default('cube'),
+    mode: z.enum(['cube', 'ship', 'arrow']).default('cube'),
     baseSpeed: z.number().positive().default(1),
     gravity: z.number().default(1),
   }),
@@ -87,6 +92,7 @@ export const levelObjectDefinitions: Record<
       | 'speed'
       | 'shipMode'
       | 'cubeMode'
+      | 'arrowMode'
       | 'finish'
       | 'moveTrigger'
       | 'alphaTrigger'
@@ -120,6 +126,27 @@ export const levelObjectDefinitions: Record<
     label: 'Half Platform',
     defaultSize: { w: 1, h: 0.5 },
     collides: true,
+    lethal: false,
+    effect: null,
+  },
+  ARROW_RAMP_ASC: {
+    label: 'Arrow Ramp /',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: true,
+    effect: null,
+  },
+  ARROW_RAMP_DESC: {
+    label: 'Arrow Ramp \\',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: true,
+    effect: null,
+  },
+  DASH_BLOCK: {
+    label: 'Dash Block',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
     lethal: false,
     effect: null,
   },
@@ -178,6 +205,13 @@ export const levelObjectDefinitions: Record<
     collides: false,
     lethal: false,
     effect: 'cubeMode',
+  },
+  ARROW_PORTAL: {
+    label: 'Arrow Portal',
+    defaultSize: { w: 1, h: 2 },
+    collides: false,
+    lethal: false,
+    effect: 'arrowMode',
   },
   FINISH_PORTAL: {
     label: 'Finish',
@@ -255,6 +289,7 @@ function makeObject(
     h,
     rotation: 0,
     layer: type === 'DECORATION_BLOCK' ? 'decoration' : 'gameplay',
+    editorLayer: 1,
     props,
   } as const;
 }

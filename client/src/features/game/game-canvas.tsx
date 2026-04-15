@@ -50,8 +50,17 @@ type TrailPoint = {
   size: number;
 };
 
+type PreviewBootstrap = {
+  startX: number;
+  startY: number;
+  speedMultiplier: number;
+  gravity: number;
+  mode: LevelData['player']['mode'];
+  elapsedMs: number;
+};
+
 const solidTypes = new Set(['GROUND_BLOCK', 'HALF_GROUND_BLOCK', 'PLATFORM_BLOCK', 'HALF_PLATFORM_BLOCK']);
-const hazardTypes = new Set(['SPIKE', 'SAW_BLADE']);
+const hazardTypes = new Set(['SPIKE', 'SAW_BLADE', 'ARROW_RAMP_ASC', 'ARROW_RAMP_DESC']);
 const JUMP_BUFFER_MS = 130;
 const COYOTE_TIME_MS = 110;
 const AUTO_RESTART_DELAY_MS = 850;
@@ -60,6 +69,8 @@ const BASE_GRAVITY_ACCELERATION = 55;
 const DEFAULT_JUMP_VELOCITY = 15.5;
 const AIR_ROTATION_SPEED = Math.PI * 1.6;
 const QUARTER_TURN = Math.PI / 2;
+const ARROW_VERTICAL_SPEED_FACTOR = 1;
+const RUNTIME_BUCKET_WIDTH_UNITS = 8;
 const GAMEPLAY_INPUT_CODES = new Set(['Space', 'ArrowUp', 'KeyW']);
 
 export function GameCanvas({
@@ -114,6 +125,11 @@ export function GameCanvas({
 
     return null;
   }, [levelData.objects, previewStartPosEnabled]);
+  const previewBootstrap = useMemo(
+    () => buildPreviewBootstrap(levelData, previewStartPos),
+    [levelData, previewStartPos],
+  );
+  const runtimeMusicOffsetMs = musicOffsetMs + previewBootstrap.elapsedMs;
   const statusLabel =
     hud.status === 'completed' ? 'Stage Clear' : hud.status === 'failed' ? 'Attempt Lost' : 'In Run';
 
@@ -185,7 +201,7 @@ export function GameCanvas({
 
   useEffect(() => {
     const currentAudio = audioRef.current;
-    const offsetSeconds = musicOffsetMs / 1000;
+    const offsetSeconds = runtimeMusicOffsetMs / 1000;
 
     if (currentAudio) {
       currentAudio.pause();
@@ -234,7 +250,7 @@ export function GameCanvas({
         audioRef.current = null;
       }
     };
-  }, [musicOffsetMs, resolvedMusic.src, runId]);
+  }, [resolvedMusic.src, runId, runtimeMusicOffsetMs]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -260,16 +276,16 @@ export function GameCanvas({
     const cell = 36;
     const verticalOffset = Math.max(40, height - levelBounds.maxY * cell - 50);
     const player: PlayerState = {
-      x: previewStartPos?.x ?? levelData.player.startX,
-      y: previewStartPos?.y ?? levelData.player.startY,
+      x: previewBootstrap.startX,
+      y: previewBootstrap.startY,
       w: 0.82,
       h: 0.82,
       vy: 0,
       rotation: 0,
       grounded: false,
-      gravity: levelData.player.gravity,
-      speedMultiplier: levelData.player.baseSpeed,
-      mode: levelData.player.mode,
+      gravity: previewBootstrap.gravity,
+      speedMultiplier: previewBootstrap.speedMultiplier,
+      mode: previewBootstrap.mode,
     };
 
     const activeTriggers = new Set<string>();
@@ -277,6 +293,9 @@ export function GameCanvas({
     const trail: TrailPoint[] = [];
     const sourceObjects = levelData.objects.map((object) => structuredClone(object));
     let runtimeObjects = sourceObjects.map((object) => structuredClone(object));
+    let runtimeObjectBuckets = buildRuntimeObjectBuckets(runtimeObjects);
+    let runtimeObjectMap = new Map(runtimeObjects.map((object) => [object.id, object] as const));
+    let runtimePaintGroups = buildRuntimePaintGroupMap(runtimeObjects);
     const alphaOverrides = new Map<string, number>();
     const disabledObjectIds = new Set<string>();
     const pulseOverrides = new Map<
@@ -300,7 +319,7 @@ export function GameCanvas({
     >();
     let animationFrame = 0;
     let lastTimestamp = 0;
-    let startTime = performance.now();
+    let startTime = performance.now() - previewBootstrap.elapsedMs;
     let jumpBufferedUntil = 0;
     let lastGroundedAt = 0;
     let currentStatus: 'running' | 'failed' | 'completed' = 'running';
@@ -310,8 +329,56 @@ export function GameCanvas({
     let shakePower = 0;
     let restartTimeout = 0;
 
+    const rebuildRuntimeObjectBuckets = () => {
+      runtimeObjectBuckets = buildRuntimeObjectBuckets(runtimeObjects);
+    };
+
+    const rebuildRuntimeObjectMaps = () => {
+      runtimeObjectMap = new Map(runtimeObjects.map((object) => [object.id, object] as const));
+      runtimePaintGroups = buildRuntimePaintGroupMap(runtimeObjects);
+      rebuildRuntimeObjectBuckets();
+    };
+
+    const getRuntimeObjectsInRange = (minX: number, maxX: number) => {
+      if (!runtimeObjects.length) {
+        return [] as LevelObject[];
+      }
+
+      const startBucket = Math.floor(minX / RUNTIME_BUCKET_WIDTH_UNITS);
+      const endBucket = Math.floor(maxX / RUNTIME_BUCKET_WIDTH_UNITS);
+      const seen = new Set<number>();
+      const indices: number[] = [];
+
+      for (let bucket = startBucket; bucket <= endBucket; bucket += 1) {
+        const bucketEntries = runtimeObjectBuckets.get(bucket);
+
+        if (!bucketEntries) {
+          continue;
+        }
+
+        for (const index of bucketEntries) {
+          if (seen.has(index)) {
+            continue;
+          }
+
+          seen.add(index);
+          const object = runtimeObjects[index];
+
+          if (!objectIntersectsHorizontalRange(object, minX, maxX)) {
+            continue;
+          }
+
+          indices.push(index);
+        }
+      }
+
+      indices.sort((left, right) => left - right);
+      return indices.map((index) => runtimeObjects[index]);
+    };
+
     const resetRuntimeObjects = () => {
       runtimeObjects = sourceObjects.map((object) => structuredClone(object));
+      rebuildRuntimeObjectMaps();
       alphaOverrides.clear();
       disabledObjectIds.clear();
       pulseOverrides.clear();
@@ -323,15 +390,14 @@ export function GameCanvas({
         return;
       }
 
-      const nextTime = musicOffsetMs / 1000;
+      const nextTime = runtimeMusicOffsetMs / 1000;
       audioRef.current.currentTime = Number.isFinite(nextTime) && nextTime > 0 ? nextTime : 0;
       audioRef.current.volume = readStoredMusicVolume();
       void audioRef.current.play().catch(() => {});
     };
 
-    const getRuntimeObject = (objectId: string) => runtimeObjects.find((object) => object.id === objectId) ?? null;
-    const getObjectsInPaintGroup = (groupId: number) =>
-      runtimeObjects.filter((object) => getObjectPaintGroupId(object) === groupId);
+    const getRuntimeObject = (objectId: string) => runtimeObjectMap.get(objectId) ?? null;
+    const getObjectsInPaintGroup = (groupId: number) => runtimePaintGroups.get(groupId) ?? [];
     const isRuntimeObjectDisabled = (object: LevelObject) => disabledObjectIds.has(object.id);
     const getRuntimeAlpha = (object: LevelObject) => clamp(alphaOverrides.get(object.id) ?? 1, 0, 1);
     const getRuntimeVisuals = (object: LevelObject) => {
@@ -342,23 +408,31 @@ export function GameCanvas({
         alpha: getRuntimeAlpha(object),
       };
     };
+    const isArrowProtectedByDashBlock = (solidObject: LevelObject, minX: number, maxX: number) =>
+      getRuntimeObjectsInRange(minX, maxX).some(
+        (object) =>
+          object.type === 'DASH_BLOCK' &&
+          !isRuntimeObjectDisabled(object) &&
+          aabbIntersects(player.x, player.y, player.w, player.h, object.x, object.y, object.w, object.h) &&
+          aabbIntersects(object.x, object.y, object.w, object.h, solidObject.x, solidObject.y, solidObject.w, solidObject.h),
+      );
 
     const resetRun = (timestamp = performance.now()) => {
       if (restartTimeout) {
         window.clearTimeout(restartTimeout);
       }
 
-      startTime = timestamp;
+      startTime = timestamp - previewBootstrap.elapsedMs;
       lastTimestamp = timestamp;
       jumpBufferedUntil = 0;
       lastGroundedAt = 0;
-      player.x = previewStartPos?.x ?? levelData.player.startX;
-      player.y = previewStartPos?.y ?? levelData.player.startY;
+      player.x = previewBootstrap.startX;
+      player.y = previewBootstrap.startY;
       player.vy = 0;
       player.rotation = 0;
-      player.gravity = levelData.player.gravity;
-      player.speedMultiplier = levelData.player.baseSpeed;
-      player.mode = levelData.player.mode;
+      player.gravity = previewBootstrap.gravity;
+      player.speedMultiplier = previewBootstrap.speedMultiplier;
+      player.mode = previewBootstrap.mode;
       player.grounded = false;
       inputHeldRef.current = false;
       restartMusicFromOffset();
@@ -374,9 +448,9 @@ export function GameCanvas({
       setIsPauseMenuOpen(false);
       setIsPauseSettingsOpen(false);
       setHud({
-        progressPercent: 0,
+        progressPercent: clampProgress((player.x / levelBounds.maxX) * 100),
         status: 'running',
-        elapsedMs: 0,
+        elapsedMs: previewBootstrap.elapsedMs,
       });
     };
 
@@ -395,6 +469,23 @@ export function GameCanvas({
       lastGroundedAt = -Infinity;
     };
 
+    const tryImmediateCubeJump = (timestamp = performance.now()) => {
+      if (currentStatus !== 'running' || player.mode !== 'cube') {
+        return false;
+      }
+
+      const jumpVelocity = -DEFAULT_JUMP_VELOCITY * Math.sign(player.gravity || 1);
+      const canGroundJump = player.grounded || timestamp - lastGroundedAt <= COYOTE_TIME_MS;
+
+      if (!canGroundJump) {
+        return false;
+      }
+
+      launchPlayer(jumpVelocity);
+      jumpBufferedUntil = 0;
+      return true;
+    };
+
     const ensureAudioPlayback = () => {
       const audio = audioRef.current;
 
@@ -405,8 +496,8 @@ export function GameCanvas({
       audio.volume = readStoredMusicVolume();
 
       if (audio.paused) {
-        if (audio.currentTime < musicOffsetMs / 1000) {
-          audio.currentTime = musicOffsetMs / 1000;
+        if (audio.currentTime < runtimeMusicOffsetMs / 1000) {
+          audio.currentTime = runtimeMusicOffsetMs / 1000;
         }
         void audio.play().catch(() => {});
       }
@@ -414,6 +505,10 @@ export function GameCanvas({
 
     const queueJump = (timestamp = performance.now()) => {
       if (currentStatus !== 'running') {
+        return;
+      }
+
+      if (tryImmediateCubeJump(timestamp)) {
         return;
       }
 
@@ -517,7 +612,7 @@ export function GameCanvas({
       currentStatus = 'failed';
       if (audioRef.current) {
         audioRef.current.pause();
-        audioRef.current.currentTime = musicOffsetMs / 1000;
+        audioRef.current.currentTime = runtimeMusicOffsetMs / 1000;
       }
       bumpCamera(12, 0.24);
       const progressPercent = clampProgress((player.x / levelBounds.maxX) * 100);
@@ -571,10 +666,15 @@ export function GameCanvas({
       const isPaused = pauseMenuOpenRef.current && currentStatus === 'running';
 
       if (currentStatus === 'running' && !isPaused) {
+        if (player.mode === 'cube' && inputHeldRef.current) {
+          jumpBufferedUntil = Math.max(jumpBufferedUntil, timestamp + JUMP_BUFFER_MS);
+        }
+
         const collisionRangeMinX = player.x - 3;
         const collisionRangeMaxX = player.x + player.w + (isLowPowerDevice ? 6 : 8);
         const interactionRangeMinX = player.x - 2;
         const interactionRangeMaxX = player.x + player.w + (isLowPowerDevice ? 8 : 10);
+        let movedRuntimeObjects = false;
 
         for (const [objectId, animation] of moveAnimations) {
           const runtimeObject = getRuntimeObject(objectId);
@@ -588,10 +688,15 @@ export function GameCanvas({
           const progress = clamp((elapsedMs - animation.startedAt) / durationMs, 0, 1);
           runtimeObject.x = animation.startX + (animation.targetX - animation.startX) * progress;
           runtimeObject.y = animation.startY + (animation.targetY - animation.startY) * progress;
+          movedRuntimeObjects = true;
 
           if (progress >= 1) {
             moveAnimations.delete(objectId);
           }
+        }
+
+        if (movedRuntimeObjects) {
+          rebuildRuntimeObjectBuckets();
         }
 
         for (const [objectId, pulse] of pulseOverrides) {
@@ -611,6 +716,9 @@ export function GameCanvas({
           const shipAcceleration = inputHeldRef.current ? -SHIP_THRUST_ACCELERATION : SHIP_FALL_ACCELERATION;
           player.vy += shipAcceleration * gravityDirection * deltaSeconds;
           player.vy = clamp(player.vy, -SHIP_MAX_VERTICAL_SPEED, SHIP_MAX_VERTICAL_SPEED);
+        } else if (player.mode === 'arrow') {
+          player.vy =
+            horizontalSpeed * ARROW_VERTICAL_SPEED_FACTOR * (inputHeldRef.current ? -1 : 1) * gravityDirection;
         } else {
           player.vy += BASE_GRAVITY_ACCELERATION * player.gravity * deltaSeconds;
         }
@@ -633,17 +741,47 @@ export function GameCanvas({
           }
         }
 
-        for (const object of runtimeObjects) {
+        const collisionObjects = getRuntimeObjectsInRange(collisionRangeMinX, collisionRangeMaxX);
+        const interactionObjects = getRuntimeObjectsInRange(interactionRangeMinX, interactionRangeMaxX);
+
+        for (const object of collisionObjects) {
           if (
             isRuntimeObjectDisabled(object) ||
             !solidTypes.has(object.type) ||
-            !objectIntersectsHorizontalRange(object, collisionRangeMinX, collisionRangeMaxX) ||
             !aabbIntersects(player.x, player.y, player.w, player.h, object.x, object.y, object.w, object.h)
           ) {
             continue;
           }
 
           let resolvedSafely = false;
+
+          if (player.mode === 'arrow') {
+            const previousBottom = previousY + player.h;
+            const nextBottom = player.y + player.h;
+            const previousTop = previousY;
+            const nextTop = player.y;
+            const ceiling = object.y + object.h;
+            const isDashProtected = isArrowProtectedByDashBlock(object, collisionRangeMinX, collisionRangeMaxX);
+
+            if (isDashProtected && previousBottom <= object.y && nextBottom >= object.y && player.vy >= 0) {
+              player.y = object.y - player.h;
+              player.vy = 0;
+              resolvedSafely = true;
+            }
+
+            if (isDashProtected && !resolvedSafely && previousTop >= ceiling && nextTop <= ceiling && player.vy <= 0) {
+              player.y = ceiling;
+              player.vy = 0;
+              resolvedSafely = true;
+            }
+
+            if (resolvedSafely) {
+              continue;
+            }
+
+            markFailed(elapsedMs);
+            break;
+          }
 
           if (player.mode === 'ship') {
             const previousBottom = previousY + player.h;
@@ -706,12 +844,11 @@ export function GameCanvas({
           } else {
             let orb: LevelObject | null = null;
 
-            for (const object of runtimeObjects) {
+            for (const object of interactionObjects) {
               if (
                 object.type !== 'JUMP_ORB' ||
                 isRuntimeObjectDisabled(object) ||
-                usedOrbs.has(object.id) ||
-                !objectIntersectsHorizontalRange(object, interactionRangeMinX, interactionRangeMaxX)
+                usedOrbs.has(object.id)
               ) {
                 continue;
               }
@@ -742,7 +879,7 @@ export function GameCanvas({
           }
         }
 
-        for (const object of runtimeObjects) {
+        for (const object of interactionObjects) {
           if (currentStatus !== 'running') {
             break;
           }
@@ -751,7 +888,7 @@ export function GameCanvas({
             continue;
           }
 
-          if (!objectIntersectsHorizontalRange(object, interactionRangeMinX, interactionRangeMaxX)) {
+          if (object.type === 'DASH_BLOCK') {
             continue;
           }
 
@@ -797,6 +934,15 @@ export function GameCanvas({
               player.mode = 'cube';
               player.grounded = false;
               player.rotation = snapCubeRotation(player.rotation);
+              bumpCamera(4, 0.12);
+            }
+
+            if (object.type === 'ARROW_PORTAL') {
+              player.mode = 'arrow';
+              player.grounded = false;
+              player.vy =
+                horizontalSpeed * ARROW_VERTICAL_SPEED_FACTOR * (inputHeldRef.current ? -1 : 1) * gravityDirection;
+              player.rotation = Math.atan2(player.vy, horizontalSpeed);
               bumpCamera(4, 0.12);
             }
 
@@ -889,6 +1035,8 @@ export function GameCanvas({
         if (player.mode === 'ship') {
           const targetRotation = clamp(player.vy * 0.07, -0.58, 0.58);
           player.rotation += (targetRotation - player.rotation) * Math.min(1, deltaSeconds * 10);
+        } else if (player.mode === 'arrow') {
+          player.rotation = Math.atan2(player.vy, horizontalSpeed);
         } else if (player.grounded) {
           player.rotation = snapCubeRotation(player.rotation);
         } else {
@@ -960,7 +1108,9 @@ export function GameCanvas({
       const drawRangeMinX = (cameraX + shakeOffsetX) / cell - 3;
       const drawRangeMaxX = drawRangeMinX + width / cell + 6;
 
-      for (const object of runtimeObjects) {
+      const drawObjectsInRange = getRuntimeObjectsInRange(drawRangeMinX, drawRangeMaxX);
+
+      for (const object of drawObjectsInRange) {
         if (isRuntimeObjectDisabled(object) || !objectIntersectsHorizontalRange(object, drawRangeMinX, drawRangeMaxX)) {
           continue;
         }
@@ -1034,7 +1184,7 @@ export function GameCanvas({
       window.removeEventListener('blur', releaseHeldInput);
       canvas.removeEventListener('pointerdown', pointerDownListener);
     };
-  }, [autoRestartOnFail, fullscreen, levelBounds.maxX, levelBounds.maxY, levelData, musicOffsetMs, onComplete, onFail, previewStartPos, runId]);
+  }, [autoRestartOnFail, fullscreen, levelBounds.maxX, levelBounds.maxY, levelData, onComplete, onFail, previewBootstrap, runId, runtimeMusicOffsetMs]);
 
       if (fullscreen) {
     return (
@@ -1176,7 +1326,11 @@ export function GameCanvas({
 
       <p className="arcade-runtime-footer text-xs leading-6 text-white/72">
         Controls: <span className="text-white">Space</span>, click, or tap to{' '}
-        {levelData.player.mode === 'ship' ? 'thrust upward' : 'jump'}.
+        {levelData.player.mode === 'ship'
+          ? 'thrust upward'
+          : levelData.player.mode === 'arrow'
+            ? 'rise diagonally'
+            : 'jump'}.
         {!onFail && !onComplete ? (
           <>
             {' '}
@@ -1185,7 +1339,9 @@ export function GameCanvas({
         ) : null}{' '}
         {levelData.player.mode === 'ship'
           ? 'Ship runs stay between the top and bottom flight bounds, and any wall contact still punishes sloppy routing.'
-          : 'Jump inputs are buffered briefly, spikes use a fairer hitbox, and side collisions still punish sloppy routing.'}
+          : levelData.player.mode === 'arrow'
+            ? 'Arrow runs trace diagonal lines, and any wall or ramp contact immediately breaks the run.'
+            : 'Jump inputs are buffered briefly, spikes use a fairer hitbox, and side collisions still punish sloppy routing.'}
       </p>
     </Panel>
   );
@@ -1222,6 +1378,10 @@ function drawObject(
     alpha: number;
   },
 ) {
+  if (object.type === 'DASH_BLOCK') {
+    return;
+  }
+
   const x = object.x * cell;
   const y = verticalOffset + object.y * cell;
   const w = object.w * cell;
@@ -1321,6 +1481,56 @@ function drawPlayer(context: CanvasRenderingContext2D, player: PlayerState, cell
     return;
   }
 
+  if (player.mode === 'arrow') {
+    const bodyLength = sizeW * 0.94;
+    const bodyHeight = sizeH * 0.58;
+    const halfLength = bodyLength / 2;
+    const halfHeight = bodyHeight / 2;
+    const pilotSize = Math.min(sizeW, sizeH) * 0.24;
+
+    context.fillStyle = '#132339';
+    context.beginPath();
+    context.moveTo(-halfLength * 0.9, 0);
+    context.lineTo(-halfLength * 0.18, -halfHeight);
+    context.lineTo(halfLength, 0);
+    context.lineTo(-halfLength * 0.18, halfHeight);
+    context.closePath();
+    context.fill();
+
+    context.fillStyle = '#f4f7ff';
+    context.beginPath();
+    context.moveTo(-halfLength * 0.76, 0);
+    context.lineTo(-halfLength * 0.08, -halfHeight * 0.88);
+    context.lineTo(halfLength * 0.92, 0);
+    context.lineTo(-halfLength * 0.08, halfHeight * 0.88);
+    context.closePath();
+    context.fill();
+    context.strokeStyle = '#182133';
+    context.lineWidth = 2.6;
+    context.stroke();
+
+    context.fillStyle = '#63ffbd';
+    context.beginPath();
+    context.moveTo(-halfLength * 0.06, -halfHeight * 0.54);
+    context.lineTo(halfLength * 0.3, 0);
+    context.lineTo(-halfLength * 0.06, halfHeight * 0.54);
+    context.closePath();
+    context.fill();
+
+    context.fillStyle = '#f4f7ff';
+    context.fillRect(-halfLength * 0.54, -pilotSize / 2, pilotSize, pilotSize);
+    context.strokeStyle = '#182133';
+    context.lineWidth = 2;
+    context.strokeRect(-halfLength * 0.54, -pilotSize / 2, pilotSize, pilotSize);
+    context.fillStyle = '#182133';
+    context.fillRect(-halfLength * 0.48, -pilotSize * 0.2, pilotSize * 0.1, pilotSize * 0.1);
+    context.fillRect(-halfLength * 0.36, -pilotSize * 0.2, pilotSize * 0.1, pilotSize * 0.1);
+    context.fillRect(-halfLength * 0.48, pilotSize * 0.12, pilotSize * 0.22, pilotSize * 0.07);
+
+    context.restore();
+    return;
+  }
+
   context.fillStyle = '#f4f7ff';
   context.fillRect(-sizeW / 2, -sizeH / 2, sizeW, sizeH);
   context.strokeStyle = '#182133';
@@ -1374,16 +1584,60 @@ function aabbIntersects(
 }
 
 function spikeIntersects(player: PlayerState, object: LevelData['objects'][number]) {
+  const hitbox = getSpikeHitbox(object);
+
   return aabbIntersects(
     player.x,
     player.y,
     player.w,
     player.h,
-    object.x + 0.18,
-    object.y + 0.26,
-    Math.max(0.2, object.w - 0.36),
-    Math.max(0.2, object.h - 0.26),
+    hitbox.x,
+    hitbox.y,
+    hitbox.w,
+    hitbox.h,
   );
+}
+
+function getSpikeHitbox(object: LevelData['objects'][number]) {
+  const normalizedRotation = normalizeQuarterRotationDegrees(object.rotation ?? 0);
+  const centerInsetX = object.w * 0.34;
+  const centerInsetY = object.h * 0.2;
+  const narrowWidth = object.w * 0.32;
+  const narrowHeight = object.h * 0.58;
+
+  if (normalizedRotation === 90) {
+    return {
+      x: object.x + centerInsetY,
+      y: object.y + centerInsetX,
+      w: narrowHeight,
+      h: narrowWidth,
+    };
+  }
+
+  if (normalizedRotation === 180) {
+    return {
+      x: object.x + centerInsetX,
+      y: object.y + object.h - centerInsetY - narrowHeight,
+      w: narrowWidth,
+      h: narrowHeight,
+    };
+  }
+
+  if (normalizedRotation === 270) {
+    return {
+      x: object.x + object.w - centerInsetY - narrowHeight,
+      y: object.y + centerInsetX,
+      w: narrowHeight,
+      h: narrowWidth,
+    };
+  }
+
+  return {
+    x: object.x + centerInsetX,
+    y: object.y + centerInsetY,
+    w: narrowWidth,
+    h: narrowHeight,
+  };
 }
 
 function sawIntersects(player: PlayerState, object: LevelData['objects'][number]) {
@@ -1398,6 +1652,130 @@ function sawIntersects(player: PlayerState, object: LevelData['objects'][number]
   return deltaX * deltaX + deltaY * deltaY <= radius * radius;
 }
 
+function getArrowRampTriangle(object: LevelData['objects'][number]) {
+  const centerX = object.x + object.w / 2;
+  const centerY = object.y + object.h / 2;
+  const normalizedRotation = normalizeQuarterRotationDegrees(object.rotation ?? 0);
+
+  const baseVertices =
+    object.type === 'ARROW_RAMP_ASC'
+      ? [
+          { x: object.x, y: object.y + object.h },
+          { x: object.x + object.w, y: object.y + object.h },
+          { x: object.x + object.w, y: object.y },
+        ]
+      : [
+          { x: object.x, y: object.y },
+          { x: object.x, y: object.y + object.h },
+          { x: object.x + object.w, y: object.y + object.h },
+        ];
+
+  if (normalizedRotation === 0) {
+    return baseVertices;
+  }
+
+  const angle = (normalizedRotation * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+
+  return baseVertices.map((point) => {
+    const offsetX = point.x - centerX;
+    const offsetY = point.y - centerY;
+
+    return {
+      x: centerX + offsetX * cos - offsetY * sin,
+      y: centerY + offsetX * sin + offsetY * cos,
+    };
+  });
+}
+
+function triangleIntersectsAabb(
+  ax: number,
+  ay: number,
+  aw: number,
+  ah: number,
+  triangle: Array<{ x: number; y: number }>,
+) {
+  const rectCorners = [
+    { x: ax, y: ay },
+    { x: ax + aw, y: ay },
+    { x: ax + aw, y: ay + ah },
+    { x: ax, y: ay + ah },
+  ];
+
+  if (rectCorners.some((corner) => pointInTriangle(corner, triangle[0], triangle[1], triangle[2]))) {
+    return true;
+  }
+
+  if (triangle.some((point) => point.x >= ax && point.x <= ax + aw && point.y >= ay && point.y <= ay + ah)) {
+    return true;
+  }
+
+  const rectEdges = [
+    [rectCorners[0], rectCorners[1]],
+    [rectCorners[1], rectCorners[2]],
+    [rectCorners[2], rectCorners[3]],
+    [rectCorners[3], rectCorners[0]],
+  ] as const;
+  const triangleEdges = [
+    [triangle[0], triangle[1]],
+    [triangle[1], triangle[2]],
+    [triangle[2], triangle[0]],
+  ] as const;
+
+  return triangleEdges.some(([startA, endA]) =>
+    rectEdges.some(([startB, endB]) => segmentsIntersect(startA, endA, startB, endB)),
+  );
+}
+
+function pointInTriangle(
+  point: { x: number; y: number },
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+  c: { x: number; y: number },
+) {
+  const denominator = (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
+
+  if (Math.abs(denominator) < 1e-6) {
+    return false;
+  }
+
+  const alpha = ((b.y - c.y) * (point.x - c.x) + (c.x - b.x) * (point.y - c.y)) / denominator;
+  const beta = ((c.y - a.y) * (point.x - c.x) + (a.x - c.x) * (point.y - c.y)) / denominator;
+  const gamma = 1 - alpha - beta;
+
+  return alpha >= 0 && beta >= 0 && gamma >= 0;
+}
+
+function segmentsIntersect(
+  aStart: { x: number; y: number },
+  aEnd: { x: number; y: number },
+  bStart: { x: number; y: number },
+  bEnd: { x: number; y: number },
+) {
+  const aDx = aEnd.x - aStart.x;
+  const aDy = aEnd.y - aStart.y;
+  const bDx = bEnd.x - bStart.x;
+  const bDy = bEnd.y - bStart.y;
+  const denominator = aDx * bDy - aDy * bDx;
+
+  if (Math.abs(denominator) < 1e-6) {
+    return false;
+  }
+
+  const startDx = bStart.x - aStart.x;
+  const startDy = bStart.y - aStart.y;
+  const ua = (startDx * bDy - startDy * bDx) / denominator;
+  const ub = (startDx * aDy - startDy * aDx) / denominator;
+
+  return ua >= 0 && ua <= 1 && ub >= 0 && ub <= 1;
+}
+
+function arrowRampIntersects(player: PlayerState, object: LevelData['objects'][number]) {
+  const triangle = getArrowRampTriangle(object);
+  return triangleIntersectsAabb(player.x, player.y, player.w, player.h, triangle);
+}
+
 function hazardIntersects(player: PlayerState, object: LevelData['objects'][number]) {
   if (object.type === 'SPIKE') {
     return spikeIntersects(player, object);
@@ -1405,6 +1783,10 @@ function hazardIntersects(player: PlayerState, object: LevelData['objects'][numb
 
   if (object.type === 'SAW_BLADE') {
     return sawIntersects(player, object);
+  }
+
+  if (object.type === 'ARROW_RAMP_ASC' || object.type === 'ARROW_RAMP_DESC') {
+    return arrowRampIntersects(player, object);
   }
 
   return false;
@@ -1418,13 +1800,146 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
+function buildRuntimeObjectBuckets(objects: LevelObject[]) {
+  const buckets = new Map<number, number[]>();
+
+  for (let index = 0; index < objects.length; index += 1) {
+    const object = objects[index];
+    const startBucket = Math.floor(object.x / RUNTIME_BUCKET_WIDTH_UNITS);
+    const endBucket = Math.floor((object.x + object.w) / RUNTIME_BUCKET_WIDTH_UNITS);
+
+    for (let bucket = startBucket; bucket <= endBucket; bucket += 1) {
+      const bucketEntries = buckets.get(bucket);
+
+      if (bucketEntries) {
+        bucketEntries.push(index);
+      } else {
+        buckets.set(bucket, [index]);
+      }
+    }
+  }
+
+  return buckets;
+}
+
+function buildRuntimePaintGroupMap(objects: LevelObject[]) {
+  const paintGroups = new Map<number, LevelObject[]>();
+
+  for (const object of objects) {
+    const groupId = getObjectPaintGroupId(object);
+
+    if (!groupId) {
+      continue;
+    }
+
+    const entries = paintGroups.get(groupId);
+
+    if (entries) {
+      entries.push(object);
+    } else {
+      paintGroups.set(groupId, [object]);
+    }
+  }
+
+  return paintGroups;
+}
+
 function objectIntersectsHorizontalRange(object: LevelObject, minX: number, maxX: number) {
   return object.x <= maxX && object.x + object.w >= minX;
+}
+
+function buildPreviewBootstrap(
+  levelData: LevelData,
+  previewStartPos: {
+    x: number;
+    y: number;
+  } | null,
+): PreviewBootstrap {
+  const bootstrap: PreviewBootstrap = {
+    startX: previewStartPos?.x ?? levelData.player.startX,
+    startY: previewStartPos?.y ?? levelData.player.startY,
+    speedMultiplier: levelData.player.baseSpeed,
+    gravity: levelData.player.gravity,
+    mode: levelData.player.mode,
+    elapsedMs: 0,
+  };
+
+  if (!previewStartPos || previewStartPos.x <= levelData.player.startX) {
+    return bootstrap;
+  }
+
+  const relevantPortals = levelData.objects
+    .filter((object) => {
+      if (object.x > previewStartPos.x) {
+        return false;
+      }
+
+      return (
+        object.type === 'SPEED_PORTAL' ||
+        object.type === 'GRAVITY_PORTAL' ||
+        object.type === 'SHIP_PORTAL' ||
+        object.type === 'CUBE_PORTAL' ||
+        object.type === 'ARROW_PORTAL'
+      );
+    })
+    .sort((left, right) => left.x - right.x || left.y - right.y);
+
+  let cursorX = levelData.player.startX;
+  let elapsedMs = 0;
+  let currentSpeedMultiplier = Math.max(0.1, levelData.player.baseSpeed);
+
+  for (const portal of relevantPortals) {
+    const portalX = clamp(portal.x, cursorX, previewStartPos.x);
+
+    if (portalX > cursorX) {
+      elapsedMs += ((portalX - cursorX) / (BASE_HORIZONTAL_SPEED * currentSpeedMultiplier)) * 1000;
+      cursorX = portalX;
+    }
+
+    if (portal.type === 'SPEED_PORTAL') {
+      const nextMultiplier = Number(portal.props.multiplier ?? currentSpeedMultiplier);
+      if (Number.isFinite(nextMultiplier) && nextMultiplier > 0) {
+        currentSpeedMultiplier = nextMultiplier;
+        bootstrap.speedMultiplier = nextMultiplier;
+      }
+    }
+
+    if (portal.type === 'GRAVITY_PORTAL') {
+      const nextGravity = Number(portal.props.gravity ?? bootstrap.gravity);
+      if (Number.isFinite(nextGravity) && nextGravity !== 0) {
+        bootstrap.gravity = nextGravity;
+      }
+    }
+
+    if (portal.type === 'SHIP_PORTAL') {
+      bootstrap.mode = 'ship';
+    }
+
+    if (portal.type === 'CUBE_PORTAL') {
+      bootstrap.mode = 'cube';
+    }
+
+    if (portal.type === 'ARROW_PORTAL') {
+      bootstrap.mode = 'arrow';
+    }
+  }
+
+  if (previewStartPos.x > cursorX) {
+    elapsedMs += ((previewStartPos.x - cursorX) / (BASE_HORIZONTAL_SPEED * currentSpeedMultiplier)) * 1000;
+  }
+
+  bootstrap.elapsedMs = Math.max(0, Math.round(elapsedMs));
+  return bootstrap;
 }
 
 function normalizeAngle(value: number) {
   const fullTurn = Math.PI * 2;
   return ((value % fullTurn) + fullTurn) % fullTurn;
+}
+
+function normalizeQuarterRotationDegrees(value: number) {
+  const normalized = ((Math.round(value / 90) * 90) % 360 + 360) % 360;
+  return normalized === 360 ? 0 : normalized;
 }
 
 function snapCubeRotation(value: number) {

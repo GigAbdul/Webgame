@@ -1940,7 +1940,7 @@ body::after {
   display: grid;
   width: 100%;
   gap: 0.55rem;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 
 .editor-canvas-rail {
@@ -5050,7 +5050,7 @@ body.editor-route-active {
 .editor-workbench-toolbar-meta {
   display: grid;
   gap: 0.75rem;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   margin-top: 1rem;
 }
 
@@ -5091,6 +5091,7 @@ body.editor-route-active {
   top: 86px;
   left: auto;
   right: 122px;
+  z-index: 6;
   justify-content: flex-end;
 }
 
@@ -5100,6 +5101,7 @@ body.editor-route-active {
 }
 
 .editor-canvas-popup {
+  position: relative;
   width: min(320px, calc(100vw - 220px));
   display: grid;
   gap: 0.85rem;
@@ -5151,7 +5153,7 @@ body.editor-route-active {
 
 .editor-canvas-hud-bar {
   width: auto;
-  grid-template-columns: repeat(4, minmax(150px, 190px));
+  grid-template-columns: repeat(6, minmax(124px, 176px));
 }
 
 .editor-canvas-hud-bar .editor-hint-box {

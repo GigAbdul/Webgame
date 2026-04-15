@@ -21,6 +21,8 @@ type BlockObjectType =
   | 'HALF_PLATFORM_BLOCK'
   | 'DECORATION_BLOCK';
 
+type ArrowRampObjectType = 'ARROW_RAMP_ASC' | 'ARROW_RAMP_DESC';
+
 const blockTypes = new Set<BlockObjectType>([
   'GROUND_BLOCK',
   'HALF_GROUND_BLOCK',
@@ -29,8 +31,14 @@ const blockTypes = new Set<BlockObjectType>([
   'DECORATION_BLOCK',
 ]);
 
+const arrowRampTypes = new Set<ArrowRampObjectType>(['ARROW_RAMP_ASC', 'ARROW_RAMP_DESC']);
+
 function isBlockType(type: LevelData['objects'][number]['type']): type is BlockObjectType {
   return blockTypes.has(type as BlockObjectType);
+}
+
+function isArrowRampType(type: LevelData['objects'][number]['type']): type is ArrowRampObjectType {
+  return arrowRampTypes.has(type as ArrowRampObjectType);
 }
 
 export function drawStageObjectSprite({
@@ -86,6 +94,7 @@ export function drawStageObjectSprite({
     object.type === 'SPEED_PORTAL' ||
     object.type === 'SHIP_PORTAL' ||
     object.type === 'CUBE_PORTAL' ||
+    object.type === 'ARROW_PORTAL' ||
     object.type === 'FINISH_PORTAL'
   ) {
     drawPortalSprite(context, object.type, x, y, w, h, fillColor, strokeColor, isActive);
@@ -106,6 +115,18 @@ export function drawStageObjectSprite({
 
   if (isBlockType(object.type)) {
     drawBlockSprite(context, x, y, w, h, fillColor, strokeColor, object.type === 'DECORATION_BLOCK');
+    context.restore();
+    return;
+  }
+
+  if (isArrowRampType(object.type)) {
+    drawArrowRampSprite(context, object.type, x, y, w, h, fillColor, strokeColor);
+    context.restore();
+    return;
+  }
+
+  if (object.type === 'DASH_BLOCK') {
+    drawDashBlockSprite(context, x, y, w, h);
     context.restore();
     return;
   }
@@ -190,6 +211,97 @@ function drawSpikeSprite(
   context.strokeStyle = strokeColor;
   context.lineWidth = 2;
   context.stroke();
+}
+
+function drawArrowRampSprite(
+  context: CanvasRenderingContext2D,
+  type: ArrowRampObjectType,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  fillColor: string,
+  strokeColor: string,
+) {
+  const gradient = context.createLinearGradient(x, y, x + w, y + h);
+  gradient.addColorStop(0, lightenColor(fillColor, 0.22));
+  gradient.addColorStop(0.55, fillColor);
+  gradient.addColorStop(1, darkenColor(fillColor, 0.3));
+
+  context.beginPath();
+  if (type === 'ARROW_RAMP_ASC') {
+    context.moveTo(x, y + h);
+    context.lineTo(x + w, y + h);
+    context.lineTo(x + w, y);
+  } else {
+    context.moveTo(x, y);
+    context.lineTo(x, y + h);
+    context.lineTo(x + w, y + h);
+  }
+  context.closePath();
+  context.fillStyle = gradient;
+  context.fill();
+
+  context.fillStyle = 'rgba(255,255,255,0.18)';
+  context.beginPath();
+  if (type === 'ARROW_RAMP_ASC') {
+    context.moveTo(x + w * 0.18, y + h * 0.9);
+    context.lineTo(x + w * 0.78, y + h * 0.9);
+    context.lineTo(x + w * 0.78, y + h * 0.28);
+  } else {
+    context.moveTo(x + w * 0.22, y + h * 0.1);
+    context.lineTo(x + w * 0.22, y + h * 0.72);
+    context.lineTo(x + w * 0.82, y + h * 0.72);
+  }
+  context.closePath();
+  context.fill();
+
+  context.strokeStyle = strokeColor;
+  context.lineWidth = 2.2;
+  context.beginPath();
+  if (type === 'ARROW_RAMP_ASC') {
+    context.moveTo(x, y + h);
+    context.lineTo(x + w, y);
+    context.lineTo(x + w, y + h);
+    context.closePath();
+  } else {
+    context.moveTo(x, y);
+    context.lineTo(x, y + h);
+    context.lineTo(x + w, y + h);
+    context.closePath();
+  }
+  context.stroke();
+}
+
+function drawDashBlockSprite(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+) {
+  const gradient = context.createLinearGradient(x, y, x, y + h);
+  gradient.addColorStop(0, 'rgba(120, 182, 255, 0.34)');
+  gradient.addColorStop(1, 'rgba(38, 96, 187, 0.22)');
+  context.fillStyle = gradient;
+  context.fillRect(x, y, w, h);
+
+  context.fillStyle = 'rgba(255,255,255,0.1)';
+  context.fillRect(x + 2, y + 2, Math.max(0, w - 4), Math.max(0, h * 0.18));
+
+  context.strokeStyle = '#ffffff';
+  context.lineWidth = 2.8;
+  context.strokeRect(x + 1.5, y + 1.5, Math.max(0, w - 3), Math.max(0, h - 3));
+
+  context.strokeStyle = 'rgba(255,255,255,0.28)';
+  context.lineWidth = 1.1;
+  context.strokeRect(x + 5, y + 5, Math.max(0, w - 10), Math.max(0, h - 10));
+
+  context.fillStyle = '#18345d';
+  context.font = `${Math.max(10, Math.min(w, h) * 0.36)}px Arial Black`;
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.fillText('D', x + w / 2, y + h / 2 + 0.5);
 }
 
 function drawSawSprite(
@@ -399,6 +511,15 @@ function drawPortalGlyph(
     context.closePath();
   } else if (type === 'CUBE_PORTAL') {
     context.rect(centerX - w * 0.12, centerY - h * 0.12, w * 0.24, h * 0.24);
+  } else if (type === 'ARROW_PORTAL') {
+    context.moveTo(centerX - w * 0.18, centerY - h * 0.12);
+    context.lineTo(centerX + w * 0.02, centerY - h * 0.12);
+    context.lineTo(centerX + w * 0.02, centerY - h * 0.22);
+    context.lineTo(centerX + w * 0.2, centerY);
+    context.lineTo(centerX + w * 0.02, centerY + h * 0.22);
+    context.lineTo(centerX + w * 0.02, centerY + h * 0.12);
+    context.lineTo(centerX - w * 0.18, centerY + h * 0.12);
+    context.closePath();
   } else if (type === 'FINISH_PORTAL') {
     context.moveTo(centerX, centerY - h * 0.16);
     context.lineTo(centerX + w * 0.08, centerY - h * 0.02);
