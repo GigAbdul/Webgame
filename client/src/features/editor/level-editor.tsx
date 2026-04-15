@@ -286,6 +286,8 @@ export function LevelEditor({
   const [cursorWorld, setCursorWorld] = useState({ x: 0, y: 0 });
   const [canvasViewport, setCanvasViewport] = useState({ width: EDITOR_CANVAS_WIDTH, height: EDITOR_CANVAS_HEIGHT });
   const [showPreview, setShowPreview] = useState(false);
+  const [isMobileLayout, setIsMobileLayout] = useState(false);
+  const [isMobileSettingsExpanded, setIsMobileSettingsExpanded] = useState(false);
   const [previewRunSeed, setPreviewRunSeed] = useState(0);
   const [isPaintPopupOpen, setIsPaintPopupOpen] = useState(false);
   const [activePaintGroupId, setActivePaintGroupId] = useState<number | null>(null);
@@ -347,6 +349,35 @@ export function LevelEditor({
   useEffect(() => {
     liveLevelDataRef.current = levelData;
   }, [levelData]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia('(max-width: 860px), (pointer: coarse)');
+    const syncMobileLayout = () => {
+      setIsMobileLayout(mediaQuery.matches);
+    };
+
+    syncMobileLayout();
+    mediaQuery.addEventListener('change', syncMobileLayout);
+
+    return () => {
+      mediaQuery.removeEventListener('change', syncMobileLayout);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isMobileLayout) {
+      return;
+    }
+
+    document.body.classList.toggle('editor-mobile-preview-open', showPreview);
+    return () => {
+      document.body.classList.remove('editor-mobile-preview-open');
+    };
+  }, [isMobileLayout, showPreview]);
 
   const applySelection = useCallback((nextIds: string[], nextPrimaryId?: string | null) => {
     const uniqueIds = [...new Set(nextIds)];
@@ -453,6 +484,7 @@ export function LevelEditor({
   const canUndo = historyIndex > 0;
   const canRedo = historyIndex < history.length - 1;
   const historyPosition = `${historyIndex + 1}/${history.length}`;
+  const isMobilePreviewOpen = showPreview && isMobileLayout;
   const selectionSummary =
     selectedObjects.length > 1
       ? `${selectedObjects.length} objects selected`
@@ -1863,7 +1895,12 @@ export function LevelEditor({
   };
 
   return (
-    <div className="arcade-editor-workstation editor-workbench flex flex-col space-y-5">
+    <div
+      className={cn(
+        'arcade-editor-workstation editor-workbench flex flex-col space-y-5',
+        isMobileLayout ? 'editor-workbench--mobile' : '',
+      )}
+    >
       <Panel className="arcade-editor-topbar editor-workbench-toolbar game-screen bg-transparent">
         <div className="editor-workbench-toolbar-main">
           <div>
@@ -2451,7 +2488,35 @@ export function LevelEditor({
         ) : null}
       </Panel>
 
-      {showPreview ? (
+      {isMobilePreviewOpen ? (
+        <div className="editor-mobile-preview-shell" role="dialog" aria-modal="true" aria-label="Editor preview">
+          <div className="editor-mobile-preview-bar">
+            <div>
+              <p className="font-display text-[9px] tracking-[0.18em] text-[#ffd44a]">Live Test</p>
+              <p className="editor-mobile-preview-title">Preview Run</p>
+            </div>
+            <div className="editor-mobile-preview-actions">
+              <Button variant="ghost" onClick={() => setPreviewRunSeed((current) => current + 1)}>
+                Restart
+              </Button>
+              <Button variant="ghost" onClick={() => setShowPreview(false)}>
+                Close
+              </Button>
+            </div>
+          </div>
+
+          <GameCanvas
+            key={`editor-preview-mobile-${previewRunSeed}`}
+            levelData={levelData}
+            runId={`editor-preview-mobile-${previewRunSeed}`}
+            attemptNumber={1}
+            autoRestartOnFail
+            previewStartPosEnabled
+            fullscreen
+            className="editor-mobile-preview-runtime"
+          />
+        </div>
+      ) : showPreview ? (
         <Panel className="arcade-preview-dock game-screen space-y-4 bg-transparent">
           <div className="editor-workbench-section-head">
             <div>
@@ -2483,48 +2548,71 @@ export function LevelEditor({
         </Panel>
       ) : null}
 
-      <Panel className="game-screen space-y-4 bg-transparent">
+      <Panel
+        className={cn(
+          'game-screen space-y-4 bg-transparent editor-level-settings-panel',
+          isMobileLayout && !isMobileSettingsExpanded ? 'editor-level-settings-panel--collapsed' : '',
+        )}
+      >
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Level Setup</p>
             <h3 className="font-display text-2xl text-white">Level Settings</h3>
           </div>
-          <Badge tone="accent">{themePresets.find((preset) => preset.value === theme)?.label ?? 'Custom'}</Badge>
-        </div>
-
-        <div>
-          <FieldLabel>Title</FieldLabel>
-          <Input value={title} onChange={(event) => setTitle(event.target.value)} />
-        </div>
-        <div>
-          <FieldLabel>Description</FieldLabel>
-          <Textarea rows={4} value={description} onChange={(event) => setDescription(event.target.value)} />
-        </div>
-
-        <div className="editor-inline-card space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <FieldLabel>Start Pos</FieldLabel>
-              <p className="mt-1 text-sm text-white/68">
-                Start Pos markers affect editor preview only. Levels with Start Pos markers cannot be submitted.
-              </p>
-            </div>
-            <Badge tone={hasStartPositions ? 'danger' : 'default'}>
-              {hasStartPositions ? `${startPosCount} active` : 'None'}
-            </Badge>
-          </div>
           <div className="editor-inline-actions">
-            <Button variant="ghost" onClick={deleteAllStartPositions} disabled={!hasStartPositions}>
-              Delete All Start Pos
-            </Button>
-            <Badge tone="accent">
-              {activePreviewStartPos ? `Preview starts at ${activePreviewStartPos.x}, ${activePreviewStartPos.y}` : 'Preview uses main start'}
-            </Badge>
+            <Badge tone="accent">{themePresets.find((preset) => preset.value === theme)?.label ?? 'Custom'}</Badge>
+            {isMobileLayout ? (
+              <Button variant="ghost" onClick={() => setIsMobileSettingsExpanded((current) => !current)}>
+                {isMobileSettingsExpanded ? 'Hide Setup' : 'Show Setup'}
+              </Button>
+            ) : null}
           </div>
         </div>
 
-        {selectedObject ? (
-          <div className="space-y-4">
+        {isMobileLayout && !isMobileSettingsExpanded ? (
+          <div className="editor-mobile-settings-summary">
+            <HintChip label="Theme" value={themePresets.find((preset) => preset.value === theme)?.label ?? 'Custom'} />
+            <HintChip label="Mode" value={getPlayerModeLabel(levelData.player.mode)} />
+            <HintChip label="Objects" value={objectCount} />
+            <HintChip label="Start Pos" value={hasStartPositions ? String(startPosCount) : 'None'} />
+          </div>
+        ) : null}
+
+        {!isMobileLayout || isMobileSettingsExpanded ? (
+          <>
+            <div>
+              <FieldLabel>Title</FieldLabel>
+              <Input value={title} onChange={(event) => setTitle(event.target.value)} />
+            </div>
+            <div>
+              <FieldLabel>Description</FieldLabel>
+              <Textarea rows={4} value={description} onChange={(event) => setDescription(event.target.value)} />
+            </div>
+
+            <div className="editor-inline-card space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <FieldLabel>Start Pos</FieldLabel>
+                  <p className="mt-1 text-sm text-white/68">
+                    Start Pos markers affect editor preview only. Levels with Start Pos markers cannot be submitted.
+                  </p>
+                </div>
+                <Badge tone={hasStartPositions ? 'danger' : 'default'}>
+                  {hasStartPositions ? `${startPosCount} active` : 'None'}
+                </Badge>
+              </div>
+              <div className="editor-inline-actions">
+                <Button variant="ghost" onClick={deleteAllStartPositions} disabled={!hasStartPositions}>
+                  Delete All Start Pos
+                </Button>
+                <Badge tone="accent">
+                  {activePreviewStartPos ? `Preview starts at ${activePreviewStartPos.x}, ${activePreviewStartPos.y}` : 'Preview uses main start'}
+                </Badge>
+              </div>
+            </div>
+
+            {selectedObject ? (
+              <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <FieldLabel>Selected Object</FieldLabel>
@@ -2910,49 +2998,49 @@ export function LevelEditor({
                 </div>
               </div>
             ) : null}
-          </div>
-        ) : null}
+              </div>
+            ) : null}
 
-        <div className="space-y-3">
-          <FieldLabel>Theme Preset</FieldLabel>
-          <div className="grid grid-cols-2 gap-2">
-            {themePresets.map((preset) => (
-              <button
-                key={preset.value}
-                type="button"
-                onClick={() => applyThemePreset(preset.value)}
-                className={cn(
-                  'tool-tile px-3 py-3 text-left transition',
-                  theme === preset.value ? 'tool-tile-active text-[#173300]' : 'text-white hover:brightness-110',
-                )}
-              >
-                <span className="font-display block text-[10px] tracking-[0.18em] uppercase">{preset.label}</span>
-                <span
-                  className={cn(
-                    'mt-1 block text-[10px] normal-case',
-                    theme === preset.value ? 'text-[#173300]/80' : 'text-white/60',
-                  )}
-                >
-                  {preset.value}
-                </span>
-              </button>
-            ))}
-          </div>
-          <Input
-            value={theme}
-            onChange={(event) => {
-              applyThemePreset(event.target.value);
-            }}
-          />
-        </div>
+            <div className="space-y-3">
+              <FieldLabel>Theme Preset</FieldLabel>
+              <div className="grid grid-cols-2 gap-2">
+                {themePresets.map((preset) => (
+                  <button
+                    key={preset.value}
+                    type="button"
+                    onClick={() => applyThemePreset(preset.value)}
+                    className={cn(
+                      'tool-tile px-3 py-3 text-left transition',
+                      theme === preset.value ? 'tool-tile-active text-[#173300]' : 'text-white hover:brightness-110',
+                    )}
+                  >
+                    <span className="font-display block text-[10px] tracking-[0.18em] uppercase">{preset.label}</span>
+                    <span
+                      className={cn(
+                        'mt-1 block text-[10px] normal-case',
+                        theme === preset.value ? 'text-[#173300]/80' : 'text-white/60',
+                      )}
+                    >
+                      {preset.value}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <Input
+                value={theme}
+                onChange={(event) => {
+                  applyThemePreset(event.target.value);
+                }}
+              />
+            </div>
 
-        <div className="space-y-3">
-          <div className="flex items-center justify-between gap-3">
-            <FieldLabel>Level Music</FieldLabel>
-            <Badge tone={resolvedMusic.src ? 'accent' : 'default'}>
-              {resolvedMusic.src ? 'Custom Track Ready' : 'No Custom Audio'}
-            </Badge>
-          </div>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <FieldLabel>Level Music</FieldLabel>
+                <Badge tone={resolvedMusic.src ? 'accent' : 'default'}>
+                  {resolvedMusic.src ? 'Custom Track Ready' : 'No Custom Audio'}
+                </Badge>
+              </div>
 
           <div>
             <FieldLabel>Track Label</FieldLabel>
@@ -3021,13 +3109,13 @@ export function LevelEditor({
               <audio controls preload="metadata" src={resolvedMusic.src} className="w-full" />
             </div>
           ) : null}
-        </div>
+            </div>
 
-        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-          <div>
-            <FieldLabel>Player Mode</FieldLabel>
-            <div className="grid grid-cols-3 gap-2">
-              {(['cube', 'ship', 'arrow'] as const).map((mode) => (
+            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+              <div>
+                <FieldLabel>Player Mode</FieldLabel>
+                <div className="grid grid-cols-3 gap-2">
+                  {(['cube', 'ship', 'arrow'] as const).map((mode) => (
                 <button
                   key={mode}
                   type="button"
@@ -3053,43 +3141,50 @@ export function LevelEditor({
                         : 'Classic jump timing'}
                   </span>
                 </button>
-              ))}
+                  ))}
+                </div>
+              </div>
+              <div>
+                <FieldLabel>Length Units</FieldLabel>
+                <Input
+                  type="number"
+                  value={levelData.meta.lengthUnits}
+                  onChange={(event) =>
+                    updateLevelData((draft) => {
+                      draft.meta.lengthUnits = Number(event.target.value);
+                    })
+                  }
+                />
+              </div>
+              <div>
+                <FieldLabel>Base Speed</FieldLabel>
+                <Input
+                  type="number"
+                  step="0.1"
+                  value={levelData.player.baseSpeed}
+                  onChange={(event) =>
+                    updateLevelData((draft) => {
+                      draft.player.baseSpeed = Number(event.target.value);
+                    })
+                  }
+                />
+              </div>
             </div>
-          </div>
-          <div>
-            <FieldLabel>Length Units</FieldLabel>
-            <Input
-              type="number"
-              value={levelData.meta.lengthUnits}
-              onChange={(event) =>
-                updateLevelData((draft) => {
-                  draft.meta.lengthUnits = Number(event.target.value);
-                })
-              }
-            />
-          </div>
-          <div>
-            <FieldLabel>Base Speed</FieldLabel>
-            <Input
-              type="number"
-              step="0.1"
-              value={levelData.player.baseSpeed}
-              onChange={(event) =>
-                updateLevelData((draft) => {
-                  draft.player.baseSpeed = Number(event.target.value);
-                })
-              }
-            />
-          </div>
-        </div>
 
-        <div className="grid gap-2 sm:grid-cols-2">
-          <HintChip label="Objects" value={String(levelData.objects.length)} />
-          <HintChip label="Length" value={`${levelData.meta.lengthUnits} units`} />
-          <HintChip label="Base Speed" value={levelData.player.baseSpeed.toFixed(1)} />
-          <HintChip label="Mode" value={getPlayerModeLabel(levelData.player.mode)} />
-          <HintChip label="Theme" value={theme} />
-        </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <HintChip label="Objects" value={String(levelData.objects.length)} />
+              <HintChip label="Length" value={`${levelData.meta.lengthUnits} units`} />
+              <HintChip label="Base Speed" value={levelData.player.baseSpeed.toFixed(1)} />
+              <HintChip label="Mode" value={getPlayerModeLabel(levelData.player.mode)} />
+              <HintChip label="Theme" value={theme} />
+            </div>
+          </>
+        ) : (
+          <div className="editor-note-box px-4 py-3 text-sm text-white/72">
+            Mobile setup is collapsed so the stage stays front and center. Open it only when you need level tuning,
+            music, or trigger details.
+          </div>
+        )}
       </Panel>
     </div>
   );
