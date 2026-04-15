@@ -2,7 +2,6 @@ import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import { LevelEditor } from '../features/editor/level-editor';
-import { moveLocalEditorDraft } from '../features/editor/local-draft-storage';
 import { apiRequest } from '../services/api';
 import { useAuthStore } from '../store/auth-store';
 import type { Level } from '../types/models';
@@ -26,22 +25,14 @@ export function EditorPage() {
       theme: string;
       dataJson: Level['dataJson'];
     }) =>
-      id
-        ? apiRequest<{ level: Level }>(`/api/levels/${id}`, {
-            method: 'PUT',
-            body: JSON.stringify(payload),
-          })
-        : apiRequest<{ level: Level }>('/api/levels', {
-            method: 'POST',
-            body: JSON.stringify(payload),
-          }),
-    onSuccess: (payload) => {
+      apiRequest<{ level: Level }>(`/api/levels/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['my-levels'] });
       void queryClient.invalidateQueries({ queryKey: ['profile'] });
-      if (!id) {
-        moveLocalEditorDraft('new', payload.level.id);
-        navigate(`/editor/${payload.level.id}`);
-      }
+      void queryClient.invalidateQueries({ queryKey: ['level-setup', id] });
     },
   });
 
@@ -75,7 +66,7 @@ export function EditorPage() {
       return;
     }
 
-    navigate('/my-levels');
+    navigate(id ? `/my-levels/${id}` : '/my-levels');
   };
 
   return (

@@ -87,8 +87,8 @@ export function ProfilePage() {
                 title="No levels yet"
                 description="Открой forge и собери свой первый маршрут."
                 action={
-                  <Link to="/editor/new" className="font-display text-[10px] tracking-[0.22em] text-[#ffd44a] hover:text-white">
-                    Open Editor
+                  <Link to="/my-levels" className="font-display text-[10px] tracking-[0.22em] text-[#ffd44a] hover:text-white">
+                    Open Workshop
                   </Link>
                 }
               />

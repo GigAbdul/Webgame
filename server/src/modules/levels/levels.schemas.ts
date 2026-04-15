@@ -1,3 +1,4 @@
+import { Difficulty } from '@prisma/client';
 import { z } from 'zod';
 import { levelDataSchema } from './level-data';
 
@@ -12,6 +13,11 @@ export const updateLevelSchema = createLevelSchema.partial().extend({
   versionNumber: z.number().int().positive().optional(),
 });
 
+export const submitLevelSchema = z.object({
+  difficulty: z.nativeEnum(Difficulty).optional(),
+});
+
 export type CreateLevelInput = z.infer<typeof createLevelSchema>;
 export type UpdateLevelInput = z.infer<typeof updateLevelSchema>;
+export type SubmitLevelInput = z.infer<typeof submitLevelSchema>;
 

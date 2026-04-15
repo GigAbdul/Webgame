@@ -1,4 +1,4 @@
-import { createBrowserRouter, RouterProvider } from 'react-router-dom';
+import { Navigate, createBrowserRouter, RouterProvider } from 'react-router-dom';
 import { ArcadeScreenLayout } from '../components/arcade-screen-layout';
 import { AppLayout } from '../components/layout';
 import { AdminRoute, ProtectedRoute } from '../routes/guards';
@@ -11,6 +11,7 @@ import { EditorPage } from '../pages/editor-page';
 import { HomePage } from '../pages/home-page';
 import { LeaderboardPage } from '../pages/leaderboard-page';
 import { LevelDetailPage } from '../pages/level-detail-page';
+import { LevelSetupPage } from '../pages/level-setup-page';
 import { LevelsPage } from '../pages/levels-page';
 import { LoginPage } from '../pages/login-page';
 import { MyLevelsPage } from '../pages/my-levels-page';
@@ -26,7 +27,7 @@ const router = createBrowserRouter([
   {
     element: <ProtectedRoute />,
     children: [
-      { path: 'editor/new', element: <EditorPage /> },
+      { path: 'editor/new', element: <Navigate to="/my-levels/new" replace /> },
       { path: 'editor/:id', element: <EditorPage /> },
     ],
   },
@@ -51,6 +52,8 @@ const router = createBrowserRouter([
         children: [
           { path: 'profile', element: <ProfilePage /> },
           { path: 'my-levels', element: <MyLevelsPage /> },
+          { path: 'my-levels/new', element: <LevelSetupPage /> },
+          { path: 'my-levels/:id', element: <LevelSetupPage /> },
         ],
       },
       {

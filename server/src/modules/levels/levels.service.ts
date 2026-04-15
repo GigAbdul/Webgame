@@ -4,9 +4,9 @@ import { ApiError } from '../../utils/api-error';
 import { slugifyValue, withSlugSuffix } from '../../utils/slugify';
 import type { LevelData } from './level-data';
 import { levelDataSchema } from './level-data';
-import type { CreateLevelInput, UpdateLevelInput } from './levels.schemas';
+import type { CreateLevelInput, SubmitLevelInput, UpdateLevelInput } from './levels.schemas';
 
-async function createUniqueSlug(title: string) {
+async function createUniqueSlug(title: string, excludeLevelId?: string) {
   const base = slugifyValue(title) || 'level';
   const existing = await prisma.level.findUnique({
     where: {
@@ -14,7 +14,7 @@ async function createUniqueSlug(title: string) {
     },
   });
 
-  if (!existing) {
+  if (!existing || existing.id === excludeLevelId) {
     return base;
   }
 
@@ -134,7 +134,7 @@ export const levelsService = {
   },
 
   async update(user: { id: string; role: Role }, levelId: string, input: UpdateLevelInput) {
-    const level = await prisma.level.findUnique({
+      const level = await prisma.level.findUnique({
       where: { id: levelId },
       select: {
         id: true,
@@ -150,7 +150,7 @@ export const levelsService = {
 
     assertMutableLevelOwnership(level, user);
 
-    const slug = input.title ? await createUniqueSlug(input.title) : undefined;
+    const slug = input.title ? await createUniqueSlug(input.title, level.id) : undefined;
 
     return prisma.level.update({
       where: { id: levelId },
@@ -186,7 +186,7 @@ export const levelsService = {
     });
   },
 
-  async submit(user: { id: string }, levelId: string) {
+  async submit(user: { id: string }, levelId: string, input: SubmitLevelInput) {
     const level = await prisma.level.findUnique({
       where: { id: levelId },
       select: {
@@ -225,6 +225,7 @@ export const levelsService = {
       where: { id: levelId },
       data: {
         status: 'SUBMITTED',
+        difficulty: input.difficulty,
       },
     });
   },

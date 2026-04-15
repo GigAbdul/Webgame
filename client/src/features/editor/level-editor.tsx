@@ -2,8 +2,11 @@ import type { ChangeEvent, CSSProperties, PointerEvent as ReactPointerEvent } fr
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Level, LevelData, LevelObject, LevelObjectType } from '../../types/models';
 import { Badge, Button, FieldLabel, Input, Panel, Textarea } from '../../components/ui';
-import { GameCanvas } from '../game/game-canvas';
+import { BASE_HORIZONTAL_SPEED, GameCanvas, buildPreviewBootstrap } from '../game/game-canvas';
 import {
+  FIXED_LEVEL_START_X,
+  FIXED_LEVEL_START_Y,
+  computeAutoLevelFinishX,
   PAINT_GROUP_SLOT_COUNT,
   createEmptyLevelData,
   getColorGroupById,
@@ -11,10 +14,13 @@ import {
   getObjectPaintGroupId,
   getObjectStrokeColor,
   isPaintableObjectType,
+  isSpikeObjectType,
+  isSawObjectType,
+  stripLegacyRunAnchorObjects,
   isTriggerObjectType,
   levelObjectDefinitions,
 } from '../game/object-definitions';
-import { resolveLevelMusic } from '../game/level-music';
+import { readStoredMusicVolume, resolveLevelMusic } from '../game/level-music';
 import { drawStageObjectSprite } from '../game/object-renderer';
 import { SHIP_FLIGHT_CEILING_Y, SHIP_FLIGHT_FLOOR_Y, getPlayerModeLabel } from '../game/player-mode-config';
 import { getStageThemePalette } from '../game/stage-theme-palette';
@@ -24,6 +30,7 @@ import { cn } from '../../utils/cn';
 type EditorTool = 'select' | 'pan' | LevelObjectType;
 type PlacementMode = 'single' | 'drag';
 type EditorLayerId = 1 | 2;
+type EditorWorkspaceMode = 'build' | 'edit';
 
 type LevelEditorProps = {
   initialLevel?: Level | null;
@@ -73,6 +80,13 @@ type SelectionBox = {
   endScreenY: number;
 };
 
+type EditorMusicSyncPreview = {
+  x: number;
+  y: number;
+  speedMultiplier: number;
+  progressPercent: number;
+};
+
 type TouchGestureState = {
   startDistance: number;
   startZoom: number;
@@ -81,6 +95,138 @@ type TouchGestureState = {
   startCenterX: number;
   startCenterY: number;
 };
+
+function EditorStageBackIcon() {
+  return (
+    <svg viewBox="0 0 64 64" className="editor-stage-icon editor-stage-icon--back" aria-hidden="true">
+      <path
+        d="M38 16 19 32l19 16"
+        fill="none"
+        stroke="#fffbe7"
+        strokeWidth="8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M22 32h24" fill="none" stroke="#fffbe7" strokeWidth="8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function EditorStageUndoIcon() {
+  return (
+    <svg viewBox="0 0 64 64" className="editor-stage-icon editor-stage-icon--undo" aria-hidden="true">
+      <path
+        d="M27 20H16v11"
+        fill="none"
+        stroke="#d7f1ff"
+        strokeWidth="7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M18 30c3-8 10-12 19-12 9 0 15 5 15 14 0 8-6 14-15 14h-8"
+        fill="none"
+        stroke="#d7f1ff"
+        strokeWidth="7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function EditorStageRedoIcon() {
+  return (
+    <svg viewBox="0 0 64 64" className="editor-stage-icon editor-stage-icon--redo" aria-hidden="true">
+      <path
+        d="M37 20h11v11"
+        fill="none"
+        stroke="#d7e5ff"
+        strokeWidth="7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M46 30c-3-8-10-12-19-12-9 0-15 5-15 14 0 8 6 14 15 14h8"
+        fill="none"
+        stroke="#d7e5ff"
+        strokeWidth="7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function EditorStageTrashIcon() {
+  return (
+    <svg viewBox="0 0 64 64" className="editor-stage-icon editor-stage-icon--trash" aria-hidden="true">
+      <path
+        d="M24 16h16l2 5H22l2-5Z"
+        fill="#f2f4f8"
+        stroke="#1e2635"
+        strokeWidth="3.5"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M20 21h24v28c0 2.8-2.2 5-5 5H25c-2.8 0-5-2.2-5-5V21Z"
+        fill="#d8dde6"
+        stroke="#1e2635"
+        strokeWidth="4"
+        strokeLinejoin="round"
+      />
+      <path d="M27 27v19M32 27v19M37 27v19" fill="none" stroke="#1e2635" strokeWidth="4" strokeLinecap="round" />
+      <path d="M17 21h30" fill="none" stroke="#1e2635" strokeWidth="4.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function EditorStageMusicIcon() {
+  return (
+    <svg viewBox="0 0 64 64" className="editor-stage-icon editor-stage-icon--music" aria-hidden="true">
+      <path
+        d="M16 14 47 32 16 50Z"
+        fill="#ffd44a"
+        stroke="#172242"
+        strokeWidth="4"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M31 23v16.5c0 3-2.5 5.5-5.5 5.5S20 42.5 20 39.5 22.5 34 25.5 34c1.2 0 2.3.3 3.2.9V25.6l11-2.7v12.6c0 3-2.5 5.5-5.5 5.5s-5.5-2.5-5.5-5.5S31.2 30 34.2 30c1.1 0 2.1.3 3 .8v-5.4L31 27Z"
+        fill="#f8fbff"
+        stroke="#14315f"
+        strokeWidth="2"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function EditorStageTestPlayIcon() {
+  return (
+    <svg viewBox="0 0 64 64" className="editor-stage-icon editor-stage-icon--test" aria-hidden="true">
+      <path
+        d="M18 14 48 32 18 50Z"
+        fill="#ffd44a"
+        stroke="#172242"
+        strokeWidth="4"
+        strokeLinejoin="round"
+      />
+      <rect x="13" y="25" width="13" height="13" rx="2.5" fill="#d7dde7" stroke="#172242" strokeWidth="3.5" />
+    </svg>
+  );
+}
+
+function EditorStageZoomIcon({ mode }: { mode: 'in' | 'out' }) {
+  return (
+    <svg viewBox="0 0 64 64" className="editor-stage-icon editor-stage-icon--zoom" aria-hidden="true">
+      <circle cx="27" cy="27" r="15" fill="none" stroke="#fffbe7" strokeWidth="7" />
+      <path d="M38 38l12 12" fill="none" stroke="#fffbe7" strokeWidth="7" strokeLinecap="round" />
+      <path d="M20 27h14" fill="none" stroke="#173300" strokeWidth="6" strokeLinecap="round" />
+      {mode === 'in' ? <path d="M27 20v14" fill="none" stroke="#173300" strokeWidth="6" strokeLinecap="round" /> : null}
+    </svg>
+  );
+}
 
 const themePresets = [
   { value: 'neon-grid', label: 'Neon Grid' },
@@ -105,12 +251,37 @@ const paletteGroups: Array<{ title: string; items: EditorTool[] }> = [
     ],
   },
   { title: 'Helpers', items: ['DASH_BLOCK'] },
-  { title: 'Obstacles', items: ['SPIKE', 'SAW_BLADE'] },
-  { title: 'Boosts', items: ['JUMP_PAD', 'JUMP_ORB'] },
-  { title: 'Portals', items: ['GRAVITY_PORTAL', 'SPEED_PORTAL', 'SHIP_PORTAL', 'CUBE_PORTAL', 'ARROW_PORTAL', 'FINISH_PORTAL'] },
+  {
+    title: 'Obstacles',
+    items: [
+      'SPIKE',
+      'SPIKE_FLAT',
+      'SPIKE_SMALL',
+      'SPIKE_TINY',
+      'SAW_BLADE',
+      'SAW_BLADE_MEDIUM',
+      'SAW_BLADE_LARGE',
+      'SAW_STAR',
+      'SAW_STAR_MEDIUM',
+      'SAW_STAR_LARGE',
+      'SAW_GEAR',
+      'SAW_GEAR_MEDIUM',
+      'SAW_GEAR_LARGE',
+      'SAW_GLOW',
+      'SAW_GLOW_MEDIUM',
+      'SAW_GLOW_LARGE',
+    ],
+  },
+  { title: 'Boosts', items: ['JUMP_PAD', 'JUMP_ORB', 'GRAVITY_ORB'] },
+  {
+    title: 'Portals',
+    items: ['GRAVITY_PORTAL', 'SPEED_PORTAL', 'SHIP_PORTAL', 'BALL_PORTAL', 'CUBE_PORTAL', 'ARROW_PORTAL'],
+  },
   { title: 'Triggers', items: ['MOVE_TRIGGER', 'ALPHA_TRIGGER', 'TOGGLE_TRIGGER', 'PULSE_TRIGGER'] },
-  { title: 'Run Points', items: ['START_MARKER', 'START_POS'] },
+  { title: 'Preview', items: ['START_POS'] },
 ];
+
+const desktopPaletteGroups = paletteGroups.filter((group) => group.title !== 'Controls');
 
 const toolDescriptions: Record<EditorTool, string> = {
   select: 'Pick, move and inspect objects',
@@ -123,21 +294,37 @@ const toolDescriptions: Record<EditorTool, string> = {
   ARROW_RAMP_DESC: 'Opposite diagonal wall for arrow routes',
   DASH_BLOCK: 'Editor-only safe zone for arrow contact on floor and ceiling blocks',
   SPIKE: 'Primary hazard',
-  SAW_BLADE: 'Rotating circular hazard',
+  SPIKE_FLAT: 'Wide low-profile spike',
+  SPIKE_SMALL: 'Compact spike hazard',
+  SPIKE_TINY: 'Tiny spike hazard',
+  SAW_BLADE: 'Small circular saw',
+  SAW_BLADE_MEDIUM: 'Medium circular saw',
+  SAW_BLADE_LARGE: 'Large circular saw',
+  SAW_STAR: 'Small star-shaped saw',
+  SAW_STAR_MEDIUM: 'Medium star-shaped saw',
+  SAW_STAR_LARGE: 'Large star-shaped saw',
+  SAW_GEAR: 'Small gear saw',
+  SAW_GEAR_MEDIUM: 'Medium gear saw',
+  SAW_GEAR_LARGE: 'Large gear saw',
+  SAW_GLOW: 'Small glow saw',
+  SAW_GLOW_MEDIUM: 'Medium glow saw',
+  SAW_GLOW_LARGE: 'Large glow saw',
   JUMP_PAD: 'Forces an upward bounce',
   JUMP_ORB: 'Mid-air extra jump',
+  GRAVITY_ORB: 'Mid-air jump that flips gravity',
   GRAVITY_PORTAL: 'Flips gravity',
   SPEED_PORTAL: 'Changes run speed',
   SHIP_PORTAL: 'Switches into ship mode',
+  BALL_PORTAL: 'Switches into ball mode',
   CUBE_PORTAL: 'Returns to cube mode',
   ARROW_PORTAL: 'Switches into arrow mode',
-  FINISH_PORTAL: 'Level completion',
+  FINISH_PORTAL: 'Legacy finish marker',
   MOVE_TRIGGER: 'Moves a paint group during the run',
   ALPHA_TRIGGER: 'Changes group opacity',
   TOGGLE_TRIGGER: 'Shows or hides a group',
   PULSE_TRIGGER: 'Pulses a group color for a short burst',
   DECORATION_BLOCK: 'Visual block only',
-  START_MARKER: 'Player spawn point',
+  START_MARKER: 'Legacy spawn point',
   START_POS: 'Preview checkpoint for editor testing',
 };
 
@@ -159,17 +346,68 @@ type EditorInitialState = {
 };
 
 function syncDerivedLevelData(next: LevelData) {
+  next.objects = stripLegacyRunAnchorObjects(next.objects);
+  next.player.startX = FIXED_LEVEL_START_X;
+  next.player.startY = FIXED_LEVEL_START_Y;
+
   for (const object of next.objects) {
     object.editorLayer = object.editorLayer === 2 ? 2 : 1;
   }
 
-  const maxX = Math.max(next.finish.x + 16, ...next.objects.map((object) => object.x + object.w + 12));
+  const autoFinishX = computeAutoLevelFinishX(next);
+  next.finish = {
+    x: autoFinishX,
+    y: FIXED_LEVEL_START_Y,
+  };
+  const maxX = Math.max(autoFinishX + 6, ...next.objects.map((object) => object.x + object.w + 12));
   next.meta.lengthUnits = Math.max(60, Math.ceil(maxX));
   return next;
 }
 
 function getPaletteGroupTitle(tool: EditorTool) {
   return paletteGroups.find((group) => group.items.includes(tool))?.title ?? 'Blocks';
+}
+
+function getPaletteGroupButtonLabel(title: string) {
+  switch (title) {
+    case 'Controls':
+      return 'Ctrl';
+    case 'Helpers':
+      return 'Helper';
+    case 'Obstacles':
+      return 'Hazards';
+    case 'Boosts':
+      return 'Boost';
+    case 'Portals':
+      return 'Portal';
+    case 'Triggers':
+      return 'Trigger';
+    case 'Preview':
+      return 'Start Pos';
+    default:
+      return title;
+  }
+}
+
+function getDesktopPalettePreviewTool(groupTitle: string): EditorTool {
+  switch (groupTitle) {
+    case 'Blocks':
+      return 'GROUND_BLOCK';
+    case 'Helpers':
+      return 'DASH_BLOCK';
+    case 'Obstacles':
+      return 'SPIKE';
+    case 'Boosts':
+      return 'JUMP_PAD';
+    case 'Portals':
+      return 'GRAVITY_PORTAL';
+    case 'Triggers':
+      return 'MOVE_TRIGGER';
+    case 'Preview':
+      return 'START_POS';
+    default:
+      return 'GROUND_BLOCK';
+  }
 }
 
 function canUseDragPlacementTool(tool: EditorTool): tool is LevelObjectType {
@@ -188,6 +426,26 @@ function canUseDragPlacementTool(tool: EditorTool): tool is LevelObjectType {
 
 function getPlacementStrokeKey(type: LevelObjectType, x: number, y: number, editorLayer: EditorLayerId) {
   return `${editorLayer}:${type}:${x}:${y}`;
+}
+
+function getDefaultPlacementPosition(type: LevelObjectType, x: number, y: number) {
+  const definition = levelObjectDefinitions[type];
+
+  if (isSpikeObjectType(type)) {
+    return {
+      x: x + Math.max(0, (1 - definition.defaultSize.w) / 2),
+      y: y + Math.max(0, 1 - definition.defaultSize.h),
+    };
+  }
+
+  if (isSawObjectType(type) && (definition.defaultSize.w < 1 || definition.defaultSize.h < 1)) {
+    return {
+      x: x + Math.max(0, (1 - definition.defaultSize.w) / 2),
+      y: y + Math.max(0, (1 - definition.defaultSize.h) / 2),
+    };
+  }
+
+  return { x, y };
 }
 
 function isHexColor(value: unknown): value is string {
@@ -279,6 +537,7 @@ export function LevelEditor({
   const [activePaletteGroup, setActivePaletteGroup] = useState<string>('Blocks');
   const [paletteDrawerGroup, setPaletteDrawerGroup] = useState<string | null>(null);
   const [placementMode, setPlacementMode] = useState<PlacementMode>('single');
+  const [editorWorkspaceMode, setEditorWorkspaceMode] = useState<EditorWorkspaceMode>('build');
   const [hasLayerTwo, setHasLayerTwo] = useState(initialEditorState.levelData.objects.some((object) => object.editorLayer === 2));
   const [activeEditorLayer, setActiveEditorLayer] = useState<EditorLayerId>(1);
   const [zoom, setZoom] = useState(1);
@@ -286,8 +545,17 @@ export function LevelEditor({
   const [cursorWorld, setCursorWorld] = useState({ x: 0, y: 0 });
   const [canvasViewport, setCanvasViewport] = useState({ width: EDITOR_CANVAS_WIDTH, height: EDITOR_CANVAS_HEIGHT });
   const [showPreview, setShowPreview] = useState(false);
+  const [isInlineTestMode, setIsInlineTestMode] = useState(false);
+  const [inlineTestRunSeed, setInlineTestRunSeed] = useState(0);
+  const [inlineTestDeathMarker, setInlineTestDeathMarker] = useState<{ x: number; y: number } | null>(null);
+  const [inlineTestPathPoints, setInlineTestPathPoints] = useState<Array<{ x: number; y: number }>>([]);
+  const [inlineTestStopSignal, setInlineTestStopSignal] = useState(0);
+  const [isMusicSyncPreviewActive, setIsMusicSyncPreviewActive] = useState(false);
+  const [musicSyncPreviewElapsedMs, setMusicSyncPreviewElapsedMs] = useState(0);
   const [isMobileLayout, setIsMobileLayout] = useState(false);
   const [isMobileSettingsExpanded, setIsMobileSettingsExpanded] = useState(false);
+  const [showDesktopSetup, setShowDesktopSetup] = useState(false);
+  const [isEditorPauseMenuOpen, setIsEditorPauseMenuOpen] = useState(false);
   const [previewRunSeed, setPreviewRunSeed] = useState(0);
   const [isPaintPopupOpen, setIsPaintPopupOpen] = useState(false);
   const [activePaintGroupId, setActivePaintGroupId] = useState<number | null>(null);
@@ -298,6 +566,7 @@ export function LevelEditor({
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stageFrameRef = useRef<HTMLDivElement | null>(null);
+  const settingsPanelRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<DragState>(null);
   const isSpacePressedRef = useRef(false);
   const liveLevelDataRef = useRef(levelData);
@@ -306,6 +575,8 @@ export function LevelEditor({
   const touchGestureRef = useRef<TouchGestureState | null>(null);
   const paintStrokeCellsRef = useRef<Set<string>>(new Set());
   const paintStrokeDirtyRef = useRef(false);
+  const musicSyncAudioRef = useRef<HTMLAudioElement | null>(null);
+  const musicSyncFrameRef = useRef<number | null>(null);
 
   const loadedDraftStorageKeyRef = useRef(draftStorageKey);
 
@@ -331,12 +602,31 @@ export function LevelEditor({
     setSelectionBox(null);
     setActivePaletteGroup('Blocks');
     setPaletteDrawerGroup(null);
+    setEditorWorkspaceMode('build');
     setHasLayerTwo(nextEditorState.levelData.objects.some((object) => object.editorLayer === 2));
     setActiveEditorLayer(1);
     setZoom(1);
     setPan({ x: EDITOR_DEFAULT_PAN_X, y: EDITOR_DEFAULT_PAN_Y });
     setCursorWorld({ x: 0, y: 0 });
     setShowPreview(false);
+    setIsInlineTestMode(false);
+    setInlineTestRunSeed(0);
+    setInlineTestDeathMarker(null);
+    setInlineTestPathPoints([]);
+    setInlineTestStopSignal(0);
+    if (musicSyncFrameRef.current !== null) {
+      window.cancelAnimationFrame(musicSyncFrameRef.current);
+      musicSyncFrameRef.current = null;
+    }
+    if (musicSyncAudioRef.current) {
+      musicSyncAudioRef.current.pause();
+      musicSyncAudioRef.current.src = '';
+      musicSyncAudioRef.current = null;
+    }
+    setIsMusicSyncPreviewActive(false);
+    setMusicSyncPreviewElapsedMs(0);
+    setShowDesktopSetup(false);
+    setIsEditorPauseMenuOpen(false);
     setPreviewRunSeed(0);
     setIsPaintPopupOpen(false);
     setActivePaintGroupId(null);
@@ -369,15 +659,24 @@ export function LevelEditor({
   }, []);
 
   useEffect(() => {
-    if (!isMobileLayout) {
-      return;
-    }
-
     document.body.classList.toggle('editor-mobile-preview-open', showPreview);
     return () => {
       document.body.classList.remove('editor-mobile-preview-open');
     };
-  }, [isMobileLayout, showPreview]);
+  }, [showPreview]);
+
+  useEffect(() => {
+    return () => {
+      if (musicSyncFrameRef.current !== null) {
+        window.cancelAnimationFrame(musicSyncFrameRef.current);
+      }
+
+      if (musicSyncAudioRef.current) {
+        musicSyncAudioRef.current.pause();
+        musicSyncAudioRef.current.src = '';
+      }
+    };
+  }, []);
 
   const applySelection = useCallback((nextIds: string[], nextPrimaryId?: string | null) => {
     const uniqueIds = [...new Set(nextIds)];
@@ -481,10 +780,19 @@ export function LevelEditor({
   const placementModeLabel = placementMode === 'drag' ? 'Drag' : 'Single';
   const dragPlacementAvailable = canUseDragPlacementTool(selectedTool);
   const activeEditorLayerLabel = `Layer ${activeEditorLayer}`;
+  const desktopActivePaletteGroupTitle = desktopPaletteGroups.some((group) => group.title === activePaletteGroup)
+    ? activePaletteGroup
+    : 'Blocks';
+  const desktopPaletteDrawer =
+    desktopPaletteGroups.find((group) => group.title === desktopActivePaletteGroupTitle) ?? desktopPaletteGroups[0] ?? null;
+  const trayPaletteGroup = isMobileLayout ? paletteDrawer : desktopPaletteDrawer;
+  const desktopPaletteGroupIndex = Math.max(
+    0,
+    desktopPaletteGroups.findIndex((group) => group.title === desktopActivePaletteGroupTitle),
+  );
   const canUndo = historyIndex > 0;
   const canRedo = historyIndex < history.length - 1;
   const historyPosition = `${historyIndex + 1}/${history.length}`;
-  const isMobilePreviewOpen = showPreview && isMobileLayout;
   const selectionSummary =
     selectedObjects.length > 1
       ? `${selectedObjects.length} objects selected`
@@ -492,6 +800,8 @@ export function LevelEditor({
         ? `${selectedDefinition?.label ?? selectedObject.type} at ${selectedObject.x}, ${selectedObject.y}`
         : 'No object selected';
   const objectCount = String(levelData.objects.length);
+  const saveButtonLabel =
+    saveState === 'saving' ? 'Saving' : saveState === 'saved' ? 'Saved' : saveState === 'error' ? 'Retry' : 'Save';
   const musicOffsetMsValue = Math.max(0, Number(levelData.meta.musicOffsetMs ?? 0) || 0);
   const startPosObjects = useMemo(
     () => levelData.objects.filter((object) => object.type === 'START_POS'),
@@ -500,6 +810,23 @@ export function LevelEditor({
   const startPosCount = startPosObjects.length;
   const hasStartPositions = startPosCount > 0;
   const activePreviewStartPos = hasStartPositions ? startPosObjects[startPosObjects.length - 1] : null;
+  const musicSyncBootstrap = useMemo(
+    () =>
+      buildPreviewBootstrap(
+        levelData,
+        activePreviewStartPos
+          ? {
+              x: activePreviewStartPos.x,
+              y: activePreviewStartPos.y,
+            }
+          : null,
+      ),
+    [activePreviewStartPos, levelData],
+  );
+  const musicSyncPreview = useMemo(
+    () => buildEditorMusicSyncPreview(levelData, musicSyncBootstrap, musicSyncPreviewElapsedMs),
+    [levelData, musicSyncBootstrap, musicSyncPreviewElapsedMs],
+  );
   const stageCell = levelData.meta.gridSize * zoom;
   const visibleStageUnits = canvasViewport.width / stageCell;
   const horizontalScrollMax = Math.max(0, levelData.meta.lengthUnits + EDITOR_SCROLL_PADDING_UNITS - visibleStageUnits);
@@ -560,6 +887,144 @@ export function LevelEditor({
     }
   }, [activeEditorLayer, hasLayerTwo]);
 
+  const stopMusicSyncPreview = useCallback((nextMessage?: string) => {
+    if (musicSyncFrameRef.current !== null) {
+      window.cancelAnimationFrame(musicSyncFrameRef.current);
+      musicSyncFrameRef.current = null;
+    }
+
+    if (musicSyncAudioRef.current) {
+      musicSyncAudioRef.current.pause();
+      musicSyncAudioRef.current.src = '';
+      musicSyncAudioRef.current = null;
+    }
+
+    setIsMusicSyncPreviewActive(false);
+    setMusicSyncPreviewElapsedMs(0);
+
+    if (nextMessage) {
+      setMessage(nextMessage);
+    }
+  }, []);
+
+  const launchMusicSyncPreview = useCallback(
+    (forceRestart = false) => {
+      if (!resolvedMusic.src) {
+        setMessage('Attach a music track first, then start the sync preview.');
+        return;
+      }
+
+      if (isMusicSyncPreviewActive && !forceRestart) {
+        stopMusicSyncPreview('Music sync preview stopped.');
+        return;
+      }
+
+      if (musicSyncFrameRef.current !== null) {
+        window.cancelAnimationFrame(musicSyncFrameRef.current);
+        musicSyncFrameRef.current = null;
+      }
+
+      if (musicSyncAudioRef.current) {
+        musicSyncAudioRef.current.pause();
+        musicSyncAudioRef.current.src = '';
+        musicSyncAudioRef.current = null;
+      }
+
+      setShowPreview(false);
+      setShowDesktopSetup(false);
+      setMusicSyncPreviewElapsedMs(0);
+      setIsMusicSyncPreviewActive(true);
+
+      const nextAudio = new Audio(resolvedMusic.src);
+      const playbackStartMs = Math.max(0, musicOffsetMsValue + musicSyncBootstrap.elapsedMs);
+      nextAudio.preload = 'auto';
+      nextAudio.volume = readStoredMusicVolume();
+      musicSyncAudioRef.current = nextAudio;
+
+      const syncPlaybackTime = () => {
+        if (musicSyncAudioRef.current !== nextAudio) {
+          return;
+        }
+
+        const elapsedMs = Math.max(0, nextAudio.currentTime * 1000 - playbackStartMs);
+        setMusicSyncPreviewElapsedMs(elapsedMs);
+        musicSyncFrameRef.current = window.requestAnimationFrame(syncPlaybackTime);
+      };
+
+      const startPlayback = () => {
+        const duration = Number.isFinite(nextAudio.duration) && nextAudio.duration > 0 ? nextAudio.duration : null;
+        const safeCurrentTime = duration
+          ? Math.min(playbackStartMs / 1000, Math.max(0, duration - 0.05))
+          : playbackStartMs / 1000;
+
+        nextAudio.currentTime = Math.max(0, safeCurrentTime);
+
+        void nextAudio
+          .play()
+          .then(() => {
+            if (musicSyncAudioRef.current !== nextAudio) {
+              return;
+            }
+
+            syncPlaybackTime();
+          })
+          .catch(() => {
+            stopMusicSyncPreview('The browser could not start the music sync preview.');
+          });
+      };
+
+      nextAudio.addEventListener(
+        'ended',
+        () => {
+          if (musicSyncAudioRef.current !== nextAudio) {
+            return;
+          }
+
+          stopMusicSyncPreview('Music sync preview finished.');
+        },
+        { once: true },
+      );
+
+      if (nextAudio.readyState >= 1) {
+        startPlayback();
+      } else {
+        nextAudio.addEventListener('loadedmetadata', startPlayback, { once: true });
+      }
+
+      setMessage('Music sync preview started.');
+    },
+    [isMusicSyncPreviewActive, musicOffsetMsValue, musicSyncBootstrap.elapsedMs, resolvedMusic.src, stopMusicSyncPreview],
+  );
+
+  const toggleGameplayPreview = useCallback(() => {
+    if (isMusicSyncPreviewActive) {
+      stopMusicSyncPreview();
+    }
+
+    setShowPreview((current) => !current);
+  }, [isMusicSyncPreviewActive, stopMusicSyncPreview]);
+
+  const openGameplayPreview = useCallback(() => {
+    if (isMusicSyncPreviewActive) {
+      stopMusicSyncPreview();
+    }
+
+    setShowPreview(true);
+    setPreviewRunSeed((current) => current + 1);
+  }, [isMusicSyncPreviewActive, stopMusicSyncPreview]);
+
+  useEffect(() => {
+    if ((showPreview || isInlineTestMode) && isMusicSyncPreviewActive) {
+      stopMusicSyncPreview();
+    }
+  }, [isInlineTestMode, isMusicSyncPreviewActive, showPreview, stopMusicSyncPreview]);
+
+  useEffect(() => {
+    if ((showPreview || isInlineTestMode) && isEditorPauseMenuOpen) {
+      setIsEditorPauseMenuOpen(false);
+    }
+  }, [isEditorPauseMenuOpen, isInlineTestMode, showPreview]);
+
   useEffect(() => {
     const stageFrame = stageFrameRef.current;
 
@@ -604,10 +1069,17 @@ export function LevelEditor({
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const isEditableTarget = isTextInputLike(event.target);
-      const isPreviewGameplayKey = showPreview && ['Space', 'ArrowUp', 'KeyW'].includes(event.code);
+      const isPreviewGameplayKey = (showPreview || isInlineTestMode) && ['Space', 'ArrowUp', 'KeyW'].includes(event.code);
 
-      if (event.code === 'Space' && !isEditableTarget) {
+      if (event.code === 'Space' && !isEditableTarget && !showPreview && !isInlineTestMode) {
         isSpacePressedRef.current = true;
+      }
+
+      if (!isEditableTarget && !showPreview && !isInlineTestMode && event.key === 'Escape') {
+        event.preventDefault();
+        clearSelection();
+        setIsEditorPauseMenuOpen((current) => !current);
+        return;
       }
 
       if (isEditableTarget) {
@@ -615,6 +1087,11 @@ export function LevelEditor({
       }
 
       if (isPreviewGameplayKey) {
+        return;
+      }
+
+      if (isEditorPauseMenuOpen) {
+        event.preventDefault();
         return;
       }
 
@@ -688,11 +1165,7 @@ export function LevelEditor({
         clearSelection();
       }
 
-      if (event.key === 'Escape') {
-        clearSelection();
-      }
-
-      if (!showPreview && selectedObjectIds.length && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+      if (!showPreview && !isInlineTestMode && selectedObjectIds.length && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
         event.preventDefault();
         const delta = {
           ArrowUp: { x: 0, y: -1 },
@@ -744,7 +1217,7 @@ export function LevelEditor({
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [applySelection, clearSelection, commitLevelData, history, historyIndex, selectedObject, selectedObjectIds, showPreview]);
+  }, [applySelection, clearSelection, commitLevelData, history, historyIndex, isEditorPauseMenuOpen, isInlineTestMode, selectedObject, selectedObjectIds, showPreview]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -761,8 +1234,13 @@ export function LevelEditor({
 
     const width = canvasViewport.width;
     const height = canvasViewport.height;
-    canvas.width = width;
-    canvas.height = height;
+    const renderScale = getCanvasRenderScale();
+    canvas.width = Math.max(1, Math.floor(width * renderScale));
+    canvas.height = Math.max(1, Math.floor(height * renderScale));
+    canvas.dataset.logicalWidth = String(width);
+    canvas.dataset.logicalHeight = String(height);
+    context.setTransform(renderScale, 0, 0, renderScale, 0, 0);
+    context.imageSmoothingEnabled = true;
 
     const stageTheme = getStageThemePalette(levelData.meta.theme);
     context.clearRect(0, 0, width, height);
@@ -829,6 +1307,9 @@ export function LevelEditor({
       context.stroke();
     }
 
+    const permanentFloorY = worldToScreen(0, SHIP_FLIGHT_FLOOR_Y, pan.x, pan.y, cell).y;
+    drawEditorPermanentStageFloor(context, width, height, permanentFloorY, cell, pan.x);
+
     const orderedObjects = [
       ...levelData.objects.filter((object) => object.editorLayer === activeEditorLayer),
       ...levelData.objects.filter((object) => object.editorLayer !== activeEditorLayer),
@@ -874,6 +1355,10 @@ export function LevelEditor({
       }
     }
 
+    if (isMusicSyncPreviewActive) {
+      drawEditorMusicSyncGuide(context, width, height, pan.x, pan.y, cell, musicSyncPreview, musicSyncPreviewElapsedMs);
+    }
+
     if (selectionBox) {
       const left = Math.min(selectionBox.startScreenX, selectionBox.endScreenX);
       const top = Math.min(selectionBox.startScreenY, selectionBox.endScreenY);
@@ -889,13 +1374,76 @@ export function LevelEditor({
       context.strokeRect(left, top, width, height);
       context.restore();
     }
+
+    if (inlineTestPathPoints.length > 1) {
+      context.save();
+      context.lineCap = 'round';
+      context.lineJoin = 'round';
+      context.lineWidth = Math.max(3, cell * 0.12);
+      context.strokeStyle = 'rgba(103, 255, 73, 0.88)';
+      context.shadowColor = 'rgba(117, 255, 74, 0.34)';
+      context.shadowBlur = cell * 0.3;
+      context.beginPath();
+      let segmentStarted = false;
+
+      for (let index = 0; index < inlineTestPathPoints.length; index += 1) {
+        const point = inlineTestPathPoints[index];
+
+        if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+          segmentStarted = false;
+          continue;
+        }
+
+        const screenPoint = worldToScreen(point.x, point.y, pan.x, pan.y, cell);
+
+        if (!segmentStarted) {
+          context.moveTo(screenPoint.x, screenPoint.y);
+          segmentStarted = true;
+        } else {
+          context.lineTo(screenPoint.x, screenPoint.y);
+        }
+      }
+
+      context.stroke();
+      context.lineWidth = Math.max(1.25, cell * 0.04);
+      context.strokeStyle = 'rgba(216, 255, 199, 0.86)';
+      context.shadowBlur = 0;
+      context.stroke();
+      context.restore();
+    }
+
+    if (inlineTestDeathMarker) {
+      const marker = worldToScreen(inlineTestDeathMarker.x, inlineTestDeathMarker.y, pan.x, pan.y, cell);
+      const size = Math.max(14, cell * 0.38);
+
+      context.save();
+      context.translate(marker.x, marker.y);
+      context.strokeStyle = '#ff476d';
+      context.lineWidth = Math.max(3, cell * 0.08);
+      context.lineCap = 'round';
+      context.beginPath();
+      context.moveTo(-size, -size);
+      context.lineTo(size, size);
+      context.moveTo(size, -size);
+      context.lineTo(-size, size);
+      context.stroke();
+      context.strokeStyle = 'rgba(255, 255, 255, 0.82)';
+      context.lineWidth = Math.max(1.5, cell * 0.03);
+      context.strokeRect(-size * 0.68, -size * 0.68, size * 1.36, size * 1.36);
+      context.restore();
+    }
   }, [
     activeEditorLayer,
     canvasViewport.height,
     canvasViewport.width,
     colorGroups,
     dragPreviewPosition,
+    inlineTestDeathMarker,
+    inlineTestPathPoints,
+    isMusicSyncPreviewActive,
     levelData,
+    musicSyncPreview,
+    musicSyncPreviewElapsedMs,
     pan,
     selectedObjectId,
     selectedObjectIdSet,
@@ -944,20 +1492,21 @@ export function LevelEditor({
     y: number,
     options?: { pushHistory?: boolean; selectPlacedObject?: boolean; trackStroke?: boolean },
   ) => {
-    const placementKey = getPlacementStrokeKey(type, x, y, activeEditorLayer);
+    const placement = getDefaultPlacementPosition(type, x, y);
+    const placementKey = getPlacementStrokeKey(type, placement.x, placement.y, activeEditorLayer);
 
     if (options?.trackStroke && paintStrokeCellsRef.current.has(placementKey)) {
       return false;
     }
 
     if (
-      (type === 'START_MARKER' && liveLevelDataRef.current.player.startX === x && liveLevelDataRef.current.player.startY === y) ||
-      (type === 'FINISH_PORTAL' && liveLevelDataRef.current.finish.x === x && liveLevelDataRef.current.finish.y === y) ||
+      (type === 'START_MARKER' && liveLevelDataRef.current.player.startX === placement.x && liveLevelDataRef.current.player.startY === placement.y) ||
+      (type === 'FINISH_PORTAL' && liveLevelDataRef.current.finish.x === placement.x && liveLevelDataRef.current.finish.y === placement.y) ||
       liveLevelDataRef.current.objects.some(
         (object) =>
           object.type === type &&
-          object.x === x &&
-          object.y === y &&
+          object.x === placement.x &&
+          object.y === placement.y &&
           object.editorLayer === activeEditorLayer,
       )
     ) {
@@ -971,13 +1520,13 @@ export function LevelEditor({
     const next = structuredClone(liveLevelDataRef.current);
 
     if (type === 'START_MARKER') {
-      next.player.startX = x;
-      next.player.startY = y;
+      next.player.startX = placement.x;
+      next.player.startY = placement.y;
       next.objects = next.objects.filter((object) => object.type !== 'START_MARKER');
     }
 
     if (type === 'FINISH_PORTAL') {
-      next.finish = { x, y };
+      next.finish = { x: placement.x, y: placement.y };
       next.objects = next.objects.filter((object) => object.type !== 'FINISH_PORTAL');
     }
 
@@ -991,14 +1540,14 @@ export function LevelEditor({
             ? { groupId: 1, enabled: false }
             : type === 'PULSE_TRIGGER'
               ? { groupId: 1, fillColor: '#ffffff', strokeColor: '#ffffff', durationMs: 900 }
-              : type === 'SAW_BLADE'
+              : isSawObjectType(type)
                 ? { rotationSpeed: 240 }
                 : {};
     const object: LevelObject = {
       id: `${type.toLowerCase()}-${Date.now()}`,
       type,
-      x,
-      y,
+      x: placement.x,
+      y: placement.y,
       w: definition.defaultSize.w,
       h: definition.defaultSize.h,
       rotation: 0,
@@ -1216,9 +1765,7 @@ export function LevelEditor({
   };
 
   const restartPreviewFromMusicOffset = () => {
-    setShowPreview(true);
-    setPreviewRunSeed((current) => current + 1);
-    setMessage('Preview restarted from the configured music offset.');
+    launchMusicSyncPreview(true);
   };
 
   const applyCustomMusicUrl = () => {
@@ -1803,6 +2350,55 @@ export function LevelEditor({
     setPaletteDrawerGroup((current) => (current === groupTitle ? null : groupTitle));
   };
 
+  const handleDesktopPaletteGroupSelect = (groupTitle: string) => {
+    setEditorWorkspaceMode('build');
+    setActivePaletteGroup(groupTitle);
+    setPaletteDrawerGroup(groupTitle);
+  };
+
+  const cycleDesktopPaletteGroup = (direction: -1 | 1) => {
+    if (!desktopPaletteGroups.length) {
+      return;
+    }
+
+    const nextIndex = (desktopPaletteGroupIndex + direction + desktopPaletteGroups.length) % desktopPaletteGroups.length;
+    const nextGroup = desktopPaletteGroups[nextIndex];
+    handleDesktopPaletteGroupSelect(nextGroup.title);
+  };
+
+  const startInlineTestMode = () => {
+    stopMusicSyncPreview();
+    setShowPreview(false);
+    setShowDesktopSetup(false);
+    setIsPaintPopupOpen(false);
+    setIsInlineTestMode(true);
+    setInlineTestDeathMarker(null);
+    setInlineTestPathPoints([]);
+    setInlineTestRunSeed((current) => current + 1);
+    setMessage('');
+  };
+
+  const stopInlineTestMode = (nextMessage?: string) => {
+    setIsInlineTestMode(false);
+    if (nextMessage) {
+      setMessage(nextMessage);
+    }
+  };
+
+  const requestInlineTestStop = () => {
+    setInlineTestStopSignal((current) => current + 1);
+  };
+
+  const openSetupPanel = () => {
+    if (isMobileLayout) {
+      setIsMobileSettingsExpanded(true);
+      settingsPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+
+    setShowDesktopSetup(true);
+  };
+
   useEffect(() => {
     const stageFrame = stageFrameRef.current;
 
@@ -1811,6 +2407,10 @@ export function LevelEditor({
     }
 
     const handleStageWheel = (event: WheelEvent) => {
+      if (isInlineTestMode) {
+        return;
+      }
+
       const target = event.target;
 
       if (!(target instanceof Node) || !stageFrame.contains(target)) {
@@ -1839,7 +2439,7 @@ export function LevelEditor({
     return () => {
       stageFrame.removeEventListener('wheel', handleStageWheel, true);
     };
-  }, [horizontalScrollValue, setHorizontalScrollPosition, stageCell]);
+  }, [horizontalScrollValue, isInlineTestMode, setHorizontalScrollPosition, stageCell]);
 
   const handleSave = async () => {
     setSaveState('saving');
@@ -1858,9 +2458,11 @@ export function LevelEditor({
       });
       setSaveState('saved');
       setMessage('Level saved successfully.');
+      return true;
     } catch (error) {
       setSaveState('error');
       setMessage(error instanceof Error ? error.message : 'Failed to save level');
+      return false;
     }
   };
 
@@ -1882,6 +2484,51 @@ export function LevelEditor({
     }
   };
 
+  const closeEditorPauseMenu = () => {
+    setIsEditorPauseMenuOpen(false);
+  };
+
+  const handlePauseSave = async () => {
+    const didSave = await handleSave();
+
+    if (didSave) {
+      setIsEditorPauseMenuOpen(false);
+    }
+  };
+
+  const handlePauseSaveAndPlay = async () => {
+    const didSave = await handleSave();
+
+    if (!didSave) {
+      return;
+    }
+
+    setIsEditorPauseMenuOpen(false);
+    openGameplayPreview();
+  };
+
+  const handlePauseSaveAndExit = async () => {
+    const didSave = await handleSave();
+
+    if (!didSave) {
+      return;
+    }
+
+    setIsEditorPauseMenuOpen(false);
+
+    if (onClose) {
+      onClose();
+    }
+  };
+
+  const handlePauseExit = () => {
+    setIsEditorPauseMenuOpen(false);
+
+    if (onClose) {
+      onClose();
+    }
+  };
+
   const deleteAllStartPositions = () => {
     if (!hasStartPositions) {
       return;
@@ -1898,17 +2545,19 @@ export function LevelEditor({
     <div
       className={cn(
         'arcade-editor-workstation editor-workbench flex flex-col space-y-5',
+        isInlineTestMode ? 'editor-workbench--inline-test' : '',
         isMobileLayout ? 'editor-workbench--mobile' : '',
       )}
     >
       <Panel className="arcade-editor-topbar editor-workbench-toolbar game-screen bg-transparent">
         <div className="editor-workbench-toolbar-main">
-          <div>
-            <p className="font-display text-[11px] tracking-[0.26em] text-[#ffd44a]">Forge Workstation</p>
-            <h3 className="mt-2 font-display text-3xl text-white">{title}</h3>
-            <p className="mt-2 max-w-3xl text-sm leading-7 text-white/72">
-              Build straight on the stage, keep the palette inside the editor surface, and scroll down only when you want
-              inspector details or level tuning.
+          <div className="editor-workbench-heading">
+            <p className="editor-workbench-kicker font-display text-[11px] tracking-[0.26em] text-[#ffd44a]">
+              Forge Workstation
+            </p>
+            <h3 className="editor-workbench-title mt-2 font-display text-3xl text-white">{title}</h3>
+            <p className="editor-workbench-subcopy mt-2 max-w-3xl text-sm leading-7 text-white/72">
+              Compact build surface with on-stage tools, quick paint access, and instant preview.
             </p>
           </div>
 
@@ -1937,8 +2586,8 @@ export function LevelEditor({
                 Submit for Review
               </Button>
             ) : null}
-            <Button variant="ghost" onClick={() => setShowPreview((current) => !current)}>
-              {showPreview ? 'Hide Preview' : 'Open Preview'}
+            <Button variant="ghost" onClick={toggleGameplayPreview}>
+              {showPreview ? 'Hide Preview' : 'Preview'}
             </Button>
           </div>
         </div>
@@ -1965,31 +2614,155 @@ export function LevelEditor({
             } as CSSProperties
           }
         >
-          <div className="editor-canvas-overlay editor-canvas-overlay--hud">
-            <div className="editor-canvas-hud-bar">
-              <HintChip label="Tool" value={activeToolLabel} />
-              <HintChip label="Selected" value={selectionSummary} />
-              <HintChip label="Layer" value={activeEditorLayerLabel} />
-              <HintChip label="Place" value={placementModeLabel} />
-              <HintChip label="Zoom" value={`${zoom.toFixed(2)}x`} />
-              <HintChip label="Cursor" value={`${cursorWorld.x}, ${cursorWorld.y}`} />
-            </div>
-          </div>
+          {isMobileLayout ? (
+            <>
+              <div className="editor-canvas-overlay editor-canvas-overlay--hud">
+                <div className="editor-canvas-hud-bar">
+                  <HintChip label="Tool" value={activeToolLabel} />
+                  <HintChip label="Selected" value={selectionSummary} />
+                  <HintChip label="Layer" value={activeEditorLayerLabel} />
+                  <HintChip label="Place" value={placementModeLabel} />
+                  <HintChip label="Zoom" value={`${zoom.toFixed(2)}x`} />
+                  <HintChip label="Cursor" value={`${cursorWorld.x}, ${cursorWorld.y}`} />
+                </div>
+              </div>
 
-          <div className="editor-canvas-overlay editor-canvas-overlay--left">
-            <div className="editor-canvas-rail editor-canvas-rail--categories">
-              {paletteGroups.map((group) => (
-                <button
-                  key={group.title}
-                  type="button"
-                  className={cn('editor-canvas-rail-button', activePaletteGroup === group.title ? 'is-active' : '')}
-                  onClick={() => handlePaletteGroupClick(group.title)}
-                >
-                  {group.title}
-                </button>
-              ))}
-            </div>
-          </div>
+              <div className="editor-canvas-overlay editor-canvas-overlay--left">
+                <div className="editor-canvas-rail editor-canvas-rail--categories">
+                  {paletteGroups.map((group) => (
+                    <button
+                      key={group.title}
+                      type="button"
+                      className={cn('editor-canvas-rail-button', activePaletteGroup === group.title ? 'is-active' : '')}
+                      onClick={() => handlePaletteGroupClick(group.title)}
+                      title={group.title}
+                    >
+                      {getPaletteGroupButtonLabel(group.title)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="editor-canvas-overlay editor-canvas-overlay--desktop-top">
+                <div className="editor-stage-topbar">
+                  <div className="editor-stage-topbar-cluster editor-stage-topbar-cluster--left">
+                    {onClose ? (
+                      <button
+                        type="button"
+                        className="editor-stage-orb-button"
+                        onClick={onClose}
+                        aria-label="Close editor"
+                        title="Close editor"
+                      >
+                        <EditorStageBackIcon />
+                      </button>
+                    ) : null}
+                    <button type="button" className="editor-stage-orb-button" onClick={performUndo} disabled={!canUndo} title="Undo">
+                      <EditorStageUndoIcon />
+                    </button>
+                    <button type="button" className="editor-stage-orb-button" onClick={performRedo} disabled={!canRedo} title="Redo">
+                      <EditorStageRedoIcon />
+                    </button>
+                    <button
+                      type="button"
+                      className="editor-stage-orb-button editor-stage-orb-button--danger"
+                      onClick={deleteSelected}
+                      disabled={!selectedObjectIds.length}
+                      title="Delete selected"
+                    >
+                      <EditorStageTrashIcon />
+                    </button>
+                  </div>
+
+                  <div className="editor-stage-scrollbar-shell">
+                    <button
+                      type="button"
+                      className="editor-stage-orb-button editor-stage-orb-button--slider"
+                      onClick={() => {
+                        setPan({ x: EDITOR_DEFAULT_PAN_X, y: EDITOR_DEFAULT_PAN_Y });
+                        setZoom(1);
+                      }}
+                      title="Reset camera"
+                    >
+                      ↔
+                    </button>
+                    <div className="editor-stage-scrollbar-track editor-stage-scrollbar-track--desktop">
+                      <div className="editor-stage-scrollbar-copy">
+                        <span>Stage Scroll</span>
+                        <strong>
+                          {Math.round(horizontalScrollValue)} / {Math.max(0, Math.round(horizontalScrollMax))}
+                        </strong>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={Math.max(horizontalScrollMax, 0)}
+                        step={1}
+                        value={horizontalScrollValue}
+                        disabled={horizontalScrollMax <= 0}
+                        className="editor-horizontal-scroll editor-horizontal-scroll--desktop"
+                        aria-label="Horizontal stage scroll"
+                        onChange={(event) => setHorizontalScrollPosition(Number(event.target.value))}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="editor-stage-topbar-cluster editor-stage-topbar-cluster--right">
+                    <button type="button" className="editor-stage-orb-button" onClick={openSetupPanel} title="Open setup">
+                      ⚙
+                    </button>
+                    <button
+                      type="button"
+                      className={cn('editor-stage-orb-button', showPreview ? 'is-active' : '')}
+                      onClick={toggleGameplayPreview}
+                      title="Open test preview"
+                    >
+                      {showPreview ? '■' : '▶'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="editor-canvas-overlay editor-canvas-overlay--desktop-left">
+                <div className="editor-stage-utility-stack">
+                  <button
+                    type="button"
+                    className={cn('editor-stage-utility-button', isMusicSyncPreviewActive ? 'is-active' : '')}
+                    onClick={() => launchMusicSyncPreview()}
+                    title="Start music sync preview"
+                  >
+                    <EditorStageMusicIcon />
+                  </button>
+                  <button
+                    type="button"
+                    className={cn('editor-stage-utility-button', isInlineTestMode ? 'is-active' : '')}
+                    onClick={startInlineTestMode}
+                    title="Start editor test play"
+                  >
+                    <EditorStageTestPlayIcon />
+                  </button>
+                  <button
+                    type="button"
+                    className="editor-stage-utility-button"
+                    onClick={() => setZoom((current) => Math.min(2.4, current + 0.1))}
+                    title="Zoom in"
+                  >
+                    <EditorStageZoomIcon mode="in" />
+                  </button>
+                  <button
+                    type="button"
+                    className="editor-stage-utility-button"
+                    onClick={() => setZoom((current) => Math.max(0.45, current - 0.1))}
+                    title="Zoom out"
+                  >
+                    <EditorStageZoomIcon mode="out" />
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
 
           <canvas
             ref={canvasRef}
@@ -2012,106 +2785,285 @@ export function LevelEditor({
             }}
           />
 
-          <div className="editor-canvas-overlay editor-canvas-overlay--right">
-            <div className="editor-canvas-rail editor-canvas-rail--actions">
-              <button type="button" className="editor-canvas-rail-button" onClick={() => setZoom((current) => Math.min(2.4, current + 0.1))}>
-                Zoom+
-              </button>
-              <button type="button" className="editor-canvas-rail-button" onClick={() => setZoom((current) => Math.max(0.45, current - 0.1))}>
-                Zoom-
-              </button>
+          {isInlineTestMode ? (
+            <div className="editor-inline-test-shell" role="dialog" aria-modal="true" aria-label="Editor test play">
               <button
                 type="button"
-                className="editor-canvas-rail-button"
-                onClick={() => {
-                  setPan({ x: EDITOR_DEFAULT_PAN_X, y: EDITOR_DEFAULT_PAN_Y });
-                  setZoom(1);
+                className="editor-inline-test-stop"
+                onClick={requestInlineTestStop}
+                title="Stop editor test play"
+                aria-label="Stop editor test play"
+              >
+                Stop
+              </button>
+              <GameCanvas
+                key={`editor-inline-test-${inlineTestRunSeed}`}
+                levelData={levelData}
+                runId={`editor-inline-test-${inlineTestRunSeed}`}
+                attemptNumber={1}
+                previewStartPosEnabled
+                stopSignal={inlineTestStopSignal}
+                showRunPath
+                fullscreen
+                className="editor-inline-test-runtime"
+                onFail={({ deathX, deathY, pathPoints }) => {
+                  setInlineTestPathPoints(pathPoints ?? []);
+                  setInlineTestDeathMarker(
+                    typeof deathX === 'number' && typeof deathY === 'number'
+                      ? { x: deathX, y: deathY }
+                      : null,
+                  );
+                  stopInlineTestMode('Editor test play failed. The death marker was dropped where the run ended.');
                 }}
-              >
-                Reset
-              </button>
-              <button type="button" className="editor-canvas-rail-button" onClick={performUndo} disabled={!canUndo}>
-                Undo
-              </button>
-              <button type="button" className="editor-canvas-rail-button" onClick={performRedo} disabled={!canRedo}>
-                Redo
-              </button>
-              <button type="button" className="editor-canvas-rail-button" onClick={duplicateSelected} disabled={!selectedObject}>
-                Clone
-              </button>
-              <button
-                type="button"
-                className={cn('editor-canvas-rail-button', isPaintPopupOpen ? 'is-active' : '')}
-                onClick={() => setIsPaintPopupOpen((current) => !current)}
-                disabled={!canOpenPaintPopup}
-              >
-                Paint
-              </button>
-              {!hasLayerTwo ? (
+                onComplete={({ pathPoints }) => {
+                  setInlineTestPathPoints(pathPoints ?? []);
+                  setInlineTestDeathMarker(null);
+                  stopInlineTestMode('Editor test play completed.');
+                }}
+                onExitToMenu={({ pathPoints }) => {
+                  setInlineTestPathPoints(pathPoints ?? []);
+                  stopInlineTestMode('Returned to the editor from test play.');
+                }}
+                onStop={({ pathPoints }) => {
+                  setInlineTestPathPoints(pathPoints ?? []);
+                  setInlineTestDeathMarker(null);
+                  stopInlineTestMode('Editor test play stopped.');
+                }}
+              />
+            </div>
+          ) : null}
+
+          {isEditorPauseMenuOpen ? (
+            <div className="editor-stage-pause-overlay" role="dialog" aria-modal="true" aria-label="Editor pause menu">
+              <div className="editor-stage-pause-panel">
+                <div className="editor-stage-pause-actions">
+                  <button type="button" className="editor-stage-pause-button" onClick={closeEditorPauseMenu}>
+                    Resume
+                  </button>
+                  <button
+                    type="button"
+                    className="editor-stage-pause-button"
+                    onClick={handlePauseSaveAndPlay}
+                    disabled={saveState === 'saving'}
+                  >
+                    {saveState === 'saving' ? 'Saving...' : 'Save and Play'}
+                  </button>
+                  <button
+                    type="button"
+                    className="editor-stage-pause-button"
+                    onClick={handlePauseSaveAndExit}
+                    disabled={saveState === 'saving' || !onClose}
+                  >
+                    Save and Exit
+                  </button>
+                  <button
+                    type="button"
+                    className="editor-stage-pause-button"
+                    onClick={handlePauseSave}
+                    disabled={saveState === 'saving'}
+                  >
+                    {saveState === 'saving' ? 'Saving...' : 'Save'}
+                  </button>
+                  <button
+                    type="button"
+                    className="editor-stage-pause-button"
+                    onClick={handlePauseExit}
+                    disabled={!onClose}
+                  >
+                    Exit
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {isMobileLayout ? (
+            <div className="editor-canvas-overlay editor-canvas-overlay--right">
+              <div className="editor-canvas-rail editor-canvas-rail--actions">
+                <button type="button" className="editor-canvas-rail-button" onClick={() => setZoom((current) => Math.min(2.4, current + 0.1))}>
+                  Zoom In
+                </button>
+                <button type="button" className="editor-canvas-rail-button" onClick={() => setZoom((current) => Math.max(0.45, current - 0.1))}>
+                  Zoom Out
+                </button>
                 <button
                   type="button"
                   className="editor-canvas-rail-button"
-                  onClick={handleAddLayerTwo}
-                  title="Enable a second build layer"
+                  onClick={() => {
+                    setPan({ x: EDITOR_DEFAULT_PAN_X, y: EDITOR_DEFAULT_PAN_Y });
+                    setZoom(1);
+                  }}
                 >
-                  Add L2
+                  Home
                 </button>
-              ) : null}
-              <button
-                type="button"
-                className={cn('editor-canvas-rail-button', activeEditorLayer === 1 ? 'is-active' : '')}
-                onClick={() => handleEditorLayerSelect(1)}
-                title="Build on layer 1"
-              >
-                Layer 1
-              </button>
-              {hasLayerTwo ? (
+                <button type="button" className="editor-canvas-rail-button" onClick={performUndo} disabled={!canUndo}>
+                  Undo
+                </button>
+                <button type="button" className="editor-canvas-rail-button" onClick={performRedo} disabled={!canRedo}>
+                  Redo
+                </button>
+                <button type="button" className="editor-canvas-rail-button" onClick={duplicateSelected} disabled={!selectedObject}>
+                  Copy
+                </button>
                 <button
                   type="button"
-                  className={cn('editor-canvas-rail-button', activeEditorLayer === 2 ? 'is-active' : '')}
-                  onClick={() => handleEditorLayerSelect(2)}
-                  title="Build on layer 2"
+                  className={cn('editor-canvas-rail-button', isPaintPopupOpen ? 'is-active' : '')}
+                  onClick={() => setIsPaintPopupOpen((current) => !current)}
+                  disabled={!canOpenPaintPopup}
                 >
-                  Layer 2
+                  Color
                 </button>
-              ) : null}
-              <button
-                type="button"
-                className={cn('editor-canvas-rail-button', placementMode === 'single' ? 'is-active' : '')}
-                onClick={() => setPlacementMode('single')}
-                title="Place one object per click"
-              >
-                Single
-              </button>
-              <button
-                type="button"
-                className={cn('editor-canvas-rail-button', placementMode === 'drag' ? 'is-active' : '')}
-                onClick={() => setPlacementMode('drag')}
-                title={
-                  dragPlacementAvailable
-                    ? 'Hold and drag through new cells to place continuously'
-                    : 'Drag mode works with blocks, hazards, boosts, and most portals'
-                }
-              >
-                Drag
-              </button>
-              <button
-                type="button"
-                className="editor-canvas-rail-button editor-canvas-rail-button--danger"
-                onClick={deleteSelected}
-                disabled={!selectedObject}
-              >
-                Delete
-              </button>
-              <button
-                type="button"
-                className={cn('editor-canvas-rail-button', showPreview ? 'is-active' : '')}
-                onClick={() => setShowPreview((current) => !current)}
-              >
-                {showPreview ? 'Hide Test' : 'Test'}
-              </button>
+                {!hasLayerTwo ? (
+                  <button
+                    type="button"
+                    className="editor-canvas-rail-button"
+                    onClick={handleAddLayerTwo}
+                    title="Enable a second build layer"
+                  >
+                    Add L2
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className={cn('editor-canvas-rail-button', activeEditorLayer === 1 ? 'is-active' : '')}
+                  onClick={() => handleEditorLayerSelect(1)}
+                  title="Build on layer 1"
+                >
+                  L1
+                </button>
+                {hasLayerTwo ? (
+                  <button
+                    type="button"
+                    className={cn('editor-canvas-rail-button', activeEditorLayer === 2 ? 'is-active' : '')}
+                    onClick={() => handleEditorLayerSelect(2)}
+                    title="Build on layer 2"
+                  >
+                    L2
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className={cn('editor-canvas-rail-button', placementMode === 'single' ? 'is-active' : '')}
+                  onClick={() => setPlacementMode('single')}
+                  title="Place one object per click"
+                >
+                  Snap
+                </button>
+                <button
+                  type="button"
+                  className={cn('editor-canvas-rail-button', placementMode === 'drag' ? 'is-active' : '')}
+                  onClick={() => setPlacementMode('drag')}
+                  title={
+                    dragPlacementAvailable
+                      ? 'Hold and drag through new cells to place continuously'
+                      : 'Drag mode works with blocks, hazards, boosts, and most portals'
+                  }
+                >
+                  Swipe
+                </button>
+                <button
+                  type="button"
+                  className="editor-canvas-rail-button editor-canvas-rail-button--danger"
+                  onClick={deleteSelected}
+                  disabled={!selectedObject}
+                >
+                  Delete
+                </button>
+                <button
+                  type="button"
+                  className={cn('editor-canvas-rail-button', showPreview ? 'is-active' : '')}
+                  onClick={toggleGameplayPreview}
+                >
+                  {showPreview ? 'Hide Test' : 'Test'}
+                </button>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="editor-canvas-overlay editor-canvas-overlay--desktop-right">
+              <div className="editor-stage-action-grid">
+                <button type="button" className="editor-stage-action-button" onClick={duplicateSelected} disabled={!selectedObjectIds.length}>
+                  Copy
+                </button>
+                <button
+                  type="button"
+                  className="editor-stage-action-button"
+                  disabled
+                >
+                  Paste
+                </button>
+                <button type="button" className="editor-stage-action-button" onClick={duplicateSelected} disabled={!selectedObjectIds.length}>
+                  Copy + Paste
+                </button>
+                <button
+                  type="button"
+                  className="editor-stage-action-button"
+                  onClick={() => {
+                    setEditorWorkspaceMode('edit');
+                    openSetupPanel();
+                  }}
+                >
+                  Edit Special
+                </button>
+                <button
+                  type="button"
+                  className={cn('editor-stage-action-button', isPaintPopupOpen ? 'is-active' : '')}
+                  onClick={() => setIsPaintPopupOpen((current) => !current)}
+                  disabled={!canOpenPaintPopup}
+                >
+                  Edit Group
+                </button>
+                <button
+                  type="button"
+                  className={cn('editor-stage-action-button', editorWorkspaceMode === 'edit' ? 'is-active' : '')}
+                  onClick={() => {
+                    setEditorWorkspaceMode('edit');
+                    setSelectedTool('select');
+                  }}
+                >
+                  Edit Object
+                </button>
+                <button type="button" className="editor-stage-action-button" disabled>
+                  Copy Values
+                </button>
+                <button type="button" className="editor-stage-action-button" disabled>
+                  Paste State
+                </button>
+                <button
+                  type="button"
+                  className="editor-stage-action-button"
+                  onClick={() => setIsPaintPopupOpen(true)}
+                  disabled={!canOpenPaintPopup}
+                >
+                  Paste Color
+                </button>
+                <button
+                  type="button"
+                  className={cn('editor-stage-action-button', isPaintPopupOpen ? 'is-active' : '')}
+                  onClick={() => setIsPaintPopupOpen((current) => !current)}
+                  disabled={!canOpenPaintPopup}
+                >
+                  Color
+                </button>
+                <button
+                  type="button"
+                  className={cn('editor-stage-action-button', activeEditorLayer === 2 ? 'is-active' : '')}
+                  onClick={() => {
+                    if (!hasLayerTwo) {
+                      handleAddLayerTwo();
+                      return;
+                    }
+
+                    handleEditorLayerSelect(activeEditorLayer === 1 ? 2 : 1);
+                  }}
+                >
+                  Go To Layer
+                </button>
+                <button type="button" className="editor-stage-action-button" onClick={clearSelection} disabled={!selectedObjectIds.length}>
+                  De-Select
+                </button>
+              </div>
+            </div>
+          )}
 
           {isPaintPopupOpen && paintableSelectedObject ? (
             <div className="editor-canvas-overlay editor-canvas-overlay--paint">
@@ -2328,153 +3280,361 @@ export function LevelEditor({
             </div>
           ) : null}
 
-          <div className="editor-canvas-overlay editor-canvas-overlay--bottom">
-            <div className="editor-canvas-toolstrip">
-              <div className="editor-canvas-toolstrip-header">
-                <div>
-                  <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">
-                    {paletteDrawer ? `${paletteDrawer.title} Drawer` : 'Object Drawer'}
-                  </p>
-                  <p className="text-sm text-white/72">
-                    {paletteDrawer
-                      ? 'Choose the exact piece you want to place on the stage.'
-                      : 'Click Blocks, Obstacles, Portals or another category on the left to open the picker.'}
-                  </p>
+          {isMobileLayout ? (
+            <div className="editor-canvas-overlay editor-canvas-overlay--bottom">
+              <div className="editor-canvas-toolstrip">
+                <div className="editor-canvas-toolstrip-header">
+                  <div className="editor-canvas-toolstrip-copy">
+                    <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">
+                      {paletteDrawer ? paletteDrawer.title : 'Build Drawer'}
+                    </p>
+                    <p className="text-sm text-white/72">
+                      {paletteDrawer
+                        ? 'Pick the exact piece you want to place.'
+                        : 'Choose a lane on the left to open the picker.'}
+                    </p>
+                  </div>
+                  {paletteDrawer ? (
+                    <button
+                      type="button"
+                      className="editor-canvas-drawer-close"
+                      onClick={() => setPaletteDrawerGroup(null)}
+                    >
+                      Close
+                    </button>
+                  ) : (
+                    <Badge tone="accent">{activeToolLabel}</Badge>
+                  )}
                 </div>
-                {paletteDrawer ? (
-                  <button
-                    type="button"
-                    className="editor-canvas-drawer-close"
-                    onClick={() => setPaletteDrawerGroup(null)}
+
+                <div className="editor-inline-actions">
+                  {!hasLayerTwo ? (
+                    <Button variant="ghost" onClick={handleAddLayerTwo}>
+                      Add Layer 2
+                    </Button>
+                  ) : null}
+                  <Button
+                    variant={activeEditorLayer === 1 ? 'primary' : 'ghost'}
+                    onClick={() => handleEditorLayerSelect(1)}
                   >
-                    Close
-                  </button>
+                    Build Layer 1
+                  </Button>
+                  {hasLayerTwo ? (
+                    <Button
+                      variant={activeEditorLayer === 2 ? 'primary' : 'ghost'}
+                      onClick={() => handleEditorLayerSelect(2)}
+                    >
+                      Build Layer 2
+                    </Button>
+                  ) : null}
+                  <Button
+                    variant={placementMode === 'single' ? 'primary' : 'ghost'}
+                    onClick={() => setPlacementMode('single')}
+                  >
+                    Single Place
+                  </Button>
+                  <Button
+                    variant={placementMode === 'drag' ? 'primary' : 'ghost'}
+                    onClick={() => setPlacementMode('drag')}
+                  >
+                    Drag Place
+                  </Button>
+                </div>
+
+                {paletteDrawer ? (
+                  <div className="editor-canvas-toolstrip-row">
+                    {paletteDrawer.items.map((tool) => (
+                      <ToolButton
+                        key={tool}
+                        tool={tool}
+                        label={tool === 'select' ? 'Select' : tool === 'pan' ? 'Pan' : levelObjectDefinitions[tool].label}
+                        description={toolDescriptions[tool]}
+                        active={selectedTool === tool}
+                        compact
+                        onClick={() => handleToolSelect(tool)}
+                      />
+                    ))}
+                  </div>
                 ) : (
-                  <Badge tone="accent">{activeToolLabel}</Badge>
+                  <div className="editor-canvas-toolstrip-empty">
+                    <span className="font-display text-[10px] tracking-[0.16em] text-[#ffd44a]">Current Tool</span>
+                    <strong>{activeToolLabel}</strong>
+                    <span>{activeToolDescription}</span>
+                  </div>
                 )}
               </div>
-
-              <div className="editor-inline-actions">
-                {!hasLayerTwo ? (
-                  <Button variant="ghost" onClick={handleAddLayerTwo}>
-                    Add Layer 2
-                  </Button>
-                ) : null}
-                <Button
-                  variant={activeEditorLayer === 1 ? 'primary' : 'ghost'}
-                  onClick={() => handleEditorLayerSelect(1)}
-                >
-                  Build Layer 1
-                </Button>
-                {hasLayerTwo ? (
-                  <Button
-                    variant={activeEditorLayer === 2 ? 'primary' : 'ghost'}
-                    onClick={() => handleEditorLayerSelect(2)}
+            </div>
+          ) : (
+            <div className="editor-canvas-overlay editor-canvas-overlay--desktop-bottom">
+              <div className="editor-stage-category-row">
+                {desktopPaletteGroups.map((group) => (
+                  <button
+                    key={group.title}
+                    type="button"
+                    className={cn(
+                      'editor-stage-category-button',
+                      desktopActivePaletteGroupTitle === group.title ? 'is-active' : '',
+                    )}
+                    onClick={() => handleDesktopPaletteGroupSelect(group.title)}
+                    title={group.title}
                   >
-                    Build Layer 2
-                  </Button>
-                ) : null}
-                <Button
-                  variant={placementMode === 'single' ? 'primary' : 'ghost'}
-                  onClick={() => setPlacementMode('single')}
-                >
-                  Single Place
-                </Button>
-                <Button
-                  variant={placementMode === 'drag' ? 'primary' : 'ghost'}
-                  onClick={() => setPlacementMode('drag')}
-                >
-                  Drag Place
-                </Button>
-              </div>
-
-              {paletteDrawer ? (
-                <div className="editor-canvas-toolstrip-row">
-                  {paletteDrawer.items.map((tool) => (
-                    <ToolButton
-                      key={tool}
-                      tool={tool}
-                      label={tool === 'select' ? 'Select' : tool === 'pan' ? 'Pan' : levelObjectDefinitions[tool].label}
-                      description={toolDescriptions[tool]}
-                      active={selectedTool === tool}
-                      compact
-                      onClick={() => handleToolSelect(tool)}
+                    <ToolButtonPreview
+                      tool={getDesktopPalettePreviewTool(group.title)}
+                      active={desktopActivePaletteGroupTitle === group.title}
                     />
-                  ))}
-                </div>
-              ) : (
-                <div className="editor-canvas-toolstrip-empty">
-                  <span className="font-display text-[10px] tracking-[0.16em] text-[#ffd44a]">Current Tool</span>
-                  <strong>{activeToolLabel}</strong>
-                  <span>{activeToolDescription}</span>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-
-        <div className="editor-stage-footer">
-          <div className="editor-stage-scrollbar-row">
-            <Button
-              variant="ghost"
-              onClick={() => setHorizontalScrollPosition(horizontalScrollValue - 8)}
-              disabled={horizontalScrollMax <= 0}
-            >
-              Left
-            </Button>
-
-            <div className="editor-stage-scrollbar-track">
-              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-white/72">
-                <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Stage Scroll</p>
-                <p>
-                  X: <span className="text-white">{Math.round(horizontalScrollValue)}</span> /{' '}
-                  <span className="text-white">{Math.max(0, Math.round(horizontalScrollMax))}</span>
-                </p>
+                    <span>{getPaletteGroupButtonLabel(group.title)}</span>
+                  </button>
+                ))}
               </div>
 
-              <input
-                type="range"
-                min={0}
-                max={Math.max(horizontalScrollMax, 0)}
-                step={1}
-                value={horizontalScrollValue}
+              <div className="editor-stage-bottom-shell">
+                <div className="editor-stage-mode-stack">
+                  <button
+                    type="button"
+                    className={cn('editor-stage-mode-button', editorWorkspaceMode === 'build' ? 'is-active' : '')}
+                    onClick={() => setEditorWorkspaceMode('build')}
+                  >
+                    Build
+                  </button>
+                  <button
+                    type="button"
+                    className={cn('editor-stage-mode-button', editorWorkspaceMode === 'edit' ? 'is-active' : '')}
+                    onClick={() => {
+                      setEditorWorkspaceMode('edit');
+                      setSelectedTool('select');
+                    }}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    className="editor-stage-mode-button editor-stage-mode-button--danger"
+                    onClick={deleteSelected}
+                    disabled={!selectedObjectIds.length}
+                  >
+                    Delete
+                  </button>
+                </div>
+
+                <div className="editor-stage-tray-window">
+                  {editorWorkspaceMode === 'build' ? (
+                    <>
+                      <div className="editor-stage-tray-toolbar">
+                        <button
+                          type="button"
+                          className="editor-stage-tray-arrow"
+                          onClick={() => cycleDesktopPaletteGroup(-1)}
+                          aria-label="Previous category"
+                          title="Previous category"
+                        >
+                          {'<'}
+                        </button>
+                        <div className="editor-stage-tray-copy">
+                          <span>{trayPaletteGroup?.title ?? 'Build'}</span>
+                          <strong>{trayPaletteGroup ? desktopPaletteGroupIndex + 1 : 0}</strong>
+                        </div>
+                        <button
+                          type="button"
+                          className="editor-stage-tray-arrow"
+                          onClick={() => cycleDesktopPaletteGroup(1)}
+                          aria-label="Next category"
+                          title="Next category"
+                        >
+                          {'>'}
+                        </button>
+                      </div>
+
+                      {trayPaletteGroup ? (
+                        <div className="editor-stage-tray-grid">
+                          {trayPaletteGroup.items.map((tool) => (
+                            <ToolButton
+                              key={tool}
+                              tool={tool}
+                              label={tool === 'select' ? 'Select' : tool === 'pan' ? 'Pan' : levelObjectDefinitions[tool].label}
+                              description={toolDescriptions[tool]}
+                              active={selectedTool === tool}
+                              compact
+                              hideDescription
+                              hideLabel
+                              onClick={() => handleToolSelect(tool)}
+                            />
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="editor-stage-quick-edit-empty">
+                          Pick a lane above to load build pieces into the tray.
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div className="editor-stage-quick-edit">
+                      <div className="editor-stage-quick-edit-header">
+                        <div>
+                          <span>Edit Tray</span>
+                          <strong>{selectedObject ? selectedDefinition?.label ?? selectedObject.type : 'Nothing selected'}</strong>
+                        </div>
+                        <Badge tone="accent">{selectionLabel}</Badge>
+                      </div>
+
+                      {selectedObject ? (
+                        <>
+                          <div className="editor-stage-quick-edit-stats">
+                            <div className="editor-stage-quick-stat">
+                              <span>Pos</span>
+                              <strong>
+                                {selectedObject.x}, {selectedObject.y}
+                              </strong>
+                            </div>
+                            <div className="editor-stage-quick-stat">
+                              <span>Size</span>
+                              <strong>
+                                {selectedObject.w} x {selectedObject.h}
+                              </strong>
+                            </div>
+                            <div className="editor-stage-quick-stat">
+                              <span>Layer</span>
+                              <strong>{selectedObject.editorLayer}</strong>
+                            </div>
+                            <div className="editor-stage-quick-stat">
+                              <span>Rotate</span>
+                              <strong>{normalizedSelectedRotation}deg</strong>
+                            </div>
+                          </div>
+
+                          <div className="editor-stage-quick-edit-actions">
+                            <button type="button" className="editor-stage-mode-grid-button" onClick={() => rotateSelectedObject(-1)}>
+                              Rotate L
+                            </button>
+                            <button type="button" className="editor-stage-mode-grid-button" onClick={() => rotateSelectedObject(1)}>
+                              Rotate R
+                            </button>
+                            <button
+                              type="button"
+                              className="editor-stage-mode-grid-button"
+                              onClick={() => setIsPaintPopupOpen(true)}
+                              disabled={!canOpenPaintPopup}
+                            >
+                              Paint
+                            </button>
+                            <button type="button" className="editor-stage-mode-grid-button" onClick={clearSelection}>
+                              Clear
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="editor-stage-quick-edit-empty">
+                          Select an object on the stage, then switch to Edit for quick tweaks.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className="editor-stage-mode-grid">
+                  <button
+                    type="button"
+                    className={cn('editor-stage-mode-grid-button', placementMode === 'drag' ? 'is-active' : '')}
+                    onClick={() => setPlacementMode('drag')}
+                    title={
+                      dragPlacementAvailable
+                        ? 'Hold and drag through new cells to place continuously'
+                        : 'Drag mode works with blocks, hazards, boosts, and most portals'
+                    }
+                  >
+                    Swipe
+                  </button>
+                  <button
+                    type="button"
+                    className="editor-stage-mode-grid-button"
+                    onClick={() => rotateSelectedObject(1)}
+                    disabled={!selectedObject}
+                  >
+                    Rotate
+                  </button>
+                  <button
+                    type="button"
+                    className={cn('editor-stage-mode-grid-button', selectedTool === 'select' ? 'is-active' : '')}
+                    onClick={() => handleToolSelect('select')}
+                  >
+                    Free Move
+                  </button>
+                  <button
+                    type="button"
+                    className={cn('editor-stage-mode-grid-button', placementMode === 'single' ? 'is-active' : '')}
+                    onClick={() => setPlacementMode('single')}
+                  >
+                    Snap
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {isMobileLayout ? (
+          <div className="editor-stage-footer">
+            <div className="editor-stage-scrollbar-row">
+              <Button
+                variant="ghost"
+                onClick={() => setHorizontalScrollPosition(horizontalScrollValue - 8)}
                 disabled={horizontalScrollMax <= 0}
-                className="editor-horizontal-scroll"
-                aria-label="Horizontal stage scroll"
-                onChange={(event) => setHorizontalScrollPosition(Number(event.target.value))}
-              />
+              >
+                Left
+              </Button>
+
+              <div className="editor-stage-scrollbar-track">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-white/72">
+                  <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Stage Scroll</p>
+                  <p>
+                    X: <span className="text-white">{Math.round(horizontalScrollValue)}</span> /{' '}
+                    <span className="text-white">{Math.max(0, Math.round(horizontalScrollMax))}</span>
+                  </p>
+                </div>
+
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.max(horizontalScrollMax, 0)}
+                  step={1}
+                  value={horizontalScrollValue}
+                  disabled={horizontalScrollMax <= 0}
+                  className="editor-horizontal-scroll"
+                  aria-label="Horizontal stage scroll"
+                  onChange={(event) => setHorizontalScrollPosition(Number(event.target.value))}
+                />
+              </div>
+
+              <Button
+                variant="ghost"
+                onClick={() => setHorizontalScrollPosition(horizontalScrollValue + 8)}
+                disabled={horizontalScrollMax <= 0}
+              >
+                Right
+              </Button>
             </div>
 
-            <Button
-              variant="ghost"
-              onClick={() => setHorizontalScrollPosition(horizontalScrollValue + 8)}
-              disabled={horizontalScrollMax <= 0}
-            >
-              Right
-            </Button>
+            <div className="editor-stage-meta">
+              <p>
+                Tool: <span className="text-white">{activeToolLabel}</span>
+              </p>
+              <p>
+                Selected: <span className="text-white">{selectionLabel}</span>
+              </p>
+              <p>
+                Cursor: <span className="text-white">{cursorWorld.x}, {cursorWorld.y}</span>
+              </p>
+              <p>
+                Zoom: <span className="text-white">{zoom.toFixed(2)}x</span>
+              </p>
+              <p>
+                Objects: <span className="text-white">{levelData.objects.length}</span>
+              </p>
+              <p>
+                History: <span className="text-white">{historyPosition}</span>
+              </p>
+            </div>
           </div>
-
-          <div className="editor-stage-meta">
-            <p>
-              Tool: <span className="text-white">{activeToolLabel}</span>
-            </p>
-            <p>
-              Selected: <span className="text-white">{selectionLabel}</span>
-            </p>
-            <p>
-              Cursor: <span className="text-white">{cursorWorld.x}, {cursorWorld.y}</span>
-            </p>
-            <p>
-              Zoom: <span className="text-white">{zoom.toFixed(2)}x</span>
-            </p>
-            <p>
-              Objects: <span className="text-white">{levelData.objects.length}</span>
-            </p>
-            <p>
-              History: <span className="text-white">{historyPosition}</span>
-            </p>
-          </div>
-        </div>
+        ) : null}
 
         {message ? (
           <div
@@ -2488,7 +3648,7 @@ export function LevelEditor({
         ) : null}
       </Panel>
 
-      {isMobilePreviewOpen ? (
+      {showPreview ? (
         <div className="editor-mobile-preview-shell" role="dialog" aria-modal="true" aria-label="Editor preview">
           <div className="editor-mobile-preview-actions" aria-label="Preview controls">
             <button
@@ -2522,47 +3682,22 @@ export function LevelEditor({
             className="editor-mobile-preview-runtime"
           />
         </div>
-      ) : showPreview ? (
-        <Panel className="arcade-preview-dock game-screen space-y-4 bg-transparent">
-          <div className="editor-workbench-section-head">
-            <div>
-              <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Live Test</p>
-              <h3 className="font-display text-2xl text-white">Test Lane</h3>
-            </div>
-            <div className="editor-stage-actions">
-              <Button variant="ghost" onClick={() => setPreviewRunSeed((current) => current + 1)}>
-                Restart
-              </Button>
-              <Button variant="ghost" onClick={() => setShowPreview(false)}>
-                Hide Preview
-              </Button>
-            </div>
-          </div>
-
-          <div className="space-y-3">
-            <div className="grid gap-2 md:grid-cols-3">
-              <HintChip label="Attempt" value="Runtime test" />
-              <HintChip label="Restart" value="Auto after fail" />
-              <HintChip label="Goal" value="Check timing and flow" />
-            </div>
-            <GameCanvas
-              key={`editor-preview-${previewRunSeed}`}
-              levelData={levelData}
-              runId={`editor-preview-${previewRunSeed}`}
-              attemptNumber={1}
-              autoRestartOnFail
-              previewStartPosEnabled
-            />
-          </div>
-        </Panel>
       ) : null}
 
-      <Panel
+      <div
+        ref={settingsPanelRef}
         className={cn(
-          'game-screen space-y-4 bg-transparent editor-level-settings-panel',
-          isMobileLayout && !isMobileSettingsExpanded ? 'editor-level-settings-panel--collapsed' : '',
+          'editor-level-settings-host',
+          !isMobileLayout ? 'editor-level-settings-host--desktop' : '',
+          showDesktopSetup ? 'is-open' : '',
         )}
       >
+        <Panel
+          className={cn(
+            'game-screen space-y-4 bg-transparent editor-level-settings-panel',
+            isMobileLayout && !isMobileSettingsExpanded ? 'editor-level-settings-panel--collapsed' : '',
+          )}
+        >
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Level Setup</p>
@@ -2574,7 +3709,26 @@ export function LevelEditor({
               <Button variant="ghost" onClick={() => setIsMobileSettingsExpanded((current) => !current)}>
                 {isMobileSettingsExpanded ? 'Hide Setup' : 'Show Setup'}
               </Button>
-            ) : null}
+            ) : (
+              <>
+                <Button onClick={handleSave} disabled={saveState === 'saving'}>
+                  {saveState === 'saving' ? 'Saving...' : saveLabel}
+                </Button>
+                {onSubmit ? (
+                  <Button
+                    variant="secondary"
+                    onClick={handleSubmit}
+                    disabled={hasStartPositions}
+                    title={hasStartPositions ? 'Remove all Start Pos markers before publishing' : undefined}
+                  >
+                    Submit
+                  </Button>
+                ) : null}
+                <Button variant="ghost" onClick={() => setShowDesktopSetup(false)}>
+                  Close Setup
+                </Button>
+              </>
+            )}
           </div>
         </div>
 
@@ -2844,7 +3998,7 @@ export function LevelEditor({
               </div>
             ) : null}
 
-            {selectedObject.type === 'SAW_BLADE' ? (
+            {isSawObjectType(selectedObject.type) ? (
               <div className="grid gap-3 sm:grid-cols-2">
                 <div>
                   <FieldLabel>Rotation Speed (deg/s)</FieldLabel>
@@ -3123,47 +4277,41 @@ export function LevelEditor({
             <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
               <div>
                 <FieldLabel>Player Mode</FieldLabel>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['cube', 'ship', 'arrow'] as const).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => setPlayerMode(mode)}
-                  className={cn(
-                    'tool-tile px-3 py-3 text-left transition',
-                    levelData.player.mode === mode ? 'tool-tile-active text-[#173300]' : 'text-white hover:brightness-110',
-                  )}
-                >
-                  <span className="font-display block text-[10px] tracking-[0.18em] uppercase">
-                    {getPlayerModeLabel(mode)}
-                  </span>
-                  <span
-                    className={cn(
-                      'mt-1 block text-[10px] normal-case',
-                      levelData.player.mode === mode ? 'text-[#173300]/80' : 'text-white/60',
-                    )}
-                  >
-                    {mode === 'ship'
-                      ? 'Hold to climb, release to descend'
-                      : mode === 'arrow'
-                        ? 'Hold to rise, release to dive'
-                        : 'Classic jump timing'}
-                  </span>
-                </button>
+                <div className="grid grid-cols-2 gap-2">
+                  {(['cube', 'ball', 'ship', 'arrow'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setPlayerMode(mode)}
+                      className={cn(
+                        'tool-tile px-3 py-3 text-left transition',
+                        levelData.player.mode === mode ? 'tool-tile-active text-[#173300]' : 'text-white hover:brightness-110',
+                      )}
+                    >
+                      <span className="font-display block text-[10px] tracking-[0.18em] uppercase">
+                        {getPlayerModeLabel(mode)}
+                      </span>
+                      <span
+                        className={cn(
+                          'mt-1 block text-[10px] normal-case',
+                          levelData.player.mode === mode ? 'text-[#173300]/80' : 'text-white/60',
+                        )}
+                      >
+                        {mode === 'ship'
+                          ? 'Hold to climb, release to descend'
+                          : mode === 'ball'
+                            ? 'Tap to flip gravity between floor and ceiling'
+                            : mode === 'arrow'
+                              ? 'Hold to rise, release to dive'
+                              : 'Classic jump timing'}
+                      </span>
+                    </button>
                   ))}
                 </div>
               </div>
               <div>
-                <FieldLabel>Length Units</FieldLabel>
-                <Input
-                  type="number"
-                  value={levelData.meta.lengthUnits}
-                  onChange={(event) =>
-                    updateLevelData((draft) => {
-                      draft.meta.lengthUnits = Number(event.target.value);
-                    })
-                  }
-                />
+                <FieldLabel>Auto Length Units</FieldLabel>
+                <Input type="number" value={levelData.meta.lengthUnits} readOnly />
               </div>
               <div>
                 <FieldLabel>Base Speed</FieldLabel>
@@ -3194,7 +4342,8 @@ export function LevelEditor({
             music, or trigger details.
           </div>
         )}
-      </Panel>
+        </Panel>
+      </div>
     </div>
   );
 }
@@ -3205,6 +4354,8 @@ function ToolButton({
   description,
   active,
   compact = false,
+  hideDescription = false,
+  hideLabel = false,
   onClick,
 }: {
   tool: EditorTool;
@@ -3212,12 +4363,15 @@ function ToolButton({
   description?: string;
   active: boolean;
   compact?: boolean;
+  hideDescription?: boolean;
+  hideLabel?: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      title={label}
       className={cn(
         'tool-tile text-left transition',
         compact ? 'px-2.5 py-2' : 'px-3 py-3',
@@ -3225,10 +4379,12 @@ function ToolButton({
       )}
     >
       <ToolButtonPreview tool={tool} active={active} />
-      <span className={cn('font-display block uppercase', compact ? 'text-[9px] tracking-[0.14em]' : 'text-[10px] tracking-[0.18em]')}>
-        {label}
-      </span>
-      {description ? (
+      {!hideLabel ? (
+        <span className={cn('font-display block uppercase', compact ? 'text-[9px] tracking-[0.14em]' : 'text-[10px] tracking-[0.18em]')}>
+          {label}
+        </span>
+      ) : null}
+      {description && !hideDescription ? (
         <span
           className={cn(
             'mt-1 block normal-case',
@@ -3257,8 +4413,15 @@ function ToolButtonPreview({ tool, active }: { tool: EditorTool; active: boolean
       return;
     }
 
-    const width = canvas.width;
-    const height = canvas.height;
+    const width = 64;
+    const height = 40;
+    const renderScale = getCanvasRenderScale();
+    canvas.width = Math.max(1, Math.floor(width * renderScale));
+    canvas.height = Math.max(1, Math.floor(height * renderScale));
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    context.setTransform(renderScale, 0, 0, renderScale, 0, 0);
+    context.imageSmoothingEnabled = true;
     context.clearRect(0, 0, width, height);
 
     if (tool === 'select' || tool === 'pan') {
@@ -3340,11 +4503,21 @@ function getCanvasScreenPoint(canvas: HTMLCanvasElement, clientX: number, client
   const innerHeight = Math.max(1, rect.height - borderTop - borderBottom);
   const offsetX = clamp(clientX - rect.left - borderLeft, 0, innerWidth);
   const offsetY = clamp(clientY - rect.top - borderTop, 0, innerHeight);
+  const logicalWidth = Number.parseFloat(canvas.dataset.logicalWidth ?? '') || innerWidth;
+  const logicalHeight = Number.parseFloat(canvas.dataset.logicalHeight ?? '') || innerHeight;
 
   return {
-    screenX: (offsetX / innerWidth) * canvas.width,
-    screenY: (offsetY / innerHeight) * canvas.height,
+    screenX: (offsetX / innerWidth) * logicalWidth,
+    screenY: (offsetY / innerHeight) * logicalHeight,
   };
+}
+
+function getCanvasRenderScale() {
+  if (typeof window === 'undefined') {
+    return 1;
+  }
+
+  return Math.max(1, Math.min(2, window.devicePixelRatio || 1));
 }
 
 function screenToWorld(screenX: number, screenY: number, panX: number, panY: number, cell: number) {
@@ -3359,6 +4532,163 @@ function worldToScreen(x: number, y: number, panX: number, panY: number, cell: n
     x: x * cell + panX,
     y: y * cell + panY,
   };
+}
+
+function buildEditorMusicSyncPreview(
+  levelData: LevelData,
+  bootstrap: {
+    startX: number;
+    startY: number;
+    speedMultiplier: number;
+  },
+  elapsedMs: number,
+): EditorMusicSyncPreview {
+  const levelEndX = computeAutoLevelFinishX(levelData);
+  const speedPortals = levelData.objects
+    .filter((object) => object.type === 'SPEED_PORTAL' && object.x + object.w >= bootstrap.startX)
+    .sort((left, right) => left.x - right.x || left.y - right.y);
+
+  let cursorX = bootstrap.startX;
+  let currentSpeedMultiplier = Math.max(0.1, Number(bootstrap.speedMultiplier) || levelData.player.baseSpeed || 1);
+  let remainingMs = Math.max(0, elapsedMs);
+
+  for (const portal of speedPortals) {
+    const portalX = clamp(portal.x, cursorX, levelEndX);
+
+    if (portalX > cursorX) {
+      const segmentDurationMs = ((portalX - cursorX) / (BASE_HORIZONTAL_SPEED * currentSpeedMultiplier)) * 1000;
+
+      if (remainingMs <= segmentDurationMs) {
+        cursorX += (remainingMs / 1000) * BASE_HORIZONTAL_SPEED * currentSpeedMultiplier;
+        remainingMs = 0;
+        break;
+      }
+
+      remainingMs -= segmentDurationMs;
+      cursorX = portalX;
+    }
+
+    const nextMultiplier = Number(portal.props.multiplier ?? currentSpeedMultiplier);
+    if (Number.isFinite(nextMultiplier) && nextMultiplier > 0) {
+      currentSpeedMultiplier = nextMultiplier;
+    }
+  }
+
+  if (remainingMs > 0) {
+    cursorX = Math.min(levelEndX, cursorX + (remainingMs / 1000) * BASE_HORIZONTAL_SPEED * currentSpeedMultiplier);
+  }
+
+  const progressPercent = Math.min(
+    100,
+    Math.max(0, Math.round(((cursorX - bootstrap.startX) / Math.max(1, levelEndX - bootstrap.startX)) * 100)),
+  );
+
+  return {
+    x: clamp(cursorX, bootstrap.startX, levelEndX),
+    y: bootstrap.startY,
+    speedMultiplier: currentSpeedMultiplier,
+    progressPercent,
+  };
+}
+
+function drawEditorMusicSyncGuide(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  panX: number,
+  panY: number,
+  cell: number,
+  preview: EditorMusicSyncPreview,
+  elapsedMs: number,
+) {
+  const stripeX = worldToScreen(preview.x, 0, panX, panY, cell).x;
+  const marker = worldToScreen(preview.x, preview.y + 0.5, panX, panY, cell);
+  const bandWidth = Math.max(4, cell * 0.12);
+  const markerSize = Math.max(12, cell * 0.46);
+
+  context.save();
+  context.fillStyle = 'rgba(96, 255, 92, 0.12)';
+  context.fillRect(stripeX - bandWidth * 1.4, 0, bandWidth * 2.8, height);
+  context.strokeStyle = 'rgba(92, 255, 72, 0.92)';
+  context.shadowColor = 'rgba(125, 255, 73, 0.55)';
+  context.shadowBlur = cell * 0.42;
+  context.lineWidth = bandWidth;
+  context.beginPath();
+  context.moveTo(stripeX, 0);
+  context.lineTo(stripeX, height);
+  context.stroke();
+  context.restore();
+
+  context.save();
+  context.fillStyle = '#11192f';
+  context.strokeStyle = '#7dff49';
+  context.lineWidth = Math.max(2, cell * 0.06);
+  context.beginPath();
+  context.arc(marker.x, marker.y, markerSize * 0.52, 0, Math.PI * 2);
+  context.fill();
+  context.stroke();
+  context.fillStyle = '#ffffff';
+  context.beginPath();
+  context.arc(marker.x, marker.y, markerSize * 0.15, 0, Math.PI * 2);
+  context.fill();
+  context.restore();
+
+  const labelText = `SYNC ${(elapsedMs / 1000).toFixed(1)}s  x${preview.speedMultiplier.toFixed(2)}  ${preview.progressPercent}%`;
+  const labelWidth = Math.max(118, labelText.length * 7.6);
+  const labelX = clamp(stripeX - labelWidth / 2, 12, Math.max(12, width - labelWidth - 12));
+  const labelY = 18;
+
+  context.save();
+  context.fillStyle = 'rgba(11, 18, 44, 0.88)';
+  context.strokeStyle = 'rgba(125, 255, 73, 0.8)';
+  context.lineWidth = 2;
+  context.beginPath();
+  context.roundRect(labelX, labelY, labelWidth, 26, 10);
+  context.fill();
+  context.stroke();
+  context.fillStyle = '#dfffe0';
+  context.font = '700 12px Segoe UI';
+  context.textBaseline = 'middle';
+  context.fillText(labelText, labelX + 10, labelY + 13);
+  context.restore();
+}
+
+function drawEditorPermanentStageFloor(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  topY: number,
+  cell: number,
+  panX: number,
+) {
+  const deckHeight = Math.max(cell * 1.06, 18);
+  const floorGradient = context.createLinearGradient(0, topY, 0, topY + deckHeight);
+  floorGradient.addColorStop(0, '#62ebff');
+  floorGradient.addColorStop(0.18, '#2aaeff');
+  floorGradient.addColorStop(1, '#0b59d7');
+
+  context.fillStyle = floorGradient;
+  context.fillRect(0, topY, width, deckHeight);
+
+  context.fillStyle = 'rgba(5, 10, 28, 0.82)';
+  context.fillRect(0, topY + deckHeight, width, Math.max(0, height - topY - deckHeight));
+
+  context.strokeStyle = 'rgba(255,255,255,0.34)';
+  context.lineWidth = 1;
+  const seamOffset = ((panX % cell) + cell) % cell;
+  for (let x = seamOffset - cell; x < width + cell; x += cell) {
+    context.beginPath();
+    context.moveTo(x, topY + deckHeight * 0.18);
+    context.lineTo(x, topY + deckHeight);
+    context.stroke();
+  }
+
+  context.strokeStyle = 'rgba(144, 245, 255, 0.92)';
+  context.lineWidth = 3;
+  context.beginPath();
+  context.moveTo(0, topY);
+  context.lineTo(width, topY);
+  context.stroke();
 }
 
 function clamp(value: number, min: number, max: number) {

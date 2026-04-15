@@ -12,9 +12,11 @@ export const levelObjectDefinitions: Record<
     effect:
       | 'jumpPad'
       | 'jumpOrb'
+      | 'gravityOrb'
       | 'gravity'
       | 'speed'
       | 'shipMode'
+      | 'ballMode'
       | 'cubeMode'
       | 'arrowMode'
       | 'finish'
@@ -97,11 +99,137 @@ export const levelObjectDefinitions: Record<
     lethal: true,
     effect: null,
   },
+  SPIKE_FLAT: {
+    label: 'Flat Spike',
+    color: '#ff6d92',
+    strokeColor: '#ffffff',
+    defaultSize: { w: 1, h: 0.5 },
+    collides: false,
+    lethal: true,
+    effect: null,
+  },
+  SPIKE_SMALL: {
+    label: 'Small Spike',
+    color: '#ff7398',
+    strokeColor: '#ffffff',
+    defaultSize: { w: 0.72, h: 0.72 },
+    collides: false,
+    lethal: true,
+    effect: null,
+  },
+  SPIKE_TINY: {
+    label: 'Tiny Spike',
+    color: '#ff82a3',
+    strokeColor: '#ffffff',
+    defaultSize: { w: 0.46, h: 0.46 },
+    collides: false,
+    lethal: true,
+    effect: null,
+  },
   SAW_BLADE: {
-    label: 'Saw Blade',
-    color: '#d7ebff',
-    strokeColor: '#17304b',
+    label: 'Saw Blade S',
+    color: '#151821',
+    strokeColor: '#eef3ff',
     defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: true,
+    effect: null,
+  },
+  SAW_BLADE_MEDIUM: {
+    label: 'Saw Blade M',
+    color: '#151821',
+    strokeColor: '#eef3ff',
+    defaultSize: { w: 1.45, h: 1.45 },
+    collides: false,
+    lethal: true,
+    effect: null,
+  },
+  SAW_BLADE_LARGE: {
+    label: 'Saw Blade L',
+    color: '#151821',
+    strokeColor: '#eef3ff',
+    defaultSize: { w: 1.9, h: 1.9 },
+    collides: false,
+    lethal: true,
+    effect: null,
+  },
+  SAW_STAR: {
+    label: 'Star Saw S',
+    color: '#262832',
+    strokeColor: '#f4f7ff',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: true,
+    effect: null,
+  },
+  SAW_STAR_MEDIUM: {
+    label: 'Star Saw M',
+    color: '#262832',
+    strokeColor: '#f4f7ff',
+    defaultSize: { w: 1.45, h: 1.45 },
+    collides: false,
+    lethal: true,
+    effect: null,
+  },
+  SAW_STAR_LARGE: {
+    label: 'Star Saw L',
+    color: '#262832',
+    strokeColor: '#f4f7ff',
+    defaultSize: { w: 1.9, h: 1.9 },
+    collides: false,
+    lethal: true,
+    effect: null,
+  },
+  SAW_GEAR: {
+    label: 'Gear Saw S',
+    color: '#d9dcff',
+    strokeColor: '#6c78a9',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: true,
+    effect: null,
+  },
+  SAW_GEAR_MEDIUM: {
+    label: 'Gear Saw M',
+    color: '#d9dcff',
+    strokeColor: '#6c78a9',
+    defaultSize: { w: 1.45, h: 1.45 },
+    collides: false,
+    lethal: true,
+    effect: null,
+  },
+  SAW_GEAR_LARGE: {
+    label: 'Gear Saw L',
+    color: '#d9dcff',
+    strokeColor: '#6c78a9',
+    defaultSize: { w: 1.9, h: 1.9 },
+    collides: false,
+    lethal: true,
+    effect: null,
+  },
+  SAW_GLOW: {
+    label: 'Glow Saw S',
+    color: '#fafcff',
+    strokeColor: '#d0d7ef',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: true,
+    effect: null,
+  },
+  SAW_GLOW_MEDIUM: {
+    label: 'Glow Saw M',
+    color: '#fafcff',
+    strokeColor: '#d0d7ef',
+    defaultSize: { w: 1.45, h: 1.45 },
+    collides: false,
+    lethal: true,
+    effect: null,
+  },
+  SAW_GLOW_LARGE: {
+    label: 'Glow Saw L',
+    color: '#fafcff',
+    strokeColor: '#d0d7ef',
+    defaultSize: { w: 1.9, h: 1.9 },
     collides: false,
     lethal: true,
     effect: null,
@@ -123,6 +251,15 @@ export const levelObjectDefinitions: Record<
     collides: false,
     lethal: false,
     effect: 'jumpOrb',
+  },
+  GRAVITY_ORB: {
+    label: 'Gravity Orb',
+    color: '#62f3ff',
+    strokeColor: '#ffffff',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: 'gravityOrb',
   },
   GRAVITY_PORTAL: {
     label: 'Gravity',
@@ -150,6 +287,15 @@ export const levelObjectDefinitions: Record<
     collides: false,
     lethal: false,
     effect: 'shipMode',
+  },
+  BALL_PORTAL: {
+    label: 'Ball',
+    color: '#ffd95e',
+    strokeColor: '#ffffff',
+    defaultSize: { w: 1, h: 2 },
+    collides: false,
+    lethal: false,
+    effect: 'ballMode',
   },
   CUBE_PORTAL: {
     label: 'Cube',
@@ -245,6 +391,24 @@ export const levelObjectDefinitions: Record<
 
 export const objectPaletteOrder = Object.keys(levelObjectDefinitions) as LevelObjectType[];
 export const PAINT_GROUP_SLOT_COUNT = 6;
+export const FIXED_LEVEL_START_X = 2;
+export const FIXED_LEVEL_START_Y = 8;
+export const AUTO_LEVEL_FINISH_PADDING_UNITS = 10;
+export const spikeObjectTypes = ['SPIKE', 'SPIKE_FLAT', 'SPIKE_SMALL', 'SPIKE_TINY'] as const satisfies readonly LevelObjectType[];
+export const sawObjectTypes = [
+  'SAW_BLADE',
+  'SAW_BLADE_MEDIUM',
+  'SAW_BLADE_LARGE',
+  'SAW_STAR',
+  'SAW_STAR_MEDIUM',
+  'SAW_STAR_LARGE',
+  'SAW_GEAR',
+  'SAW_GEAR_MEDIUM',
+  'SAW_GEAR_LARGE',
+  'SAW_GLOW',
+  'SAW_GLOW_MEDIUM',
+  'SAW_GLOW_LARGE',
+] as const satisfies readonly LevelObjectType[];
 const paintableObjectTypes = new Set<LevelObjectType>([
   'GROUND_BLOCK',
   'HALF_GROUND_BLOCK',
@@ -253,18 +417,51 @@ const paintableObjectTypes = new Set<LevelObjectType>([
   'ARROW_RAMP_ASC',
   'ARROW_RAMP_DESC',
   'DECORATION_BLOCK',
-  'SPIKE',
-  'SAW_BLADE',
+  ...spikeObjectTypes,
+  ...sawObjectTypes,
 ]);
 
 const triggerObjectTypes = new Set<LevelObjectType>(['MOVE_TRIGGER', 'ALPHA_TRIGGER', 'TOGGLE_TRIGGER', 'PULSE_TRIGGER']);
+const legacyRunAnchorObjectTypes = new Set<LevelObjectType>(['START_MARKER', 'FINISH_PORTAL']);
+const autoFinishIgnoredObjectTypes = new Set<LevelObjectType>(['START_MARKER', 'FINISH_PORTAL', 'START_POS']);
 
 export function isPaintableObjectType(type: LevelObjectType) {
   return paintableObjectTypes.has(type);
 }
 
+export function isSpikeObjectType(type: LevelObjectType): type is (typeof spikeObjectTypes)[number] {
+  return spikeObjectTypes.includes(type as (typeof spikeObjectTypes)[number]);
+}
+
+export function isSawObjectType(type: LevelObjectType): type is (typeof sawObjectTypes)[number] {
+  return sawObjectTypes.includes(type as (typeof sawObjectTypes)[number]);
+}
+
 export function isTriggerObjectType(type: LevelObjectType) {
   return triggerObjectTypes.has(type);
+}
+
+export function isLegacyRunAnchorObjectType(type: LevelObjectType) {
+  return legacyRunAnchorObjectTypes.has(type);
+}
+
+export function stripLegacyRunAnchorObjects(objects: LevelObject[]) {
+  return objects.filter((object) => !isLegacyRunAnchorObjectType(object.type));
+}
+
+export function computeAutoLevelFinishX(levelData: Pick<LevelData, 'objects'>) {
+  const maxContinuationX = levelData.objects.reduce((maxX, object) => {
+    if (autoFinishIgnoredObjectTypes.has(object.type)) {
+      return maxX;
+    }
+
+    return Math.max(maxX, object.x + object.w);
+  }, FIXED_LEVEL_START_X);
+
+  return Math.max(
+    FIXED_LEVEL_START_X + AUTO_LEVEL_FINISH_PADDING_UNITS,
+    Math.ceil(maxContinuationX + AUTO_LEVEL_FINISH_PADDING_UNITS),
+  );
 }
 
 export function getObjectPaintGroupId(object: Pick<LevelObject, 'props'> | null | undefined) {
@@ -352,20 +549,16 @@ export function createEmptyLevelData(theme = 'neon-grid'): LevelData {
       colorGroups: [],
     },
     player: {
-      startX: 2,
-      startY: 8,
+      startX: FIXED_LEVEL_START_X,
+      startY: FIXED_LEVEL_START_Y,
       mode: 'cube',
       baseSpeed: 1,
       gravity: 1,
     },
-    objects: [
-      makeObject('start-marker', 'START_MARKER', 2, 8),
-      ...Array.from({ length: 40 }, (_, index) => makeObject(`ground-${index}`, 'GROUND_BLOCK', index, 10)),
-      makeObject('finish', 'FINISH_PORTAL', 36, 8),
-    ],
+    objects: [],
     finish: {
-      x: 36,
-      y: 8,
+      x: FIXED_LEVEL_START_X + AUTO_LEVEL_FINISH_PADDING_UNITS,
+      y: FIXED_LEVEL_START_Y,
     },
   };
 }

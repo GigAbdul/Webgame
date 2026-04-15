@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { requireAuth } from '../../middleware/auth';
 import { asyncHandler } from '../../utils/async-handler';
 import { getSingleParam } from '../../utils/request-param';
-import { createLevelSchema, updateLevelSchema } from './levels.schemas';
+import { createLevelSchema, submitLevelSchema, updateLevelSchema } from './levels.schemas';
 import { levelsService } from './levels.service';
 
 export const levelsRouter = Router();
@@ -78,7 +78,8 @@ levelsRouter.post(
   '/:id/submit',
   requireAuth,
   asyncHandler(async (request, response) => {
-    const level = await levelsService.submit(request.authUser!, getSingleParam(request.params.id, 'id'));
+    const payload = submitLevelSchema.parse(request.body ?? {});
+    const level = await levelsService.submit(request.authUser!, getSingleParam(request.params.id, 'id'), payload);
     response.json({ level });
   }),
 );

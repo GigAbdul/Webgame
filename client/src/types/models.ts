@@ -21,12 +21,28 @@ export type LevelObjectType =
   | 'ARROW_RAMP_DESC'
   | 'DASH_BLOCK'
   | 'SPIKE'
+  | 'SPIKE_FLAT'
+  | 'SPIKE_SMALL'
+  | 'SPIKE_TINY'
   | 'SAW_BLADE'
+  | 'SAW_BLADE_MEDIUM'
+  | 'SAW_BLADE_LARGE'
+  | 'SAW_STAR'
+  | 'SAW_STAR_MEDIUM'
+  | 'SAW_STAR_LARGE'
+  | 'SAW_GEAR'
+  | 'SAW_GEAR_MEDIUM'
+  | 'SAW_GEAR_LARGE'
+  | 'SAW_GLOW'
+  | 'SAW_GLOW_MEDIUM'
+  | 'SAW_GLOW_LARGE'
   | 'JUMP_PAD'
   | 'JUMP_ORB'
+  | 'GRAVITY_ORB'
   | 'GRAVITY_PORTAL'
   | 'SPEED_PORTAL'
   | 'SHIP_PORTAL'
+  | 'BALL_PORTAL'
   | 'CUBE_PORTAL'
   | 'ARROW_PORTAL'
   | 'FINISH_PORTAL'
@@ -72,7 +88,7 @@ export type LevelData = {
   player: {
     startX: number;
     startY: number;
-    mode: 'cube' | 'ship' | 'arrow';
+    mode: 'cube' | 'ball' | 'ship' | 'arrow';
     baseSpeed: number;
     gravity: number;
   };
@@ -126,6 +142,7 @@ export type LeaderboardEntry = {
   username: string;
   totalStars: number;
   completedOfficialLevels: number;
+  officialLevelsAuthored: number;
   createdAt?: string;
 };
 

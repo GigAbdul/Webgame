@@ -1,4 +1,5 @@
 import type { LevelData } from '../../types/models';
+import { isSawObjectType, isSpikeObjectType } from './object-definitions';
 
 type DrawStageObjectOptions = {
   context: CanvasRenderingContext2D;
@@ -12,6 +13,7 @@ type DrawStageObjectOptions = {
   isActive?: boolean;
   isUsedOrb?: boolean;
   alpha?: number;
+  animationTimeMs?: number;
 };
 
 type BlockObjectType =
@@ -22,6 +24,7 @@ type BlockObjectType =
   | 'DECORATION_BLOCK';
 
 type ArrowRampObjectType = 'ARROW_RAMP_ASC' | 'ARROW_RAMP_DESC';
+type SpritePortalType = 'SHIP_PORTAL' | 'BALL_PORTAL' | 'CUBE_PORTAL' | 'ARROW_PORTAL';
 
 const blockTypes = new Set<BlockObjectType>([
   'GROUND_BLOCK',
@@ -32,6 +35,13 @@ const blockTypes = new Set<BlockObjectType>([
 ]);
 
 const arrowRampTypes = new Set<ArrowRampObjectType>(['ARROW_RAMP_ASC', 'ARROW_RAMP_DESC']);
+const spritePortalPathByType: Record<SpritePortalType, string> = {
+  SHIP_PORTAL: '/portals/ship.svg',
+  BALL_PORTAL: '/portals/ball.svg',
+  CUBE_PORTAL: '/portals/cube.svg',
+  ARROW_PORTAL: '/portals/wave.svg',
+};
+const spritePortalCache = new Map<SpritePortalType, HTMLImageElement>();
 
 function isBlockType(type: LevelData['objects'][number]['type']): type is BlockObjectType {
   return blockTypes.has(type as BlockObjectType);
@@ -39,6 +49,10 @@ function isBlockType(type: LevelData['objects'][number]['type']): type is BlockO
 
 function isArrowRampType(type: LevelData['objects'][number]['type']): type is ArrowRampObjectType {
   return arrowRampTypes.has(type as ArrowRampObjectType);
+}
+
+function isSpritePortalType(type: LevelData['objects'][number]['type']): type is SpritePortalType {
+  return type in spritePortalPathByType;
 }
 
 export function drawStageObjectSprite({
@@ -53,11 +67,13 @@ export function drawStageObjectSprite({
   isActive = false,
   isUsedOrb = false,
   alpha = 1,
+  animationTimeMs = 0,
 }: DrawStageObjectOptions) {
   context.save();
   context.globalAlpha = alpha;
 
-  const normalizedRotation = normalizeRotation(object.rotation ?? 0);
+  const normalizedRotationDegrees = normalizeQuarterRotationDegrees(object.rotation ?? 0);
+  const normalizedRotation = normalizeRotation(normalizedRotationDegrees);
   if (normalizedRotation !== 0) {
     context.translate(x + w / 2, y + h / 2);
     context.rotate(normalizedRotation);
@@ -65,20 +81,31 @@ export function drawStageObjectSprite({
     y = -h / 2;
   }
 
-  if (object.type === 'SPIKE') {
+  if (isSpikeObjectType(object.type)) {
     drawSpikeSprite(context, x, y, w, h, fillColor, strokeColor);
     context.restore();
     return;
   }
 
-  if (object.type === 'SAW_BLADE') {
-    drawSawSprite(context, x, y, w, h, fillColor, strokeColor);
+  if (isSawObjectType(object.type)) {
+    drawSawSprite(context, object.type, x, y, w, h, fillColor, strokeColor);
     context.restore();
     return;
   }
 
-  if (object.type === 'JUMP_ORB') {
-    drawJumpOrbSprite(context, x, y, w, h, fillColor, strokeColor, isUsedOrb);
+  if (object.type === 'JUMP_ORB' || object.type === 'GRAVITY_ORB') {
+    drawJumpOrbSprite(
+      context,
+      x,
+      y,
+      w,
+      h,
+      fillColor,
+      strokeColor,
+      isUsedOrb,
+      animationTimeMs,
+      object.type === 'GRAVITY_ORB' ? 'gravity' : 'jump',
+    );
     context.restore();
     return;
   }
@@ -93,11 +120,12 @@ export function drawStageObjectSprite({
     object.type === 'GRAVITY_PORTAL' ||
     object.type === 'SPEED_PORTAL' ||
     object.type === 'SHIP_PORTAL' ||
+    object.type === 'BALL_PORTAL' ||
     object.type === 'CUBE_PORTAL' ||
     object.type === 'ARROW_PORTAL' ||
     object.type === 'FINISH_PORTAL'
   ) {
-    drawPortalSprite(context, object.type, x, y, w, h, fillColor, strokeColor, isActive);
+    drawPortalSprite(context, object.type, x, y, w, h, fillColor, strokeColor, isActive, normalizedRotationDegrees);
     context.restore();
     return;
   }
@@ -306,6 +334,7 @@ function drawDashBlockSprite(
 
 function drawSawSprite(
   context: CanvasRenderingContext2D,
+  type: LevelData['objects'][number]['type'],
   x: number,
   y: number,
   w: number,
@@ -313,19 +342,20 @@ function drawSawSprite(
   fillColor: string,
   strokeColor: string,
 ) {
+  const variant = getSawVariant(type);
   const centerX = x + w / 2;
   const centerY = y + h / 2;
-  const outerRadius = Math.max(10, Math.min(w, h) * 0.48);
-  const innerRadius = outerRadius * 0.72;
-  const toothCount = 10;
+  const outerRadius = Math.max(10, Math.min(w, h) * variant.outerRadiusFactor);
+  const innerRadius = outerRadius * variant.innerRadiusFactor;
+  const toothCount = variant.toothCount;
   const gradient = context.createRadialGradient(centerX, centerY, outerRadius * 0.18, centerX, centerY, outerRadius);
-  gradient.addColorStop(0, lightenColor(fillColor, 0.34));
+  gradient.addColorStop(0, lightenColor(fillColor, variant.gradientLighten));
   gradient.addColorStop(0.48, fillColor);
-  gradient.addColorStop(1, darkenColor(fillColor, 0.34));
+  gradient.addColorStop(1, darkenColor(fillColor, variant.gradientDarken));
 
   context.beginPath();
   for (let index = 0; index < toothCount * 2; index += 1) {
-    const angle = (Math.PI * index) / toothCount - Math.PI / 2;
+    const angle = (Math.PI * index) / toothCount - Math.PI / 2 + variant.rotationOffset;
     const radius = index % 2 === 0 ? outerRadius : innerRadius;
     const pointX = centerX + Math.cos(angle) * radius;
     const pointY = centerY + Math.sin(angle) * radius;
@@ -344,16 +374,91 @@ function drawSawSprite(
   context.lineWidth = 2.2;
   context.stroke();
 
-  context.fillStyle = 'rgba(255,255,255,0.18)';
+  context.fillStyle = variant.coreFill;
   context.beginPath();
-  context.arc(centerX, centerY, outerRadius * 0.42, 0, Math.PI * 2);
+  context.arc(centerX, centerY, outerRadius * variant.coreRadiusFactor, 0, Math.PI * 2);
   context.fill();
 
-  context.strokeStyle = 'rgba(255,255,255,0.72)';
-  context.lineWidth = 1.8;
+  context.strokeStyle = variant.coreStroke;
+  context.lineWidth = variant.coreStrokeWidth;
   context.beginPath();
-  context.arc(centerX, centerY, outerRadius * 0.24, 0, Math.PI * 2);
+  context.arc(centerX, centerY, outerRadius * variant.innerCoreRadiusFactor, 0, Math.PI * 2);
   context.stroke();
+
+  if (variant.centerDotFill) {
+    context.fillStyle = variant.centerDotFill;
+    context.beginPath();
+    context.arc(centerX, centerY, outerRadius * 0.08, 0, Math.PI * 2);
+    context.fill();
+  }
+}
+
+function getSawVariant(type: LevelData['objects'][number]['type']) {
+  if (type === 'SAW_STAR' || type === 'SAW_STAR_MEDIUM' || type === 'SAW_STAR_LARGE') {
+    return {
+      toothCount: 4,
+      outerRadiusFactor: 0.5,
+      innerRadiusFactor: 0.42,
+      coreRadiusFactor: 0.32,
+      innerCoreRadiusFactor: 0.16,
+      gradientLighten: 0.14,
+      gradientDarken: 0.22,
+      rotationOffset: Math.PI / 4,
+      coreFill: 'rgba(143, 135, 255, 0.9)',
+      coreStroke: 'rgba(245, 248, 255, 0.95)',
+      coreStrokeWidth: 1.8,
+      centerDotFill: '#20304d',
+    } as const;
+  }
+
+  if (type === 'SAW_GEAR' || type === 'SAW_GEAR_MEDIUM' || type === 'SAW_GEAR_LARGE') {
+    return {
+      toothCount: 12,
+      outerRadiusFactor: 0.49,
+      innerRadiusFactor: 0.8,
+      coreRadiusFactor: 0.45,
+      innerCoreRadiusFactor: 0.24,
+      gradientLighten: 0.18,
+      gradientDarken: 0.16,
+      rotationOffset: 0,
+      coreFill: 'rgba(255, 255, 255, 0.22)',
+      coreStroke: 'rgba(255,255,255,0.92)',
+      coreStrokeWidth: 1.6,
+      centerDotFill: null,
+    } as const;
+  }
+
+  if (type === 'SAW_GLOW' || type === 'SAW_GLOW_MEDIUM' || type === 'SAW_GLOW_LARGE') {
+    return {
+      toothCount: 11,
+      outerRadiusFactor: 0.47,
+      innerRadiusFactor: 0.67,
+      coreRadiusFactor: 0.4,
+      innerCoreRadiusFactor: 0.12,
+      gradientLighten: 0.08,
+      gradientDarken: 0.12,
+      rotationOffset: 0,
+      coreFill: 'rgba(255,255,255,0.12)',
+      coreStroke: 'rgba(255,255,255,0.92)',
+      coreStrokeWidth: 1.8,
+      centerDotFill: 'rgba(255,255,255,0.92)',
+    } as const;
+  }
+
+  return {
+    toothCount: 10,
+    outerRadiusFactor: 0.48,
+    innerRadiusFactor: 0.72,
+    coreRadiusFactor: 0.42,
+    innerCoreRadiusFactor: 0.24,
+    gradientLighten: 0.22,
+    gradientDarken: 0.28,
+    rotationOffset: 0,
+    coreFill: 'rgba(255,255,255,0.18)',
+    coreStroke: 'rgba(255,255,255,0.72)',
+    coreStrokeWidth: 1.8,
+    centerDotFill: null,
+  } as const;
 }
 
 function drawJumpOrbSprite(
@@ -365,12 +470,17 @@ function drawJumpOrbSprite(
   fillColor: string,
   strokeColor: string,
   isUsedOrb: boolean,
+  animationTimeMs: number,
+  variant: 'jump' | 'gravity',
 ) {
   const centerX = x + w / 2;
   const centerY = y + h / 2;
   const radius = Math.max(8, Math.min(w, h) * 0.42);
+  const pulse = isUsedOrb ? 0.22 : 0.5 + Math.sin(animationTimeMs / 180) * 0.14;
+  const innerRingColor = variant === 'gravity' ? 'rgba(210,255,255,0.68)' : 'rgba(255,255,255,0.48)';
+  const highlightColor = variant === 'gravity' ? 'rgba(225,255,255,0.34)' : 'rgba(255,255,255,0.28)';
   const glow = context.createRadialGradient(centerX, centerY, radius * 0.15, centerX, centerY, radius * 1.15);
-  glow.addColorStop(0, lightenColor(fillColor, 0.32));
+  glow.addColorStop(0, lightenColor(fillColor, 0.26 + pulse * 0.18));
   glow.addColorStop(0.62, fillColor);
   glow.addColorStop(1, isUsedOrb ? 'rgba(255,255,255,0.08)' : darkenColor(fillColor, 0.26));
 
@@ -379,22 +489,71 @@ function drawJumpOrbSprite(
   context.arc(centerX, centerY, radius, 0, Math.PI * 2);
   context.fill();
 
+  if (!isUsedOrb) {
+    drawJumpOrbParticles(context, centerX, centerY, radius, fillColor, animationTimeMs, variant);
+  }
+
   context.strokeStyle = strokeColor;
   context.lineWidth = 2.5;
   context.beginPath();
   context.arc(centerX, centerY, radius - 1.5, 0, Math.PI * 2);
   context.stroke();
 
-  context.strokeStyle = 'rgba(255,255,255,0.48)';
+  context.strokeStyle = innerRingColor;
   context.lineWidth = 1.8;
   context.beginPath();
   context.arc(centerX, centerY, radius * 0.56, 0, Math.PI * 2);
   context.stroke();
 
-  context.fillStyle = isUsedOrb ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.28)';
+  context.fillStyle = isUsedOrb ? 'rgba(255,255,255,0.18)' : highlightColor;
   context.beginPath();
   context.arc(centerX - radius * 0.18, centerY - radius * 0.18, radius * 0.22, 0, Math.PI * 2);
   context.fill();
+}
+
+function drawJumpOrbParticles(
+  context: CanvasRenderingContext2D,
+  centerX: number,
+  centerY: number,
+  radius: number,
+  fillColor: string,
+  animationTimeMs: number,
+  variant: 'jump' | 'gravity',
+) {
+  const particleCount = 6;
+  const time = animationTimeMs / 1000;
+  const trailColor = variant === 'gravity' ? mixColor(fillColor, '#dffcff', 0.32) : mixColor(fillColor, '#ffe88c', 0.26);
+  const sparkColor = variant === 'gravity' ? mixColor(fillColor, '#ffffff', 0.66) : mixColor(fillColor, '#fff6b7', 0.55);
+
+  context.save();
+  context.lineCap = 'round';
+
+  for (let index = 0; index < particleCount; index += 1) {
+    const progress = ((time * 0.9 + index * 0.17) % 1 + 1) % 1;
+    const angle = time * 2.7 + (index / particleCount) * Math.PI * 2;
+    const startDistance = radius * (0.88 + progress * 0.18);
+    const endDistance = radius * (1.18 + progress * 0.62);
+    const startX = centerX + Math.cos(angle) * startDistance;
+    const startY = centerY + Math.sin(angle) * startDistance;
+    const endX = centerX + Math.cos(angle) * endDistance;
+    const endY = centerY + Math.sin(angle) * endDistance;
+    const alpha = 0.12 + (1 - progress) * 0.42;
+
+    context.strokeStyle = toRgba(trailColor, alpha);
+    context.lineWidth = Math.max(1.4, radius * (0.08 + (1 - progress) * 0.05));
+    context.beginPath();
+    context.moveTo(startX, startY);
+    context.lineTo(endX, endY);
+    context.stroke();
+
+    context.fillStyle = sparkColor;
+    context.globalAlpha = 0.24 + (1 - progress) * 0.48;
+    context.beginPath();
+    context.arc(endX, endY, Math.max(1.6, radius * (0.09 + (1 - progress) * 0.05)), 0, Math.PI * 2);
+    context.fill();
+  }
+
+  context.restore();
 }
 
 function drawJumpPadSprite(
@@ -439,7 +598,17 @@ function drawPortalSprite(
   fillColor: string,
   strokeColor: string,
   isActive: boolean,
+  rotationDegrees: number,
 ) {
+  if (isSpritePortalType(type)) {
+    const sprite = getSpritePortalImage(type);
+
+    if (sprite && sprite.complete && sprite.naturalWidth > 0) {
+      drawPortalSpriteImage(context, sprite, x, y, w, h, isActive, rotationDegrees);
+      return;
+    }
+  }
+
   const outerGradient = context.createLinearGradient(x, y, x, y + h);
   outerGradient.addColorStop(0, darkenColor(fillColor, 0.34));
   outerGradient.addColorStop(1, darkenColor(fillColor, 0.52));
@@ -476,6 +645,52 @@ function drawPortalSprite(
   drawPortalGlyph(context, type, x, y, w, h);
 }
 
+function getSpritePortalImage(type: SpritePortalType) {
+  const cachedImage = spritePortalCache.get(type);
+
+  if (cachedImage) {
+    return cachedImage;
+  }
+
+  if (typeof Image === 'undefined') {
+    return null;
+  }
+
+  const nextImage = new Image();
+  nextImage.decoding = 'async';
+  nextImage.src = spritePortalPathByType[type];
+  spritePortalCache.set(type, nextImage);
+  return nextImage;
+}
+
+function drawPortalSpriteImage(
+  context: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  isActive: boolean,
+  rotationDegrees: number,
+) {
+  const shouldSwapSpriteFrame = rotationDegrees === 90 || rotationDegrees === 270;
+  const drawWidth = shouldSwapSpriteFrame ? h : w;
+  const drawHeight = shouldSwapSpriteFrame ? w : h;
+  const drawX = x + (w - drawWidth) / 2;
+  const drawY = y + (h - drawHeight) / 2;
+
+  context.save();
+  context.imageSmoothingEnabled = true;
+
+  if (isActive) {
+    context.shadowColor = 'rgba(255,255,255,0.44)';
+    context.shadowBlur = Math.max(8, w * 0.18);
+  }
+
+  context.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+  context.restore();
+}
+
 function drawPortalGlyph(
   context: CanvasRenderingContext2D,
   type: LevelData['objects'][number]['type'],
@@ -509,6 +724,10 @@ function drawPortalGlyph(
     context.lineTo(centerX - w * 0.04, centerY);
     context.lineTo(centerX - w * 0.12, centerY + h * 0.1);
     context.closePath();
+  } else if (type === 'BALL_PORTAL') {
+    context.arc(centerX, centerY, Math.min(w, h) * 0.12, 0, Math.PI * 2);
+    context.moveTo(centerX - w * 0.16, centerY);
+    context.lineTo(centerX + w * 0.16, centerY);
   } else if (type === 'CUBE_PORTAL') {
     context.rect(centerX - w * 0.12, centerY - h * 0.12, w * 0.24, h * 0.24);
   } else if (type === 'ARROW_PORTAL') {
@@ -716,12 +935,30 @@ function mixColor(baseHex: string, mixHex: string, amount: number) {
   });
 }
 
+function toRgba(hex: string, alpha: number) {
+  const color = parseHexColor(hex);
+
+  if (!color) {
+    return hex;
+  }
+
+  return `rgba(${color.r}, ${color.g}, ${color.b}, ${alpha})`;
+}
+
 function normalizeRotation(degrees: number) {
   if (!Number.isFinite(degrees)) {
     return 0;
   }
 
   return (degrees * Math.PI) / 180;
+}
+
+function normalizeQuarterRotationDegrees(degrees: number) {
+  if (!Number.isFinite(degrees)) {
+    return 0;
+  }
+
+  return ((Math.round(degrees / 90) * 90) % 360 + 360) % 360;
 }
 
 function parseHexColor(hex: string) {

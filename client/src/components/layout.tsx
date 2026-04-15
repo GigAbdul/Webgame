@@ -10,17 +10,22 @@ const primaryNavigation = [
 
 const signedInNavigation = [
   { to: '/profile', label: 'Profile' },
-  { to: '/my-levels', label: 'My Levels' },
-  { to: '/editor/new', label: 'Editor' },
+  { to: '/my-levels', label: 'Workshop' },
 ];
 
 export function AppLayout() {
   const location = useLocation();
   const { user, clearAuth } = useAuthStore();
   const isHomeRoute = location.pathname === '/';
-  const isFullScreenLevelsRoute = location.pathname === '/levels';
+  const isWorkshopDetailRoute =
+    location.pathname.startsWith('/my-levels/') && location.pathname !== '/my-levels/new';
+  const isFullScreenArcadeRoute =
+    location.pathname === '/levels' ||
+    location.pathname === '/my-levels' ||
+    location.pathname === '/leaderboard' ||
+    isWorkshopDetailRoute;
 
-  if (isFullScreenLevelsRoute) {
+  if (isFullScreenArcadeRoute) {
     return (
       <div className="app-root app-root--levels">
         <main className="app-main app-main--levels">

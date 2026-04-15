@@ -1,5 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { getObjectFillColor, getObjectPaintGroupId, getObjectStrokeColor } from './object-definitions';
+import {
+  FIXED_LEVEL_START_X,
+  FIXED_LEVEL_START_Y,
+  computeAutoLevelFinishX,
+  getObjectFillColor,
+  getObjectPaintGroupId,
+  getObjectStrokeColor,
+  isLegacyRunAnchorObjectType,
+  isSawObjectType,
+  isSpikeObjectType,
+  stripLegacyRunAnchorObjects,
+} from './object-definitions';
 import {
   SHIP_FALL_ACCELERATION,
   SHIP_FLIGHT_CEILING_Y,
@@ -24,10 +35,19 @@ type GameCanvasProps = {
   autoRestartOnFail?: boolean;
   fullscreen?: boolean;
   previewStartPosEnabled?: boolean;
+  stopSignal?: number;
+  showRunPath?: boolean;
   className?: string;
-  onFail?: (payload: { progressPercent: number; completionTimeMs: number }) => void;
-  onComplete?: (payload: { progressPercent: number; completionTimeMs: number }) => void;
-  onExitToMenu?: (payload: { progressPercent: number }) => void;
+  onFail?: (payload: {
+    progressPercent: number;
+    completionTimeMs: number;
+    deathX?: number;
+    deathY?: number;
+    pathPoints?: Array<{ x: number; y: number }>;
+  }) => void;
+  onComplete?: (payload: { progressPercent: number; completionTimeMs: number; pathPoints?: Array<{ x: number; y: number }> }) => void;
+  onExitToMenu?: (payload: { progressPercent: number; pathPoints?: Array<{ x: number; y: number }> }) => void;
+  onStop?: (payload: { progressPercent: number; pathPoints?: Array<{ x: number; y: number }> }) => void;
 };
 
 type PlayerState = {
@@ -60,13 +80,19 @@ type PreviewBootstrap = {
 };
 
 const solidTypes = new Set(['GROUND_BLOCK', 'HALF_GROUND_BLOCK', 'PLATFORM_BLOCK', 'HALF_PLATFORM_BLOCK']);
-const hazardTypes = new Set(['SPIKE', 'SAW_BLADE', 'ARROW_RAMP_ASC', 'ARROW_RAMP_DESC']);
+const arrowGroundSafeTypes = new Set(['GROUND_BLOCK', 'HALF_GROUND_BLOCK']);
+const structuralHazardTypes = new Set(['ARROW_RAMP_ASC', 'ARROW_RAMP_DESC']);
 const JUMP_BUFFER_MS = 130;
 const COYOTE_TIME_MS = 110;
 const AUTO_RESTART_DELAY_MS = 850;
-const BASE_HORIZONTAL_SPEED = 6.15;
+export const BASE_HORIZONTAL_SPEED = 6.15;
 const BASE_GRAVITY_ACCELERATION = 55;
 const DEFAULT_JUMP_VELOCITY = 15.5;
+const BALL_FLIP_VELOCITY = DEFAULT_JUMP_VELOCITY * 0.92;
+const GRAVITY_ORB_LAUNCH_VELOCITY = DEFAULT_JUMP_VELOCITY * 0.76;
+const GRAVITY_ORB_MIN_VELOCITY = DEFAULT_JUMP_VELOCITY * 0.48;
+const GRAVITY_ORB_INERTIA_BLEND = 0.72;
+const PERMANENT_STAGE_FLOOR_Y = SHIP_FLIGHT_FLOOR_Y;
 const AIR_ROTATION_SPEED = Math.PI * 1.6;
 const QUARTER_TURN = Math.PI / 2;
 const ARROW_VERTICAL_SPEED_FACTOR = 1;
@@ -80,15 +106,19 @@ export function GameCanvas({
   autoRestartOnFail = false,
   fullscreen = false,
   previewStartPosEnabled = false,
+  stopSignal = 0,
+  showRunPath = false,
   className,
   onFail,
   onComplete,
   onExitToMenu,
+  onStop,
 }: GameCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const onFailRef = useRef(onFail);
   const onCompleteRef = useRef(onComplete);
+  const onStopRef = useRef(onStop);
   const inputHeldRef = useRef(false);
   const keyboardInputHeldRef = useRef(false);
   const activePointerIdsRef = useRef<Set<number>>(new Set());
@@ -97,6 +127,8 @@ export function GameCanvas({
   const pauseStartedAtRef = useRef<number | null>(null);
   const pausedDurationMsRef = useRef(0);
   const screenShakeEnabledRef = useRef(true);
+  const handledStopSignalRef = useRef(stopSignal);
+  const currentPathRef = useRef<Array<{ x: number; y: number }>>([]);
   const [hud, setHud] = useState({
     progressPercent: 0,
     status: 'running' as 'running' | 'failed' | 'completed',
@@ -109,13 +141,15 @@ export function GameCanvas({
   const playerModeLabel = getPlayerModeLabel(levelData.player.mode);
   const resolvedMusic = useMemo(() => resolveLevelMusic(levelData.meta), [levelData.meta]);
   const musicOffsetMs = Math.max(0, Number(levelData.meta.musicOffsetMs ?? 0) || 0);
+  const sanitizedLevelObjects = useMemo(() => stripLegacyRunAnchorObjects(levelData.objects), [levelData.objects]);
+  const autoFinishX = useMemo(() => computeAutoLevelFinishX({ objects: levelData.objects }), [levelData.objects]);
   const previewStartPos = useMemo(() => {
     if (!previewStartPosEnabled) {
       return null;
     }
 
-    for (let index = levelData.objects.length - 1; index >= 0; index -= 1) {
-      const object = levelData.objects[index];
+    for (let index = sanitizedLevelObjects.length - 1; index >= 0; index -= 1) {
+      const object = sanitizedLevelObjects[index];
 
       if (object.type === 'START_POS') {
         return {
@@ -126,7 +160,7 @@ export function GameCanvas({
     }
 
     return null;
-  }, [levelData.objects, previewStartPosEnabled]);
+  }, [previewStartPosEnabled, sanitizedLevelObjects]);
   const previewBootstrap = useMemo(
     () => buildPreviewBootstrap(levelData, previewStartPos),
     [levelData, previewStartPos],
@@ -165,28 +199,41 @@ export function GameCanvas({
     closePauseMenu();
     onExitToMenu?.({
       progressPercent: hud.progressPercent,
+      pathPoints: currentPathRef.current.map((point) => ({ ...point })),
     });
   };
 
   const levelBounds = useMemo(() => {
     const maxY = Math.max(
-      ...levelData.objects.map((object) => object.y + object.h),
-      levelData.player.startY + 4,
-      levelData.finish.y + 3,
+      ...sanitizedLevelObjects.map((object) => object.y + object.h),
+      FIXED_LEVEL_START_Y + 4,
     );
     const maxX = Math.max(
-      ...levelData.objects.map((object) => object.x + object.w),
-      levelData.finish.x + 4,
-      levelData.meta.lengthUnits,
+      ...sanitizedLevelObjects.map((object) => object.x + object.w),
+      autoFinishX,
     );
 
     return { maxX, maxY };
-  }, [levelData]);
+  }, [autoFinishX, sanitizedLevelObjects]);
 
   useEffect(() => {
     onFailRef.current = onFail;
     onCompleteRef.current = onComplete;
-  }, [onComplete, onFail]);
+    onStopRef.current = onStop;
+  }, [onComplete, onFail, onStop]);
+
+  useEffect(() => {
+    if (stopSignal === handledStopSignalRef.current) {
+      return;
+    }
+
+    handledStopSignalRef.current = stopSignal;
+    closePauseMenu();
+    onStopRef.current?.({
+      progressPercent: hud.progressPercent,
+      pathPoints: currentPathRef.current.map((point) => ({ ...point })),
+    });
+  }, [hud.progressPercent, stopSignal]);
 
   useEffect(() => {
     screenShakeEnabledRef.current = isScreenShakeEnabled;
@@ -271,13 +318,57 @@ export function GameCanvas({
     const isLowPowerDevice =
       typeof window !== 'undefined' && (window.matchMedia('(pointer: coarse)').matches || window.innerWidth < 820);
     const isMobilePreviewPerformanceMode = fullscreen && autoRestartOnFail && previewStartPosEnabled && isLowPowerDevice;
-    const width = isMobilePreviewPerformanceMode ? 800 : 960;
-    const height = isMobilePreviewPerformanceMode ? 450 : 540;
-    canvas.width = width;
-    canvas.height = height;
+    const defaultWidth = 960;
+    let width = defaultWidth;
+    let height = Math.round((defaultWidth * 9) / 16);
+    let cell = (36 * width) / 960;
+    let verticalOffset = Math.max(40, height - levelBounds.maxY * cell - 50);
 
-    const cell = (36 * width) / 960;
-    const verticalOffset = Math.max(40, height - levelBounds.maxY * cell - 50);
+    const syncCanvasResolution = () => {
+      const stageElement = canvas.parentElement;
+      const stageRect = stageElement?.getBoundingClientRect();
+      const measuredWidth = Math.round(stageRect?.width ?? 0);
+
+      width = Math.max(1, measuredWidth || defaultWidth);
+      height = Math.max(1, Math.round((width * 9) / 16));
+      cell = (36 * width) / 960;
+      verticalOffset = Math.max(40, height - levelBounds.maxY * cell - 50);
+
+      const renderScale = isMobilePreviewPerformanceMode ? 1 : getCanvasRenderScale();
+      const physicalWidth = Math.max(1, Math.floor(width * renderScale));
+      const physicalHeight = Math.max(1, Math.floor(height * renderScale));
+
+      if (canvas.width !== physicalWidth) {
+        canvas.width = physicalWidth;
+      }
+
+      if (canvas.height !== physicalHeight) {
+        canvas.height = physicalHeight;
+      }
+
+      canvas.dataset.logicalWidth = String(width);
+      canvas.dataset.logicalHeight = String(height);
+      context.setTransform(renderScale, 0, 0, renderScale, 0, 0);
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = 'high';
+    };
+
+    syncCanvasResolution();
+
+    const stageElement = canvas.parentElement;
+    let resizeObserver: ResizeObserver | null = null;
+    const handleRuntimeResize = () => {
+      syncCanvasResolution();
+    };
+
+    if (typeof ResizeObserver !== 'undefined' && stageElement) {
+      resizeObserver = new ResizeObserver(() => {
+        syncCanvasResolution();
+      });
+      resizeObserver.observe(stageElement);
+    } else if (typeof window !== 'undefined') {
+      window.addEventListener('resize', handleRuntimeResize);
+    }
     const player: PlayerState = {
       x: previewBootstrap.startX,
       y: previewBootstrap.startY,
@@ -294,7 +385,8 @@ export function GameCanvas({
     const activeTriggers = new Set<string>();
     const usedOrbs = new Set<string>();
     const trail: TrailPoint[] = [];
-    const sourceObjects = levelData.objects.map((object) => structuredClone(object));
+    const pathLine = currentPathRef.current;
+      const sourceObjects = sanitizedLevelObjects.map((object) => structuredClone(object));
     let runtimeObjects = sourceObjects.map((object) => structuredClone(object));
     let runtimeObjectBuckets = buildRuntimeObjectBuckets(runtimeObjects);
     let runtimeObjectMap = new Map(runtimeObjects.map((object) => [object.id, object] as const));
@@ -454,6 +546,11 @@ export function GameCanvas({
       activeTriggers.clear();
       usedOrbs.clear();
       trail.length = 0;
+      pathLine.length = 0;
+      pathLine.push({
+        x: player.x + player.w / 2,
+        y: player.y + player.h / 2,
+      });
       pauseMenuOpenRef.current = false;
       pauseSettingsOpenRef.current = false;
       pauseStartedAtRef.current = null;
@@ -482,6 +579,22 @@ export function GameCanvas({
       lastGroundedAt = -Infinity;
     };
 
+    const applyGravityOrbLaunch = () => {
+      const previousGravity = player.gravity === 0 ? 1 : player.gravity;
+      const nextGravity = -previousGravity;
+      const desiredVelocity = GRAVITY_ORB_LAUNCH_VELOCITY * Math.sign(nextGravity || 1);
+      const blendedVelocity = player.vy + (desiredVelocity - player.vy) * GRAVITY_ORB_INERTIA_BLEND;
+      const launchDirection = Math.sign(desiredVelocity || 1);
+      const finalVelocity =
+        Math.sign(blendedVelocity || launchDirection) !== launchDirection ||
+        Math.abs(blendedVelocity) < GRAVITY_ORB_MIN_VELOCITY
+          ? GRAVITY_ORB_MIN_VELOCITY * launchDirection
+          : blendedVelocity;
+
+      player.gravity = nextGravity;
+      launchPlayer(finalVelocity);
+    };
+
     const tryImmediateCubeJump = (timestamp = performance.now()) => {
       if (currentStatus !== 'running' || player.mode !== 'cube') {
         return false;
@@ -496,6 +609,22 @@ export function GameCanvas({
 
       launchPlayer(jumpVelocity);
       jumpBufferedUntil = 0;
+      return true;
+    };
+
+    const tryImmediateBallFlip = () => {
+      if (currentStatus !== 'running' || player.mode !== 'ball') {
+        return false;
+      }
+
+      if (!player.grounded) {
+        return false;
+      }
+
+      const nextGravity = player.gravity === 0 ? -1 : -player.gravity;
+      player.gravity = nextGravity;
+      launchPlayer(BALL_FLIP_VELOCITY * Math.sign(nextGravity || 1));
+      bumpCamera(4, 0.12);
       return true;
     };
 
@@ -526,6 +655,19 @@ export function GameCanvas({
       }
 
       jumpBufferedUntil = timestamp + JUMP_BUFFER_MS;
+    };
+
+    const triggerPrimaryAction = (timestamp = performance.now()) => {
+      if (player.mode === 'cube') {
+        queueJump(timestamp);
+        return;
+      }
+
+      if (player.mode === 'ball') {
+        if (!tryImmediateBallFlip()) {
+          jumpBufferedUntil = timestamp + JUMP_BUFFER_MS;
+        }
+      }
     };
 
     const keyListener = (event: KeyboardEvent) => {
@@ -562,8 +704,9 @@ export function GameCanvas({
         keyboardInputHeldRef.current = true;
         syncInputHeldState();
         ensureAudioPlayback();
-        if (player.mode === 'cube') {
-          queueJump();
+
+        if (!event.repeat) {
+          triggerPrimaryAction();
         }
       }
 
@@ -603,8 +746,8 @@ export function GameCanvas({
       ensureAudioPlayback();
 
       if (currentStatus === 'running') {
-        if (player.mode === 'cube') {
-          queueJump();
+        if (activePointerIdsRef.current.size === 1) {
+          triggerPrimaryAction();
         }
         return;
       }
@@ -670,6 +813,9 @@ export function GameCanvas({
       onFailRef.current?.({
         progressPercent,
         completionTimeMs: elapsedMs,
+        deathX: player.x + player.w / 2,
+        deathY: player.y + player.h / 2,
+        pathPoints: pathLine.map((point) => ({ ...point })),
       });
 
       if (autoRestartOnFail) {
@@ -694,6 +840,7 @@ export function GameCanvas({
       onCompleteRef.current?.({
         progressPercent: 100,
         completionTimeMs: elapsedMs,
+        pathPoints: pathLine.map((point) => ({ ...point })),
       });
     };
 
@@ -786,8 +933,28 @@ export function GameCanvas({
           }
         }
 
-        const collisionObjects = getRuntimeObjectsInRange(collisionRangeMinX, collisionRangeMaxX);
-        const interactionObjects = getRuntimeObjectsInRange(interactionRangeMinX, interactionRangeMaxX);
+        if (currentStatus === 'running' && player.mode !== 'ship') {
+          const previousBottom = previousY + player.h;
+          const nextBottom = player.y + player.h;
+
+          if (previousBottom <= PERMANENT_STAGE_FLOOR_Y && nextBottom >= PERMANENT_STAGE_FLOOR_Y) {
+            if (player.gravity > 0 && player.vy >= 0) {
+              player.y = PERMANENT_STAGE_FLOOR_Y - player.h;
+              player.vy = 0;
+              if (player.mode !== 'arrow') {
+                player.grounded = true;
+                lastGroundedAt = timestamp;
+              }
+            } else {
+              markFailed(elapsedMs);
+            }
+          }
+        }
+
+        const collisionObjects =
+          currentStatus === 'running' ? getRuntimeObjectsInRange(collisionRangeMinX, collisionRangeMaxX) : [];
+        const interactionObjects =
+          currentStatus === 'running' ? getRuntimeObjectsInRange(interactionRangeMinX, interactionRangeMaxX) : [];
 
         for (const object of collisionObjects) {
           if (
@@ -807,6 +974,26 @@ export function GameCanvas({
             const nextTop = player.y;
             const ceiling = object.y + object.h;
             const isDashProtected = isArrowProtectedByDashBlock(object, collisionRangeMinX, collisionRangeMaxX);
+            const isGroundSafeObject = arrowGroundSafeTypes.has(object.type);
+
+            if (isGroundSafeObject && player.gravity > 0 && previousBottom <= object.y && nextBottom >= object.y && player.vy >= 0) {
+              player.y = object.y - player.h;
+              player.vy = 0;
+              resolvedSafely = true;
+            }
+
+            if (
+              isGroundSafeObject &&
+              !resolvedSafely &&
+              player.gravity < 0 &&
+              previousTop >= ceiling &&
+              nextTop <= ceiling &&
+              player.vy <= 0
+            ) {
+              player.y = ceiling;
+              player.vy = 0;
+              resolvedSafely = true;
+            }
 
             if (isDashProtected && previousBottom <= object.y && nextBottom >= object.y && player.vy >= 0) {
               player.y = object.y - player.h;
@@ -879,9 +1066,10 @@ export function GameCanvas({
           }
         }
 
-        if (player.mode === 'cube' && currentStatus === 'running' && jumpBufferedUntil >= timestamp) {
+        if ((player.mode === 'cube' || player.mode === 'ball') && currentStatus === 'running' && jumpBufferedUntil >= timestamp) {
           const jumpVelocity = -DEFAULT_JUMP_VELOCITY * Math.sign(player.gravity || 1);
-          const canGroundJump = player.grounded || timestamp - lastGroundedAt <= COYOTE_TIME_MS;
+          const canGroundJump =
+            player.mode === 'cube' && (player.grounded || timestamp - lastGroundedAt <= COYOTE_TIME_MS);
 
           if (canGroundJump) {
             launchPlayer(jumpVelocity);
@@ -890,26 +1078,20 @@ export function GameCanvas({
             let orb: LevelObject | null = null;
 
             for (const object of interactionObjects) {
+              const canUseOrb =
+                player.mode === 'ball'
+                  ? object.type === 'GRAVITY_ORB'
+                  : object.type === 'JUMP_ORB' || object.type === 'GRAVITY_ORB';
+
               if (
-                object.type !== 'JUMP_ORB' ||
+                !canUseOrb ||
                 isRuntimeObjectDisabled(object) ||
                 usedOrbs.has(object.id)
               ) {
                 continue;
               }
 
-              if (
-                aabbIntersects(
-                  player.x,
-                  player.y,
-                  player.w,
-                  player.h,
-                  object.x - 0.24,
-                  object.y - 0.24,
-                  object.w + 0.48,
-                  object.h + 0.48,
-                )
-              ) {
+              if (jumpOrbIntersectsPlayer(player, object)) {
                 orb = object;
                 break;
               }
@@ -917,7 +1099,11 @@ export function GameCanvas({
 
             if (orb) {
               usedOrbs.add(orb.id);
-              launchPlayer(jumpVelocity * 1.18);
+              if (orb.type === 'GRAVITY_ORB') {
+                applyGravityOrbLaunch();
+              } else {
+                launchPlayer(jumpVelocity * 1.18);
+              }
               jumpBufferedUntil = 0;
               bumpCamera(4, 0.12);
             }
@@ -937,7 +1123,7 @@ export function GameCanvas({
             continue;
           }
 
-          if (hazardTypes.has(object.type) && hazardIntersects(player, object)) {
+          if ((isSpikeObjectType(object.type) || isSawObjectType(object.type) || structuralHazardTypes.has(object.type)) && hazardIntersects(player, object)) {
             markFailed(elapsedMs);
             break;
           }
@@ -948,7 +1134,7 @@ export function GameCanvas({
           ) {
             activeTriggers.add(object.id);
 
-            if (object.type === 'JUMP_PAD' && player.mode === 'cube') {
+            if (object.type === 'JUMP_PAD' && (player.mode === 'cube' || player.mode === 'ball')) {
               const boost = Number(object.props.boost ?? 16);
               launchPlayer(-boost * Math.sign(player.gravity || 1));
               bumpCamera(5, 0.14);
@@ -972,6 +1158,12 @@ export function GameCanvas({
                 SHIP_FLIGHT_FLOOR_Y - player.h - SHIP_VISUAL_BOUND_PADDING,
               );
               player.vy = clamp(player.vy, -SHIP_MAX_VERTICAL_SPEED, SHIP_MAX_VERTICAL_SPEED);
+              bumpCamera(4, 0.12);
+            }
+
+            if (object.type === 'BALL_PORTAL') {
+              player.mode = 'ball';
+              player.grounded = false;
               bumpCamera(4, 0.12);
             }
 
@@ -1067,6 +1259,10 @@ export function GameCanvas({
           }
         }
 
+        if (currentStatus === 'running' && player.x + player.w >= autoFinishX) {
+          markCompleted(elapsedMs);
+        }
+
         if (currentStatus === 'running') {
           if (player.mode === 'ship') {
             if (player.x > levelBounds.maxX + 8) {
@@ -1082,6 +1278,11 @@ export function GameCanvas({
           player.rotation += (targetRotation - player.rotation) * Math.min(1, deltaSeconds * 10);
         } else if (player.mode === 'arrow') {
           player.rotation = Math.atan2(player.vy, horizontalSpeed);
+        } else if (player.mode === 'ball') {
+          const radius = Math.max(0.001, player.w / 2);
+          player.rotation = normalizeAngle(
+            player.rotation + (horizontalSpeed / radius) * deltaSeconds * Math.sign(player.gravity || 1),
+          );
         } else if (player.grounded) {
           player.rotation = snapCubeRotation(player.rotation);
         } else {
@@ -1092,6 +1293,43 @@ export function GameCanvas({
 
         const playerCenterX = player.x + player.w / 2;
         const playerCenterY = player.y + player.h / 2;
+
+        if (showRunPath) {
+          const lastPathPoint = pathLine[pathLine.length - 1];
+
+          if (!lastPathPoint) {
+            pathLine.push({
+              x: playerCenterX,
+              y: playerCenterY,
+            });
+          } else {
+            const deltaX = playerCenterX - lastPathPoint.x;
+            const deltaY = playerCenterY - lastPathPoint.y;
+            const minSegmentDistance = player.mode === 'arrow' ? 0.01 : 0.008;
+            const rewoundToEarlierPosition = !Number.isFinite(lastPathPoint.x) || deltaX < -Math.max(0.6, player.w * 1.35);
+
+            if (rewoundToEarlierPosition) {
+              pathLine.push({
+                x: Number.NaN,
+                y: Number.NaN,
+              });
+              pathLine.push({
+                x: playerCenterX,
+                y: playerCenterY,
+              });
+            } else if (deltaX * deltaX + deltaY * deltaY >= minSegmentDistance * minSegmentDistance) {
+              pathLine.push({
+                x: playerCenterX,
+                y: playerCenterY,
+              });
+            }
+          }
+
+          if (pathLine.length > 12000) {
+            pathLine.shift();
+          }
+        }
+
         trail.push({
           x: playerCenterX,
           y: playerCenterY,
@@ -1151,12 +1389,7 @@ export function GameCanvas({
         drawShipBounds(context, cameraX + shakeOffsetX, verticalOffset, width, cell);
       }
 
-      context.strokeStyle = 'rgba(202,255,69,0.16)';
-      context.lineWidth = 2;
-      context.beginPath();
-      context.moveTo(cameraX - cell * 2, verticalOffset + cell * 10 + cell);
-      context.lineTo(cameraX + width + cell * 5, verticalOffset + cell * 10 + cell);
-      context.stroke();
+      drawPermanentStageFloor(context, cameraX + shakeOffsetX, verticalOffset, width, height, cell);
 
       const drawRangeMinX = (cameraX + shakeOffsetX) / cell - 3;
       const drawRangeMaxX = drawRangeMinX + width / cell + 6;
@@ -1174,7 +1407,7 @@ export function GameCanvas({
         }
 
         const animatedObject =
-          object.type === 'SAW_BLADE'
+          isSawObjectType(object.type)
             ? {
                 ...object,
                 rotation: (object.rotation ?? 0) + (Number(object.props.rotationSpeed ?? 240) * elapsedMs) / 1000,
@@ -1186,6 +1419,7 @@ export function GameCanvas({
           animatedObject,
           cell,
           verticalOffset,
+          elapsedMs,
           levelData.meta.colorGroups,
           activeTriggers.has(object.id),
           usedOrbs.has(object.id),
@@ -1226,6 +1460,9 @@ export function GameCanvas({
     animationFrame = window.requestAnimationFrame(loop);
 
     return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener('resize', handleRuntimeResize);
+
       if (restartTimeout) {
         window.clearTimeout(restartTimeout);
       }
@@ -1242,7 +1479,7 @@ export function GameCanvas({
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       canvas.removeEventListener('pointerdown', pointerDownListener);
     };
-  }, [autoRestartOnFail, fullscreen, levelBounds.maxX, levelBounds.maxY, levelData, onComplete, onFail, previewBootstrap, previewStartPosEnabled, runId, runtimeMusicOffsetMs]);
+  }, [autoRestartOnFail, fullscreen, levelBounds.maxX, levelBounds.maxY, levelData, onComplete, onFail, previewBootstrap, previewStartPosEnabled, runId, runtimeMusicOffsetMs, showRunPath]);
 
       if (fullscreen) {
     return (
@@ -1386,6 +1623,8 @@ export function GameCanvas({
         Controls: <span className="text-white">Space</span>, click, or tap to{' '}
         {levelData.player.mode === 'ship'
           ? 'thrust upward'
+          : levelData.player.mode === 'ball'
+            ? 'flip gravity'
           : levelData.player.mode === 'arrow'
             ? 'rise diagonally'
             : 'jump'}.
@@ -1397,6 +1636,8 @@ export function GameCanvas({
         ) : null}{' '}
         {levelData.player.mode === 'ship'
           ? 'Ship runs stay between the top and bottom flight bounds, and any wall contact still punishes sloppy routing.'
+          : levelData.player.mode === 'ball'
+            ? 'Ball runs flip gravity on each press, keep the same punishing side collisions, and reward clean timing between floor and ceiling.'
           : levelData.player.mode === 'arrow'
             ? 'Arrow runs trace diagonal lines, and any wall or ramp contact immediately breaks the run.'
             : 'Jump inputs are buffered briefly, spikes use a fairer hitbox, and side collisions still punish sloppy routing.'}
@@ -1427,6 +1668,7 @@ function drawObject(
   object: LevelData['objects'][number],
   cell: number,
   verticalOffset: number,
+  elapsedMs: number,
   colorGroups: LevelData['meta']['colorGroups'],
   isActive: boolean,
   isUsedOrb: boolean,
@@ -1458,6 +1700,7 @@ function drawObject(
     isActive,
     isUsedOrb,
     alpha: visualOverride?.alpha ?? 1,
+    animationTimeMs: elapsedMs,
   });
 }
 
@@ -1589,6 +1832,67 @@ function drawPlayer(context: CanvasRenderingContext2D, player: PlayerState, cell
     return;
   }
 
+  if (player.mode === 'ball') {
+    const radius = Math.min(sizeW, sizeH) * 0.48;
+
+    context.fillStyle = '#132339';
+    context.beginPath();
+    context.arc(0, 0, radius, 0, Math.PI * 2);
+    context.fill();
+
+    context.fillStyle = '#f4f7ff';
+    context.beginPath();
+    context.arc(0, 0, radius * 0.86, 0, Math.PI * 2);
+    context.fill();
+
+    context.strokeStyle = '#182133';
+    context.lineWidth = 3;
+    context.beginPath();
+    context.arc(0, 0, radius * 0.86, 0, Math.PI * 2);
+    context.stroke();
+
+    context.fillStyle = '#ffd95e';
+    context.beginPath();
+    context.arc(0, 0, radius * 0.54, 0, Math.PI * 2);
+    context.fill();
+
+    context.strokeStyle = '#182133';
+    context.lineWidth = 2.4;
+    context.beginPath();
+    context.arc(0, 0, radius * 0.54, 0, Math.PI * 2);
+    context.stroke();
+
+    context.fillStyle = '#63ffbd';
+    context.beginPath();
+    context.moveTo(-radius * 0.02, -radius * 0.68);
+    context.lineTo(radius * 0.46, -radius * 0.12);
+    context.lineTo(radius * 0.02, radius * 0.02);
+    context.lineTo(radius * 0.58, radius * 0.54);
+    context.lineTo(radius * 0.08, radius * 0.18);
+    context.lineTo(-radius * 0.46, radius * 0.68);
+    context.lineTo(-radius * 0.02, radius * 0.12);
+    context.lineTo(-radius * 0.58, -radius * 0.42);
+    context.closePath();
+    context.fill();
+
+    context.strokeStyle = 'rgba(24,33,51,0.72)';
+    context.lineWidth = 1.6;
+    context.beginPath();
+    context.moveTo(-radius * 0.78, 0);
+    context.lineTo(radius * 0.78, 0);
+    context.moveTo(0, -radius * 0.78);
+    context.lineTo(0, radius * 0.78);
+    context.stroke();
+
+    context.fillStyle = '#182133';
+    context.fillRect(-radius * 0.34, -radius * 0.18, radius * 0.14, radius * 0.14);
+    context.fillRect(radius * 0.08, -radius * 0.18, radius * 0.14, radius * 0.14);
+    context.fillRect(-radius * 0.24, radius * 0.18, radius * 0.44, radius * 0.08);
+
+    context.restore();
+    return;
+  }
+
   context.fillStyle = '#f4f7ff';
   context.fillRect(-sizeW / 2, -sizeH / 2, sizeW, sizeH);
   context.strokeStyle = '#182133';
@@ -1628,6 +1932,46 @@ function drawShipBounds(
   context.stroke();
 }
 
+function drawPermanentStageFloor(
+  context: CanvasRenderingContext2D,
+  cameraX: number,
+  verticalOffset: number,
+  width: number,
+  height: number,
+  cell: number,
+) {
+  const topY = verticalOffset + PERMANENT_STAGE_FLOOR_Y * cell;
+  const deckHeight = Math.max(cell * 1.06, 18);
+  const startX = Math.floor((cameraX - cell * 2) / cell) * cell;
+  const endX = Math.ceil((cameraX + width + cell * 5) / cell) * cell;
+  const floorGradient = context.createLinearGradient(0, topY, 0, topY + deckHeight);
+  floorGradient.addColorStop(0, '#62ebff');
+  floorGradient.addColorStop(0.18, '#2aaeff');
+  floorGradient.addColorStop(1, '#0b59d7');
+
+  context.fillStyle = floorGradient;
+  context.fillRect(startX, topY, endX - startX, deckHeight);
+
+  context.fillStyle = 'rgba(5, 10, 28, 0.84)';
+  context.fillRect(startX, topY + deckHeight, endX - startX, Math.max(0, height - topY - deckHeight + cell * 6));
+
+  context.strokeStyle = 'rgba(255,255,255,0.36)';
+  context.lineWidth = 1;
+  for (let x = startX; x < endX; x += cell) {
+    context.beginPath();
+    context.moveTo(x, topY + deckHeight * 0.18);
+    context.lineTo(x, topY + deckHeight);
+    context.stroke();
+  }
+
+  context.strokeStyle = 'rgba(144, 245, 255, 0.92)';
+  context.lineWidth = 3;
+  context.beginPath();
+  context.moveTo(startX, topY);
+  context.lineTo(endX, topY);
+  context.stroke();
+}
+
 function aabbIntersects(
   ax: number,
   ay: number,
@@ -1641,73 +1985,78 @@ function aabbIntersects(
   return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
 }
 
-function spikeIntersects(player: PlayerState, object: LevelData['objects'][number]) {
-  const hitbox = getSpikeHitbox(object);
+function jumpOrbIntersectsPlayer(player: PlayerState, object: LevelData['objects'][number]) {
+  const orbCenterX = object.x + object.w / 2;
+  const orbCenterY = object.y + object.h / 2;
+  const orbRadius = Math.max(0.18, Math.min(object.w, object.h) * 0.39 + 0.02);
+  const playerInset = Math.min(player.w, player.h) * 0.08;
+  const nearestX = clamp(orbCenterX, player.x + playerInset, player.x + player.w - playerInset);
+  const nearestY = clamp(orbCenterY, player.y + playerInset, player.y + player.h - playerInset);
+  const deltaX = orbCenterX - nearestX;
+  const deltaY = orbCenterY - nearestY;
 
-  return aabbIntersects(
-    player.x,
-    player.y,
-    player.w,
-    player.h,
-    hitbox.x,
-    hitbox.y,
-    hitbox.w,
-    hitbox.h,
-  );
+  return deltaX * deltaX + deltaY * deltaY <= orbRadius * orbRadius;
 }
 
-function getSpikeHitbox(object: LevelData['objects'][number]) {
+function spikeIntersects(player: PlayerState, object: LevelData['objects'][number]) {
+  return triangleIntersectsAabb(player.x, player.y, player.w, player.h, getSpikeTriangle(object));
+}
+
+function getSpikeTriangle(object: LevelData['objects'][number]) {
   const normalizedRotation = normalizeQuarterRotationDegrees(object.rotation ?? 0);
-  const centerInsetX = object.w * 0.34;
-  const centerInsetY = object.h * 0.2;
-  const narrowWidth = object.w * 0.32;
-  const narrowHeight = object.h * 0.58;
+  const centerX = object.x + object.w / 2;
+  const centerY = object.y + object.h / 2;
+  const baseVertices = [
+    { x: object.x, y: object.y + object.h },
+    { x: object.x + object.w / 2, y: object.y },
+    { x: object.x + object.w, y: object.y + object.h },
+  ];
 
-  if (normalizedRotation === 90) {
-    return {
-      x: object.x + centerInsetY,
-      y: object.y + centerInsetX,
-      w: narrowHeight,
-      h: narrowWidth,
-    };
+  if (normalizedRotation === 0) {
+    return baseVertices;
   }
 
-  if (normalizedRotation === 180) {
-    return {
-      x: object.x + centerInsetX,
-      y: object.y + object.h - centerInsetY - narrowHeight,
-      w: narrowWidth,
-      h: narrowHeight,
-    };
-  }
+  const angle = (normalizedRotation * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
 
-  if (normalizedRotation === 270) {
-    return {
-      x: object.x + object.w - centerInsetY - narrowHeight,
-      y: object.y + centerInsetX,
-      w: narrowHeight,
-      h: narrowWidth,
-    };
-  }
+  return baseVertices.map((point) => {
+    const offsetX = point.x - centerX;
+    const offsetY = point.y - centerY;
 
-  return {
-    x: object.x + centerInsetX,
-    y: object.y + centerInsetY,
-    w: narrowWidth,
-    h: narrowHeight,
-  };
+    return {
+      x: centerX + offsetX * cos - offsetY * sin,
+      y: centerY + offsetX * sin + offsetY * cos,
+    };
+  });
 }
 
 function sawIntersects(player: PlayerState, object: LevelData['objects'][number]) {
   const centerX = object.x + object.w / 2;
   const centerY = object.y + object.h / 2;
-  const radius = Math.max(0.18, Math.min(object.w, object.h) * 0.42);
+  const radius = Math.max(0.18, Math.min(object.w, object.h) * getSawHitRadiusFactor(object.type));
   const nearestX = clamp(centerX, player.x, player.x + player.w);
   const nearestY = clamp(centerY, player.y, player.y + player.h);
   const deltaX = centerX - nearestX;
   const deltaY = centerY - nearestY;
 
   return deltaX * deltaX + deltaY * deltaY <= radius * radius;
+}
+
+function getSawHitRadiusFactor(type: LevelData['objects'][number]['type']) {
+  if (type === 'SAW_STAR' || type === 'SAW_STAR_MEDIUM' || type === 'SAW_STAR_LARGE') {
+    return 0.38;
+  }
+
+  if (type === 'SAW_GEAR' || type === 'SAW_GEAR_MEDIUM' || type === 'SAW_GEAR_LARGE') {
+    return 0.4;
+  }
+
+  if (type === 'SAW_GLOW' || type === 'SAW_GLOW_MEDIUM' || type === 'SAW_GLOW_LARGE') {
+    return 0.36;
+  }
+
+  return 0.42;
 }
 
 function getArrowRampTriangle(object: LevelData['objects'][number]) {
@@ -1835,11 +2184,11 @@ function arrowRampIntersects(player: PlayerState, object: LevelData['objects'][n
 }
 
 function hazardIntersects(player: PlayerState, object: LevelData['objects'][number]) {
-  if (object.type === 'SPIKE') {
+  if (isSpikeObjectType(object.type)) {
     return spikeIntersects(player, object);
   }
 
-  if (object.type === 'SAW_BLADE') {
+  if (isSawObjectType(object.type)) {
     return sawIntersects(player, object);
   }
 
@@ -1906,7 +2255,7 @@ function objectIntersectsHorizontalRange(object: LevelObject, minX: number, maxX
   return object.x <= maxX && object.x + object.w >= minX;
 }
 
-function buildPreviewBootstrap(
+export function buildPreviewBootstrap(
   levelData: LevelData,
   previewStartPos: {
     x: number;
@@ -1914,15 +2263,15 @@ function buildPreviewBootstrap(
   } | null,
 ): PreviewBootstrap {
   const bootstrap: PreviewBootstrap = {
-    startX: previewStartPos?.x ?? levelData.player.startX,
-    startY: previewStartPos?.y ?? levelData.player.startY,
+    startX: previewStartPos?.x ?? FIXED_LEVEL_START_X,
+    startY: previewStartPos?.y ?? FIXED_LEVEL_START_Y,
     speedMultiplier: levelData.player.baseSpeed,
     gravity: levelData.player.gravity,
     mode: levelData.player.mode,
     elapsedMs: 0,
   };
 
-  if (!previewStartPos || previewStartPos.x <= levelData.player.startX) {
+  if (!previewStartPos || previewStartPos.x <= FIXED_LEVEL_START_X) {
     return bootstrap;
   }
 
@@ -1932,17 +2281,22 @@ function buildPreviewBootstrap(
         return false;
       }
 
+      if (isLegacyRunAnchorObjectType(object.type)) {
+        return false;
+      }
+
       return (
         object.type === 'SPEED_PORTAL' ||
         object.type === 'GRAVITY_PORTAL' ||
         object.type === 'SHIP_PORTAL' ||
+        object.type === 'BALL_PORTAL' ||
         object.type === 'CUBE_PORTAL' ||
         object.type === 'ARROW_PORTAL'
       );
     })
     .sort((left, right) => left.x - right.x || left.y - right.y);
 
-  let cursorX = levelData.player.startX;
+  let cursorX = FIXED_LEVEL_START_X;
   let elapsedMs = 0;
   let currentSpeedMultiplier = Math.max(0.1, levelData.player.baseSpeed);
 
@@ -1971,6 +2325,10 @@ function buildPreviewBootstrap(
 
     if (portal.type === 'SHIP_PORTAL') {
       bootstrap.mode = 'ship';
+    }
+
+    if (portal.type === 'BALL_PORTAL') {
+      bootstrap.mode = 'ball';
     }
 
     if (portal.type === 'CUBE_PORTAL') {
@@ -2080,4 +2438,12 @@ function drawGrid(
     context.lineTo(cameraX + width + cell * 3, y);
     context.stroke();
   }
+}
+
+function getCanvasRenderScale() {
+  if (typeof window === 'undefined') {
+    return 1;
+  }
+
+  return Math.max(1, Math.min(2, window.devicePixelRatio || 1));
 }
