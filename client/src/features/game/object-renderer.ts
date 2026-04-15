@@ -110,8 +110,8 @@ export function drawStageObjectSprite({
     return;
   }
 
-  if (object.type === 'START_MARKER') {
-    drawStartMarkerSprite(context, x, y, w, h, fillColor, strokeColor);
+  if (object.type === 'START_MARKER' || object.type === 'START_POS') {
+    drawStartMarkerSprite(context, x, y, w, h, fillColor, strokeColor, object.type === 'START_POS');
     context.restore();
     return;
   }
@@ -488,6 +488,7 @@ function drawStartMarkerSprite(
   h: number,
   fillColor: string,
   strokeColor: string,
+  isPreviewStart = false,
 ) {
   const gradient = context.createLinearGradient(x, y, x, y + h);
   gradient.addColorStop(0, lightenColor(fillColor, 0.2));
@@ -499,6 +500,21 @@ function drawStartMarkerSprite(
   context.strokeRect(x + 1, y + 1, Math.max(0, w - 2), Math.max(0, h - 2));
   context.fillStyle = 'rgba(255,255,255,0.18)';
   context.beginPath();
+  if (isPreviewStart) {
+    context.moveTo(x + w * 0.24, y + h * 0.24);
+    context.lineTo(x + w * 0.74, y + h * 0.24);
+    context.lineTo(x + w * 0.74, y + h * 0.76);
+    context.lineTo(x + w * 0.24, y + h * 0.76);
+    context.closePath();
+    context.fill();
+    context.fillStyle = 'rgba(18, 36, 13, 0.85)';
+    context.font = `${Math.max(9, h * 0.38)}px Arial Black`;
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText('S', x + w * 0.49, y + h * 0.54);
+    return;
+  }
+
   context.moveTo(x + w * 0.3, y + h * 0.22);
   context.lineTo(x + w * 0.7, y + h * 0.5);
   context.lineTo(x + w * 0.3, y + h * 0.78);

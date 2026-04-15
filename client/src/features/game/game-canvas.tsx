@@ -23,6 +23,7 @@ type GameCanvasProps = {
   runId?: string | number;
   autoRestartOnFail?: boolean;
   fullscreen?: boolean;
+  previewStartPosEnabled?: boolean;
   className?: string;
   onFail?: (payload: { progressPercent: number; completionTimeMs: number }) => void;
   onComplete?: (payload: { progressPercent: number; completionTimeMs: number }) => void;
@@ -67,6 +68,7 @@ export function GameCanvas({
   runId = 0,
   autoRestartOnFail = false,
   fullscreen = false,
+  previewStartPosEnabled = false,
   className,
   onFail,
   onComplete,
@@ -94,6 +96,24 @@ export function GameCanvas({
   const playerModeLabel = getPlayerModeLabel(levelData.player.mode);
   const resolvedMusic = useMemo(() => resolveLevelMusic(levelData.meta), [levelData.meta]);
   const musicOffsetMs = Math.max(0, Number(levelData.meta.musicOffsetMs ?? 0) || 0);
+  const previewStartPos = useMemo(() => {
+    if (!previewStartPosEnabled) {
+      return null;
+    }
+
+    for (let index = levelData.objects.length - 1; index >= 0; index -= 1) {
+      const object = levelData.objects[index];
+
+      if (object.type === 'START_POS') {
+        return {
+          x: object.x,
+          y: object.y,
+        };
+      }
+    }
+
+    return null;
+  }, [levelData.objects, previewStartPosEnabled]);
   const statusLabel =
     hud.status === 'completed' ? 'Stage Clear' : hud.status === 'failed' ? 'Attempt Lost' : 'In Run';
 
@@ -232,14 +252,16 @@ export function GameCanvas({
     const width = 960;
     const height = 540;
     const isExternallyManagedRun = Boolean(onFail || onComplete);
+    const isLowPowerDevice =
+      typeof window !== 'undefined' && (window.matchMedia('(pointer: coarse)').matches || window.innerWidth < 820);
     canvas.width = width;
     canvas.height = height;
 
     const cell = 36;
     const verticalOffset = Math.max(40, height - levelBounds.maxY * cell - 50);
     const player: PlayerState = {
-      x: levelData.player.startX,
-      y: levelData.player.startY,
+      x: previewStartPos?.x ?? levelData.player.startX,
+      y: previewStartPos?.y ?? levelData.player.startY,
       w: 0.82,
       h: 0.82,
       vy: 0,
@@ -330,8 +352,8 @@ export function GameCanvas({
       lastTimestamp = timestamp;
       jumpBufferedUntil = 0;
       lastGroundedAt = 0;
-      player.x = levelData.player.startX;
-      player.y = levelData.player.startY;
+      player.x = previewStartPos?.x ?? levelData.player.startX;
+      player.y = previewStartPos?.y ?? levelData.player.startY;
       player.vy = 0;
       player.rotation = 0;
       player.gravity = levelData.player.gravity;
@@ -549,6 +571,11 @@ export function GameCanvas({
       const isPaused = pauseMenuOpenRef.current && currentStatus === 'running';
 
       if (currentStatus === 'running' && !isPaused) {
+        const collisionRangeMinX = player.x - 3;
+        const collisionRangeMaxX = player.x + player.w + (isLowPowerDevice ? 6 : 8);
+        const interactionRangeMinX = player.x - 2;
+        const interactionRangeMaxX = player.x + player.w + (isLowPowerDevice ? 8 : 10);
+
         for (const [objectId, animation] of moveAnimations) {
           const runtimeObject = getRuntimeObject(objectId);
 
@@ -610,6 +637,7 @@ export function GameCanvas({
           if (
             isRuntimeObjectDisabled(object) ||
             !solidTypes.has(object.type) ||
+            !objectIntersectsHorizontalRange(object, collisionRangeMinX, collisionRangeMaxX) ||
             !aabbIntersects(player.x, player.y, player.w, player.h, object.x, object.y, object.w, object.h)
           ) {
             continue;
@@ -676,11 +704,19 @@ export function GameCanvas({
             launchPlayer(jumpVelocity);
             jumpBufferedUntil = 0;
           } else {
-            const orb = runtimeObjects.find(
-              (object) =>
-                object.type === 'JUMP_ORB' &&
-                !isRuntimeObjectDisabled(object) &&
-                !usedOrbs.has(object.id) &&
+            let orb: LevelObject | null = null;
+
+            for (const object of runtimeObjects) {
+              if (
+                object.type !== 'JUMP_ORB' ||
+                isRuntimeObjectDisabled(object) ||
+                usedOrbs.has(object.id) ||
+                !objectIntersectsHorizontalRange(object, interactionRangeMinX, interactionRangeMaxX)
+              ) {
+                continue;
+              }
+
+              if (
                 aabbIntersects(
                   player.x,
                   player.y,
@@ -690,8 +726,12 @@ export function GameCanvas({
                   object.y - 0.24,
                   object.w + 0.48,
                   object.h + 0.48,
-                ),
-            );
+                )
+              ) {
+                orb = object;
+                break;
+              }
+            }
 
             if (orb) {
               usedOrbs.add(orb.id);
@@ -708,6 +748,10 @@ export function GameCanvas({
           }
 
           if (isRuntimeObjectDisabled(object)) {
+            continue;
+          }
+
+          if (!objectIntersectsHorizontalRange(object, interactionRangeMinX, interactionRangeMaxX)) {
             continue;
           }
 
@@ -862,7 +906,7 @@ export function GameCanvas({
           size: 0.82,
         });
 
-        if (trail.length > 12) {
+        if (trail.length > (isLowPowerDevice ? 6 : 12)) {
           trail.shift();
         }
 
@@ -884,7 +928,8 @@ export function GameCanvas({
       const shakeOffsetX = shakeTime > 0 ? (Math.random() - 0.5) * shakePower : 0;
       const progressPercent = clampProgress((player.x / levelBounds.maxX) * 100);
 
-      if (timestamp - lastHudCommit > 80) {
+      const hudCommitIntervalMs = isLowPowerDevice ? 120 : 80;
+      if (timestamp - lastHudCommit > hudCommitIntervalMs) {
         setHud({
           progressPercent,
           status: currentStatus,
@@ -894,7 +939,7 @@ export function GameCanvas({
       }
 
       context.clearRect(0, 0, width, height);
-      drawBackdrop(context, width, height, elapsedMs, levelData.meta.theme);
+      drawBackdrop(context, width, height, elapsedMs, levelData.meta.theme, isLowPowerDevice);
 
       context.save();
       context.translate(-(cameraX + shakeOffsetX), 0);
@@ -912,8 +957,11 @@ export function GameCanvas({
       context.lineTo(cameraX + width + cell * 5, verticalOffset + cell * 10 + cell);
       context.stroke();
 
+      const drawRangeMinX = (cameraX + shakeOffsetX) / cell - 3;
+      const drawRangeMaxX = drawRangeMinX + width / cell + 6;
+
       for (const object of runtimeObjects) {
-        if (isRuntimeObjectDisabled(object)) {
+        if (isRuntimeObjectDisabled(object) || !objectIntersectsHorizontalRange(object, drawRangeMinX, drawRangeMaxX)) {
           continue;
         }
 
@@ -986,7 +1034,7 @@ export function GameCanvas({
       window.removeEventListener('blur', releaseHeldInput);
       canvas.removeEventListener('pointerdown', pointerDownListener);
     };
-  }, [autoRestartOnFail, fullscreen, levelBounds.maxX, levelBounds.maxY, levelData, musicOffsetMs, onComplete, onFail, runId]);
+  }, [autoRestartOnFail, fullscreen, levelBounds.maxX, levelBounds.maxY, levelData, musicOffsetMs, onComplete, onFail, previewStartPos, runId]);
 
       if (fullscreen) {
     return (
@@ -1370,6 +1418,10 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
+function objectIntersectsHorizontalRange(object: LevelObject, minX: number, maxX: number) {
+  return object.x <= maxX && object.x + object.w >= minX;
+}
+
 function normalizeAngle(value: number) {
   const fullTurn = Math.PI * 2;
   return ((value % fullTurn) + fullTurn) % fullTurn;
@@ -1379,7 +1431,14 @@ function snapCubeRotation(value: number) {
   return normalizeAngle(Math.round(value / QUARTER_TURN) * QUARTER_TURN);
 }
 
-function drawBackdrop(context: CanvasRenderingContext2D, width: number, height: number, elapsedMs: number, theme: string) {
+function drawBackdrop(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  elapsedMs: number,
+  theme: string,
+  lowPower = false,
+) {
   const stageTheme = getStageThemePalette(theme);
   const gradient = context.createLinearGradient(0, 0, 0, height);
   gradient.addColorStop(0, stageTheme.runtimeGradientTop);
@@ -1395,9 +1454,11 @@ function drawBackdrop(context: CanvasRenderingContext2D, width: number, height: 
   context.fillRect(0, 0, width, height);
 
   const drift = (elapsedMs / 1000) * 16;
+  const starCount = lowPower ? 24 : 56;
+  const panelStride = lowPower ? 156 : 120;
 
   context.fillStyle = stageTheme.runtimeStarColor;
-  for (let index = 0; index < 56; index += 1) {
+  for (let index = 0; index < starCount; index += 1) {
     const starX = (((index * 97.37) % (width + 240)) - 120 + drift * (0.18 + (index % 5) * 0.03) + width) % width;
     const starY = ((index * 63.17) % (height * 0.8)) + 10;
     const size = index % 7 === 0 ? 2.2 : index % 3 === 0 ? 1.5 : 1;
@@ -1405,7 +1466,7 @@ function drawBackdrop(context: CanvasRenderingContext2D, width: number, height: 
   }
 
   context.fillStyle = stageTheme.runtimePanelTint;
-  for (let x = -120; x < width + 120; x += 120) {
+  for (let x = -120; x < width + 120; x += panelStride) {
     for (let y = 18; y < height; y += 120) {
       context.fillRect(x + (drift % 120), y, 82, 82);
     }

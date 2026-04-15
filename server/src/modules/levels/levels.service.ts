@@ -194,6 +194,7 @@ export const levelsService = {
         authorId: true,
         status: true,
         isOfficial: true,
+        dataJson: true,
       },
     });
 
@@ -211,6 +212,13 @@ export const levelsService = {
 
     if (level.status !== 'DRAFT') {
       throw new ApiError(400, 'Only draft levels can be submitted');
+    }
+
+    const parsedLevelData = normalizeLevelData(level.dataJson as LevelData);
+    const hasStartPositions = parsedLevelData.objects.some((object) => object.type === 'START_POS');
+
+    if (hasStartPositions) {
+      throw new ApiError(400, 'Remove all Start Pos markers before publishing the level');
     }
 
     return prisma.level.update({

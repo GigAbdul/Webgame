@@ -20,6 +20,7 @@ export const levelObjectTypes = [
   'PULSE_TRIGGER',
   'DECORATION_BLOCK',
   'START_MARKER',
+  'START_POS',
 ] as const;
 
 export type LevelObjectType = (typeof levelObjectTypes)[number];
@@ -222,6 +223,13 @@ export const levelObjectDefinitions: Record<
   },
   START_MARKER: {
     label: 'Start',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: null,
+  },
+  START_POS: {
+    label: 'Start Pos',
     defaultSize: { w: 1, h: 1 },
     collides: false,
     lethal: false,

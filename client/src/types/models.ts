@@ -31,7 +31,8 @@ export type LevelObjectType =
   | 'TOGGLE_TRIGGER'
   | 'PULSE_TRIGGER'
   | 'DECORATION_BLOCK'
-  | 'START_MARKER';
+  | 'START_MARKER'
+  | 'START_POS';
 
 export type LevelObject = {
   id: string;

@@ -195,6 +195,15 @@ export const levelObjectDefinitions: Record<
     lethal: false,
     effect: null,
   },
+  START_POS: {
+    label: 'Start Pos',
+    color: '#caff45',
+    strokeColor: '#173300',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: null,
+  },
 };
 
 export const objectPaletteOrder = Object.keys(levelObjectDefinitions) as LevelObjectType[];

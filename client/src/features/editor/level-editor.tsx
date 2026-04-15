@@ -91,7 +91,7 @@ const paletteGroups: Array<{ title: string; items: EditorTool[] }> = [
   { title: 'Boosts', items: ['JUMP_PAD', 'JUMP_ORB'] },
   { title: 'Portals', items: ['GRAVITY_PORTAL', 'SPEED_PORTAL', 'SHIP_PORTAL', 'CUBE_PORTAL', 'FINISH_PORTAL'] },
   { title: 'Triggers', items: ['MOVE_TRIGGER', 'ALPHA_TRIGGER', 'TOGGLE_TRIGGER', 'PULSE_TRIGGER'] },
-  { title: 'Run Points', items: ['START_MARKER'] },
+  { title: 'Run Points', items: ['START_MARKER', 'START_POS'] },
 ];
 
 const toolDescriptions: Record<EditorTool, string> = {
@@ -116,6 +116,7 @@ const toolDescriptions: Record<EditorTool, string> = {
   PULSE_TRIGGER: 'Pulses a group color for a short burst',
   DECORATION_BLOCK: 'Visual block only',
   START_MARKER: 'Player spawn point',
+  START_POS: 'Preview checkpoint for editor testing',
 };
 
 const EDITOR_CANVAS_WIDTH = 1180;
@@ -406,6 +407,13 @@ export function LevelEditor({
         : 'No object selected';
   const objectCount = String(levelData.objects.length);
   const musicOffsetMsValue = Math.max(0, Number(levelData.meta.musicOffsetMs ?? 0) || 0);
+  const startPosObjects = useMemo(
+    () => levelData.objects.filter((object) => object.type === 'START_POS'),
+    [levelData.objects],
+  );
+  const startPosCount = startPosObjects.length;
+  const hasStartPositions = startPosCount > 0;
+  const activePreviewStartPos = hasStartPositions ? startPosObjects[startPosObjects.length - 1] : null;
   const stageCell = levelData.meta.gridSize * zoom;
   const visibleStageUnits = canvasViewport.width / stageCell;
   const horizontalScrollMax = Math.max(0, levelData.meta.lengthUnits + EDITOR_SCROLL_PADDING_UNITS - visibleStageUnits);
@@ -1631,12 +1639,29 @@ export function LevelEditor({
       return;
     }
 
+    if (hasStartPositions) {
+      setMessage('Remove all Start Pos markers before publishing the level.');
+      return;
+    }
+
     try {
       await onSubmit();
       setMessage('Level submitted for admin review.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Failed to submit level');
     }
+  };
+
+  const deleteAllStartPositions = () => {
+    if (!hasStartPositions) {
+      return;
+    }
+
+    updateLevelData((draft) => {
+      draft.objects = draft.objects.filter((object) => object.type !== 'START_POS');
+    });
+
+    setMessage('All Start Pos markers were removed from the level.');
   };
 
   return (
@@ -1668,7 +1693,12 @@ export function LevelEditor({
               {saveState === 'saving' ? 'Saving...' : saveLabel}
             </Button>
             {onSubmit ? (
-              <Button variant="secondary" onClick={handleSubmit}>
+              <Button
+                variant="secondary"
+                onClick={handleSubmit}
+                disabled={hasStartPositions}
+                title={hasStartPositions ? 'Remove all Start Pos markers before publishing' : undefined}
+              >
                 Submit for Review
               </Button>
             ) : null}
@@ -2164,6 +2194,7 @@ export function LevelEditor({
               runId={`editor-preview-${previewRunSeed}`}
               attemptNumber={1}
               autoRestartOnFail
+              previewStartPosEnabled
             />
           </div>
         </Panel>
@@ -2185,6 +2216,28 @@ export function LevelEditor({
         <div>
           <FieldLabel>Description</FieldLabel>
           <Textarea rows={4} value={description} onChange={(event) => setDescription(event.target.value)} />
+        </div>
+
+        <div className="editor-inline-card space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <FieldLabel>Start Pos</FieldLabel>
+              <p className="mt-1 text-sm text-white/68">
+                Start Pos markers affect editor preview only. Levels with Start Pos markers cannot be submitted.
+              </p>
+            </div>
+            <Badge tone={hasStartPositions ? 'danger' : 'default'}>
+              {hasStartPositions ? `${startPosCount} active` : 'None'}
+            </Badge>
+          </div>
+          <div className="editor-inline-actions">
+            <Button variant="ghost" onClick={deleteAllStartPositions} disabled={!hasStartPositions}>
+              Delete All Start Pos
+            </Button>
+            <Badge tone="accent">
+              {activePreviewStartPos ? `Preview starts at ${activePreviewStartPos.x}, ${activePreviewStartPos.y}` : 'Preview uses main start'}
+            </Badge>
+          </div>
         </div>
 
         {selectedObject ? (
