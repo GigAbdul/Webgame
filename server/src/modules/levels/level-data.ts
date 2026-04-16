@@ -26,6 +26,7 @@ export const levelObjectTypes = [
   'SAW_GLOW_LARGE',
   'JUMP_PAD',
   'JUMP_ORB',
+  'BLUE_ORB',
   'GRAVITY_ORB',
   'GRAVITY_PORTAL',
   'SPEED_PORTAL',
@@ -38,6 +39,7 @@ export const levelObjectTypes = [
   'ALPHA_TRIGGER',
   'TOGGLE_TRIGGER',
   'PULSE_TRIGGER',
+  'POST_FX_TRIGGER',
   'DECORATION_BLOCK',
   'START_MARKER',
   'START_POS',
@@ -64,6 +66,7 @@ export const levelDataSchema = z.object({
     lengthUnits: z.number().int().positive(),
     theme: z.string().min(1).default('neon-grid'),
     background: z.string().min(1).default('default'),
+    groundColor: z.string().min(1).optional(),
     music: z.string().min(1).default('placeholder-track-01'),
     musicLabel: z.string().min(1).optional(),
     musicOffsetMs: z.number().min(0).default(0),
@@ -120,6 +123,7 @@ export const levelObjectDefinitions: Record<
       | 'alphaTrigger'
       | 'toggleTrigger'
       | 'pulseTrigger'
+      | 'postFxTrigger'
       | null;
   }
 > = {
@@ -298,8 +302,15 @@ export const levelObjectDefinitions: Record<
     lethal: false,
     effect: 'jumpOrb',
   },
+  BLUE_ORB: {
+    label: 'Blue Orb',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: 'gravityOrb',
+  },
   GRAVITY_ORB: {
-    label: 'Gravity Orb',
+    label: 'Green Orb',
     defaultSize: { w: 1, h: 1 },
     collides: false,
     lethal: false,
@@ -381,6 +392,13 @@ export const levelObjectDefinitions: Record<
     collides: false,
     lethal: false,
     effect: 'pulseTrigger',
+  },
+  POST_FX_TRIGGER: {
+    label: 'Post FX Trigger',
+    defaultSize: { w: 1.5, h: 1.5 },
+    collides: false,
+    lethal: false,
+    effect: 'postFxTrigger',
   },
   DECORATION_BLOCK: {
     label: 'Decoration',

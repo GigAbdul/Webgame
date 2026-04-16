@@ -1508,6 +1508,17 @@ body::after {
   overflow: hidden;
 }
 
+.arcade-runtime-postfx-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0;
+  transition:
+    opacity 90ms linear,
+    background 120ms linear;
+}
+
 .arcade-runtime-hud {
   position: absolute;
   z-index: 2;

@@ -23,7 +23,7 @@ import {
 } from './player-mode-config';
 import { readStoredMusicVolume, resolveLevelMusic } from './level-music';
 import { drawStageObjectSprite } from './object-renderer';
-import { getStageThemePalette } from './stage-theme-palette';
+import { getStageGroundPalette, getStageThemePalette } from './stage-theme-palette';
 import type { LevelData, LevelObject } from '../../types/models';
 import { Panel } from '../../components/ui';
 import { cn } from '../../utils/cn';
@@ -80,25 +80,53 @@ type PreviewBootstrap = {
   elapsedMs: number;
 };
 
+type PostFxEffectType = 'flash' | 'grayscale' | 'invert' | 'scanlines' | 'blur' | 'shake' | 'tint';
+type PostFxActivationMode = 'touch' | 'zone';
+
+type ActivePostFxEffect = {
+  id: string;
+  effectType: PostFxEffectType;
+  activationMode: PostFxActivationMode;
+  startedAt: number;
+  durationMs: number;
+  intensity: number;
+  primaryColor: string;
+  secondaryColor: string;
+  blurAmount: number;
+  scanlineDensity: number;
+  shakePower: number;
+};
+
+type RuntimePostFxState = {
+  canvasFilter: string;
+  overlayBackground: string;
+  shakePower: number;
+};
+
 const solidTypes = new Set(['GROUND_BLOCK', 'HALF_GROUND_BLOCK', 'PLATFORM_BLOCK', 'HALF_PLATFORM_BLOCK']);
 const arrowGroundSafeTypes = new Set(['GROUND_BLOCK', 'HALF_GROUND_BLOCK']);
-const structuralHazardTypes = new Set(['ARROW_RAMP_ASC', 'ARROW_RAMP_DESC']);
 const JUMP_BUFFER_MS = 130;
+const ORB_PRESS_BUFFER_MS = 130;
 const COYOTE_TIME_MS = 110;
 const AUTO_RESTART_DELAY_MS = 850;
 export const BASE_HORIZONTAL_SPEED = 7.55;
 const BASE_GRAVITY_ACCELERATION = 55;
 const DEFAULT_JUMP_VELOCITY = 15.65;
-const BALL_FLIP_VELOCITY = DEFAULT_JUMP_VELOCITY * 0.92;
-const GRAVITY_ORB_LAUNCH_VELOCITY = DEFAULT_JUMP_VELOCITY * 0.76;
-const GRAVITY_ORB_MIN_VELOCITY = DEFAULT_JUMP_VELOCITY * 0.48;
-const GRAVITY_ORB_INERTIA_BLEND = 0.72;
+const GREEN_ORB_LAUNCH_VELOCITY = DEFAULT_JUMP_VELOCITY * 0.76;
+const GREEN_ORB_MIN_VELOCITY = DEFAULT_JUMP_VELOCITY * 0.48;
+const GREEN_ORB_INERTIA_BLEND = 0.72;
+const BALL_RAMP_EXIT_CARRY_FACTOR = 0.72;
+const BALL_RAMP_EXIT_CARRY_MAX = DEFAULT_JUMP_VELOCITY * 0.42;
 const PERMANENT_STAGE_FLOOR_Y = SHIP_FLIGHT_FLOOR_Y;
 const AIR_ROTATION_SPEED = Math.PI * 1.6;
 const QUARTER_TURN = Math.PI / 2;
 const ARROW_VERTICAL_SPEED_FACTOR = 1;
 const RUNTIME_BUCKET_WIDTH_UNITS = 8;
+const DESKTOP_MAX_PATH_POINTS = 6000;
+const LOW_POWER_MAX_PATH_POINTS = 2400;
+const MOBILE_PREVIEW_MAX_PATH_POINTS = 900;
 const GAMEPLAY_INPUT_CODES = new Set(['Space', 'ArrowUp', 'KeyW']);
+const postFxEffectTypes = new Set<PostFxEffectType>(['flash', 'grayscale', 'invert', 'scanlines', 'blur', 'shake', 'tint']);
 
 export function GameCanvas({
   levelData,
@@ -117,6 +145,8 @@ export function GameCanvas({
   onStop,
 }: GameCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const postFxOverlayRef = useRef<HTMLDivElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const onFailRef = useRef(onFail);
   const onCompleteRef = useRef(onComplete);
@@ -446,6 +476,7 @@ export function GameCanvas({
 
     const activeTriggers = new Set<string>();
     const usedOrbs = new Set<string>();
+    const activePostFxEffects: ActivePostFxEffect[] = [];
     const trail: TrailPoint[] = [];
     const pathLine = currentPathRef.current;
       const sourceObjects = sanitizedLevelObjects.map((object) => structuredClone(object));
@@ -478,6 +509,7 @@ export function GameCanvas({
     let lastTimestamp = 0;
     let startTime = performance.now() - previewBootstrap.elapsedMs;
     let jumpBufferedUntil = 0;
+    let orbBufferedUntil = 0;
     let lastGroundedAt = 0;
     let currentStatus: 'running' | 'failed' | 'completed' = 'running';
     let lastHudCommit = 0;
@@ -543,6 +575,9 @@ export function GameCanvas({
       return indices.map((index) => runtimeObjects[index]);
     };
 
+    const getRuntimeObjectsInViewport = (minX: number, maxX: number, minY: number, maxY: number) =>
+      getRuntimeObjectsInRange(minX, maxX).filter((object) => objectIntersectsVerticalRange(object, minY, maxY));
+
     const resetRuntimeObjects = () => {
       runtimeObjects = sourceObjects.map((object) => structuredClone(object));
       rebuildRuntimeObjectMaps();
@@ -550,6 +585,8 @@ export function GameCanvas({
       disabledObjectIds.clear();
       pulseOverrides.clear();
       moveAnimations.clear();
+      activePostFxEffects.length = 0;
+      clearRuntimePostFx(stageElement, canvas, postFxOverlayRef.current);
     };
 
     const restartMusicFromOffset = () => {
@@ -592,6 +629,7 @@ export function GameCanvas({
       startTime = timestamp - previewBootstrap.elapsedMs;
       lastTimestamp = timestamp;
       jumpBufferedUntil = 0;
+      orbBufferedUntil = 0;
       lastGroundedAt = 0;
       player.x = previewBootstrap.startX;
       player.y = previewBootstrap.startY;
@@ -641,16 +679,23 @@ export function GameCanvas({
       lastGroundedAt = -Infinity;
     };
 
-    const applyGravityOrbLaunch = () => {
+    const applyBlueOrbGravityFlip = () => {
+      const previousGravity = player.gravity === 0 ? 1 : player.gravity;
+      player.gravity = -previousGravity;
+      player.grounded = false;
+      lastGroundedAt = -Infinity;
+    };
+
+    const applyGreenOrbLaunch = () => {
       const previousGravity = player.gravity === 0 ? 1 : player.gravity;
       const nextGravity = -previousGravity;
-      const desiredVelocity = GRAVITY_ORB_LAUNCH_VELOCITY * Math.sign(nextGravity || 1);
-      const blendedVelocity = player.vy + (desiredVelocity - player.vy) * GRAVITY_ORB_INERTIA_BLEND;
+      const desiredVelocity = GREEN_ORB_LAUNCH_VELOCITY * Math.sign(nextGravity || 1);
+      const blendedVelocity = player.vy + (desiredVelocity - player.vy) * GREEN_ORB_INERTIA_BLEND;
       const launchDirection = Math.sign(desiredVelocity || 1);
       const finalVelocity =
         Math.sign(blendedVelocity || launchDirection) !== launchDirection ||
-        Math.abs(blendedVelocity) < GRAVITY_ORB_MIN_VELOCITY
-          ? GRAVITY_ORB_MIN_VELOCITY * launchDirection
+        Math.abs(blendedVelocity) < GREEN_ORB_MIN_VELOCITY
+          ? GREEN_ORB_MIN_VELOCITY * launchDirection
           : blendedVelocity;
 
       player.gravity = nextGravity;
@@ -685,8 +730,9 @@ export function GameCanvas({
 
       const nextGravity = player.gravity === 0 ? -1 : -player.gravity;
       player.gravity = nextGravity;
-      launchPlayer(BALL_FLIP_VELOCITY * Math.sign(nextGravity || 1));
-      bumpCamera(4, 0.12);
+      player.vy = 0;
+      player.grounded = false;
+      lastGroundedAt = -Infinity;
       return true;
     };
 
@@ -720,15 +766,15 @@ export function GameCanvas({
     };
 
     const triggerPrimaryAction = (timestamp = performance.now()) => {
+      orbBufferedUntil = timestamp + ORB_PRESS_BUFFER_MS;
+
       if (player.mode === 'cube') {
         queueJump(timestamp);
         return;
       }
 
       if (player.mode === 'ball') {
-        if (!tryImmediateBallFlip()) {
-          jumpBufferedUntil = timestamp + JUMP_BUFFER_MS;
-        }
+        tryImmediateBallFlip();
       }
     };
 
@@ -959,6 +1005,14 @@ export function GameCanvas({
           }
         }
 
+        for (let index = activePostFxEffects.length - 1; index >= 0; index -= 1) {
+          const effect = activePostFxEffects[index];
+
+          if (elapsedMs >= effect.startedAt + effect.durationMs) {
+            activePostFxEffects.splice(index, 1);
+          }
+        }
+
         const horizontalSpeed = BASE_HORIZONTAL_SPEED * player.speedMultiplier;
         const previousX = player.x;
         const previousY = player.y;
@@ -979,6 +1033,10 @@ export function GameCanvas({
 
         player.y += player.vy * deltaSeconds;
         player.grounded = false;
+        const collisionRangeMinY = Math.min(previousY, player.y) - 2.5;
+        const collisionRangeMaxY = Math.max(previousY + player.h, player.y + player.h) + 2.5;
+        const interactionRangeMinY = collisionRangeMinY - 0.75;
+        const interactionRangeMaxY = collisionRangeMaxY + 0.75;
 
         if (player.mode === 'ship') {
           const shipMinY = SHIP_FLIGHT_CEILING_Y + SHIP_VISUAL_BOUND_PADDING;
@@ -1014,13 +1072,57 @@ export function GameCanvas({
         }
 
         const collisionObjects =
-          currentStatus === 'running' ? getRuntimeObjectsInRange(collisionRangeMinX, collisionRangeMaxX) : [];
+          currentStatus === 'running'
+            ? getRuntimeObjectsInViewport(collisionRangeMinX, collisionRangeMaxX, collisionRangeMinY, collisionRangeMaxY)
+            : [];
+        const collisionRamps = collisionObjects.filter(
+          (object) => object.type === 'ARROW_RAMP_ASC' || object.type === 'ARROW_RAMP_DESC',
+        );
         const interactionObjects =
-          currentStatus === 'running' ? getRuntimeObjectsInRange(interactionRangeMinX, interactionRangeMaxX) : [];
+          currentStatus === 'running'
+            ? getRuntimeObjectsInViewport(interactionRangeMinX, interactionRangeMaxX, interactionRangeMinY, interactionRangeMaxY)
+            : [];
 
         for (const object of collisionObjects) {
+          if (isRuntimeObjectDisabled(object)) {
+            continue;
+          }
+
+          if (object.type === 'ARROW_RAMP_ASC' || object.type === 'ARROW_RAMP_DESC') {
+            if (!aabbIntersects(player.x, player.y, player.w, player.h, object.x, object.y, object.w, object.h)) {
+              continue;
+            }
+
+            if (player.mode === 'arrow') {
+              if (arrowRampIntersects(player, object)) {
+                markFailed(elapsedMs);
+                break;
+              }
+              continue;
+            }
+
+            if (
+              resolveRampCollision(
+                player,
+                object,
+                previousX,
+                previousY,
+                deltaSeconds,
+                player.mode !== 'ship',
+                collisionRamps,
+              ) ||
+              snapToRampSurface(player, object, player.mode !== 'ship')
+            ) {
+              if (player.grounded) {
+                lastGroundedAt = timestamp;
+              }
+              continue;
+            }
+
+            continue;
+          }
+
           if (
-            isRuntimeObjectDisabled(object) ||
             !solidTypes.has(object.type) ||
             !aabbIntersects(player.x, player.y, player.w, player.h, object.x, object.y, object.w, object.h)
           ) {
@@ -1128,47 +1230,50 @@ export function GameCanvas({
           }
         }
 
-        if ((player.mode === 'cube' || player.mode === 'ball') && currentStatus === 'running' && jumpBufferedUntil >= timestamp) {
+        if (player.mode === 'cube' && currentStatus === 'running' && jumpBufferedUntil >= timestamp) {
           const jumpVelocity = -DEFAULT_JUMP_VELOCITY * Math.sign(player.gravity || 1);
           const canGroundJump =
-            player.mode === 'cube' && (player.grounded || timestamp - lastGroundedAt <= COYOTE_TIME_MS);
+            player.grounded || timestamp - lastGroundedAt <= COYOTE_TIME_MS;
 
           if (canGroundJump) {
             launchPlayer(jumpVelocity);
             jumpBufferedUntil = 0;
-          } else {
-            let orb: LevelObject | null = null;
+          } else if (orbBufferedUntil < timestamp) {
+            jumpBufferedUntil = 0;
+          }
+        }
 
-            for (const object of interactionObjects) {
-              const canUseOrb =
-                player.mode === 'ball'
-                  ? object.type === 'GRAVITY_ORB'
-                  : object.type === 'JUMP_ORB' || object.type === 'GRAVITY_ORB';
+        if ((player.mode === 'cube' || player.mode === 'ball') && currentStatus === 'running' && orbBufferedUntil >= timestamp) {
+          const jumpVelocity = -DEFAULT_JUMP_VELOCITY * Math.sign(player.gravity || 1);
+          let orb: LevelObject | null = null;
 
-              if (
-                !canUseOrb ||
-                isRuntimeObjectDisabled(object) ||
-                usedOrbs.has(object.id)
-              ) {
-                continue;
-              }
+          for (const object of interactionObjects) {
+            const canUseOrb =
+              player.mode === 'ball'
+                ? object.type === 'BLUE_ORB' || object.type === 'GRAVITY_ORB'
+                : object.type === 'JUMP_ORB' || object.type === 'BLUE_ORB' || object.type === 'GRAVITY_ORB';
 
-              if (jumpOrbIntersectsPlayer(player, object)) {
-                orb = object;
-                break;
-              }
+            if (!canUseOrb || isRuntimeObjectDisabled(object) || usedOrbs.has(object.id)) {
+              continue;
             }
 
-            if (orb) {
-              usedOrbs.add(orb.id);
-              if (orb.type === 'GRAVITY_ORB') {
-                applyGravityOrbLaunch();
-              } else {
-                launchPlayer(jumpVelocity * 1.18);
-              }
-              jumpBufferedUntil = 0;
-              bumpCamera(4, 0.12);
+            if (jumpOrbIntersectsPlayer(player, object)) {
+              orb = object;
+              break;
             }
+          }
+
+          if (orb) {
+            usedOrbs.add(orb.id);
+            if (orb.type === 'BLUE_ORB') {
+              applyBlueOrbGravityFlip();
+            } else if (orb.type === 'GRAVITY_ORB') {
+              applyGreenOrbLaunch();
+            } else {
+              launchPlayer(jumpVelocity * 1.18);
+            }
+            jumpBufferedUntil = 0;
+            orbBufferedUntil = 0;
           }
         }
 
@@ -1185,15 +1290,17 @@ export function GameCanvas({
             continue;
           }
 
-          if ((isSpikeObjectType(object.type) || isSawObjectType(object.type) || structuralHazardTypes.has(object.type)) && hazardIntersects(player, object)) {
+          if ((isSpikeObjectType(object.type) || isSawObjectType(object.type)) && hazardIntersects(player, object)) {
             markFailed(elapsedMs);
             break;
           }
 
-          if (
-            !activeTriggers.has(object.id) &&
-            aabbIntersects(player.x, player.y, player.w, player.h, object.x, object.y, object.w, object.h)
-          ) {
+          const triggerTouched =
+            object.type === 'POST_FX_TRIGGER'
+              ? postFxTriggerIntersectsPlayer(player, object)
+              : aabbIntersects(player.x, player.y, player.w, player.h, object.x, object.y, object.w, object.h);
+
+          if (!activeTriggers.has(object.id) && triggerTouched) {
             activeTriggers.add(object.id);
 
             if (object.type === 'JUMP_PAD' && (player.mode === 'cube' || player.mode === 'ball')) {
@@ -1220,20 +1327,17 @@ export function GameCanvas({
                 SHIP_FLIGHT_FLOOR_Y - player.h - SHIP_VISUAL_BOUND_PADDING,
               );
               player.vy = clamp(player.vy, -SHIP_MAX_VERTICAL_SPEED, SHIP_MAX_VERTICAL_SPEED);
-              bumpCamera(4, 0.12);
             }
 
             if (object.type === 'BALL_PORTAL') {
               player.mode = 'ball';
               player.grounded = false;
-              bumpCamera(4, 0.12);
             }
 
             if (object.type === 'CUBE_PORTAL') {
               player.mode = 'cube';
               player.grounded = false;
               player.rotation = snapCubeRotation(player.rotation);
-              bumpCamera(4, 0.12);
             }
 
             if (object.type === 'ARROW_PORTAL') {
@@ -1242,7 +1346,6 @@ export function GameCanvas({
               player.vy =
                 horizontalSpeed * ARROW_VERTICAL_SPEED_FACTOR * (inputHeldRef.current ? -1 : 1) * gravityDirection;
               player.rotation = Math.atan2(player.vy, horizontalSpeed);
-              bumpCamera(4, 0.12);
             }
 
             if (object.type === 'FINISH_PORTAL') {
@@ -1318,6 +1421,22 @@ export function GameCanvas({
                 }
               }
             }
+
+            if (object.type === 'POST_FX_TRIGGER') {
+              activePostFxEffects.push({
+                id: object.id,
+                effectType: getPostFxEffectType(object.props.effectType),
+                activationMode: getPostFxActivationMode(object.props.activationMode),
+                startedAt: elapsedMs,
+                durationMs: Math.max(1, Number(object.props.durationMs ?? 900)),
+                intensity: clamp(Number(object.props.intensity ?? 0.75), 0, 1.5),
+                primaryColor: getRuntimeFxColor(object.props.primaryColor, '#ffffff'),
+                secondaryColor: getRuntimeFxColor(object.props.secondaryColor, '#7c3aed'),
+                blurAmount: clamp(Number(object.props.blurAmount ?? 8), 0, 24),
+                scanlineDensity: clamp(Number(object.props.scanlineDensity ?? 0.45), 0.1, 1),
+                shakePower: clamp(Number(object.props.shakePower ?? 0.85), 0, 2),
+              });
+            }
           }
         }
 
@@ -1357,6 +1476,11 @@ export function GameCanvas({
         const playerCenterY = player.y + player.h / 2;
 
         if (showRunPath) {
+          const maxPathPoints = isMobilePreviewPerformanceMode
+            ? MOBILE_PREVIEW_MAX_PATH_POINTS
+            : isLowPowerDevice
+              ? LOW_POWER_MAX_PATH_POINTS
+              : DESKTOP_MAX_PATH_POINTS;
           const lastPathPoint = pathLine[pathLine.length - 1];
 
           if (!lastPathPoint) {
@@ -1387,8 +1511,8 @@ export function GameCanvas({
             }
           }
 
-          if (pathLine.length > 12000) {
-            pathLine.shift();
+          if (pathLine.length > maxPathPoints) {
+            pathLine.splice(0, pathLine.length - maxPathPoints);
           }
         }
 
@@ -1418,7 +1542,10 @@ export function GameCanvas({
       const targetCameraX = Math.max(0, player.x * cell - width * 0.28);
       cameraX += (targetCameraX - cameraX) * Math.min(1, deltaSeconds * 8);
       shakeTime = Math.max(0, shakeTime - deltaSeconds);
-      const shakeOffsetX = shakeTime > 0 ? (Math.random() - 0.5) * shakePower : 0;
+      const runtimePostFxState = getRuntimePostFxState(activePostFxEffects, elapsedMs);
+      const combinedShakePower = shakeTime > 0 || runtimePostFxState.shakePower > 0 ? shakePower + runtimePostFxState.shakePower : 0;
+      const shakeOffsetX = combinedShakePower > 0 ? (Math.random() - 0.5) * combinedShakePower : 0;
+      const shakeOffsetY = combinedShakePower > 0 ? (Math.random() - 0.5) * combinedShakePower * 0.7 : 0;
       const progressPercent = clampProgress((player.x / levelBounds.maxX) * 100);
 
       const hudCommitIntervalMs = isLowPowerDevice ? 120 : 80;
@@ -1441,9 +1568,10 @@ export function GameCanvas({
         isLowPowerDevice,
         isMobilePreviewPerformanceMode,
       );
+      applyRuntimePostFx(stageElement, canvas, postFxOverlayRef.current, runtimePostFxState);
 
       context.save();
-      context.translate(-(cameraX + shakeOffsetX), 0);
+      context.translate(-(cameraX + shakeOffsetX), shakeOffsetY);
 
       drawGrid(context, cameraX + shakeOffsetX, verticalOffset, width, height, cell);
 
@@ -1451,12 +1579,21 @@ export function GameCanvas({
         drawShipBounds(context, cameraX + shakeOffsetX, verticalOffset, width, cell);
       }
 
-      drawPermanentStageFloor(context, cameraX + shakeOffsetX, verticalOffset, width, height, cell);
+      drawPermanentStageFloor(
+        context,
+        cameraX + shakeOffsetX,
+        verticalOffset,
+        width,
+        height,
+        cell,
+        getStageGroundPalette(levelData.meta.theme, levelData.meta.groundColor),
+      );
 
       const drawRangeMinX = (cameraX + shakeOffsetX) / cell - 3;
       const drawRangeMaxX = drawRangeMinX + width / cell + 6;
-
-      const drawObjectsInRange = getRuntimeObjectsInRange(drawRangeMinX, drawRangeMaxX);
+      const drawRangeMinY = -verticalOffset / cell - 2;
+      const drawRangeMaxY = (height - verticalOffset) / cell + 2;
+      const drawObjectsInRange = getRuntimeObjectsInViewport(drawRangeMinX, drawRangeMaxX, drawRangeMinY, drawRangeMaxY);
 
       for (const object of drawObjectsInRange) {
         if (isRuntimeObjectDisabled(object) || !objectIntersectsHorizontalRange(object, drawRangeMinX, drawRangeMaxX)) {
@@ -1527,6 +1664,7 @@ export function GameCanvas({
     return () => {
       resizeObserver?.disconnect();
       window.removeEventListener('resize', handleRuntimeResize);
+      clearRuntimePostFx(stageElement, canvas, postFxOverlayRef.current);
 
       if (restartTimeout) {
         window.clearTimeout(restartTimeout);
@@ -1546,11 +1684,12 @@ export function GameCanvas({
     };
   }, [autoFinishX, autoRestartOnFail, fullscreen, levelBounds.maxX, levelBounds.maxY, levelData, previewBootstrap, previewStartPosEnabled, runId, runtimeMusicOffsetMs, sanitizedLevelObjects, showRunPath, suppressCompletionOverlay]); // eslint-disable-line react-hooks/exhaustive-deps -- onFail/onComplete are mirrored into refs above so the runtime loop does not rebuild on parent re-renders
 
-      if (fullscreen) {
+  if (fullscreen) {
     return (
       <div className={cn('arcade-runtime-fullscreen', className)}>
-        <div className="arcade-runtime-fullscreen-stage">
+        <div ref={stageRef} className="arcade-runtime-fullscreen-stage">
           <canvas ref={canvasRef} className="arcade-runtime-canvas arcade-runtime-canvas--fullscreen" />
+          <div ref={postFxOverlayRef} className="arcade-runtime-postfx-overlay" aria-hidden="true" />
           {isMusicLoading ? (
             <div className="arcade-runtime-loading-overlay">
               <div className="arcade-runtime-loading-panel">
@@ -1697,12 +1836,13 @@ export function GameCanvas({
         <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] uppercase tracking-[0.14em] text-white/70">
           <span>Readable hitboxes</span>
           <span>Jump buffer + coyote time</span>
-          <span>{onFail || onComplete ? 'Session managed' : 'R = restart'}</span>
+          <span>{fullscreen ? 'Esc = pause' : 'R = restart'}</span>
         </div>
       </div>
 
-      <div className="arcade-runtime-stage">
+      <div ref={stageRef} className="arcade-runtime-stage">
         <canvas ref={canvasRef} className="arcade-runtime-canvas" />
+        <div ref={postFxOverlayRef} className="arcade-runtime-postfx-overlay" aria-hidden="true" />
         {isMusicLoading ? (
           <div className="arcade-runtime-loading-overlay">
             <div className="arcade-runtime-loading-panel">
@@ -2046,23 +2186,24 @@ function drawPermanentStageFloor(
   width: number,
   height: number,
   cell: number,
+  groundPalette: ReturnType<typeof getStageGroundPalette>,
 ) {
   const topY = verticalOffset + PERMANENT_STAGE_FLOOR_Y * cell;
   const deckHeight = Math.max(cell * 1.06, 18);
   const startX = Math.floor((cameraX - cell * 2) / cell) * cell;
   const endX = Math.ceil((cameraX + width + cell * 5) / cell) * cell;
   const floorGradient = context.createLinearGradient(0, topY, 0, topY + deckHeight);
-  floorGradient.addColorStop(0, '#62ebff');
-  floorGradient.addColorStop(0.18, '#2aaeff');
-  floorGradient.addColorStop(1, '#0b59d7');
+  floorGradient.addColorStop(0, groundPalette.top);
+  floorGradient.addColorStop(0.18, groundPalette.mid);
+  floorGradient.addColorStop(1, groundPalette.bottom);
 
   context.fillStyle = floorGradient;
   context.fillRect(startX, topY, endX - startX, deckHeight);
 
-  context.fillStyle = 'rgba(5, 10, 28, 0.84)';
+  context.fillStyle = groundPalette.shadow;
   context.fillRect(startX, topY + deckHeight, endX - startX, Math.max(0, height - topY - deckHeight + cell * 6));
 
-  context.strokeStyle = 'rgba(255,255,255,0.36)';
+  context.strokeStyle = groundPalette.seam;
   context.lineWidth = 1;
   for (let x = startX; x < endX; x += cell) {
     context.beginPath();
@@ -2071,12 +2212,168 @@ function drawPermanentStageFloor(
     context.stroke();
   }
 
-  context.strokeStyle = 'rgba(144, 245, 255, 0.92)';
+  context.strokeStyle = groundPalette.highlight;
   context.lineWidth = 3;
   context.beginPath();
   context.moveTo(startX, topY);
   context.lineTo(endX, topY);
   context.stroke();
+}
+
+function clearRuntimePostFx(
+  stageElement: HTMLElement | null,
+  canvas: HTMLCanvasElement | null,
+  overlay: HTMLDivElement | null,
+) {
+  if (stageElement) {
+    stageElement.style.boxShadow = '';
+  }
+
+  if (canvas) {
+    canvas.style.filter = 'none';
+  }
+
+  if (overlay) {
+    overlay.style.background = 'none';
+    overlay.style.opacity = '0';
+  }
+}
+
+function applyRuntimePostFx(
+  stageElement: HTMLElement | null,
+  canvas: HTMLCanvasElement,
+  overlay: HTMLDivElement | null,
+  state: RuntimePostFxState,
+) {
+  canvas.style.filter = state.canvasFilter || 'none';
+
+  if (stageElement) {
+    stageElement.style.boxShadow = state.shakePower > 0 ? '0 0 36px rgba(255,255,255,0.08)' : '';
+  }
+
+  if (!overlay) {
+    return;
+  }
+
+  overlay.style.background = state.overlayBackground || 'none';
+  overlay.style.opacity = state.overlayBackground ? '1' : '0';
+}
+
+function getPostFxEffectType(value: unknown): PostFxEffectType {
+  return typeof value === 'string' && postFxEffectTypes.has(value as PostFxEffectType)
+    ? (value as PostFxEffectType)
+    : 'flash';
+}
+
+function getPostFxActivationMode(value: unknown): PostFxActivationMode {
+  return value === 'zone' ? 'zone' : 'touch';
+}
+
+function getRuntimeFxColor(value: unknown, fallback: string) {
+  return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value.trim()) ? value.trim() : fallback;
+}
+
+function postFxTriggerIntersectsPlayer(player: PlayerState, object: LevelData['objects'][number]) {
+  const activationMode = getPostFxActivationMode(object.props.activationMode);
+
+  if (activationMode === 'zone') {
+    return aabbIntersects(player.x, player.y, player.w, player.h, object.x, object.y, object.w, object.h);
+  }
+
+  const insetX = object.w * 0.22;
+  const insetY = object.h * 0.22;
+  return aabbIntersects(
+    player.x,
+    player.y,
+    player.w,
+    player.h,
+    object.x + insetX,
+    object.y + insetY,
+    Math.max(0.16, object.w - insetX * 2),
+    Math.max(0.16, object.h - insetY * 2),
+  );
+}
+
+function getRuntimePostFxState(effects: ActivePostFxEffect[], elapsedMs: number): RuntimePostFxState {
+  const filterParts: string[] = [];
+  const overlayLayers: string[] = [];
+  let shakePower = 0;
+
+  for (const effect of effects) {
+    const progress = clamp((elapsedMs - effect.startedAt) / effect.durationMs, 0, 1);
+    const fadeOut = 1 - progress;
+    const intensity = effect.intensity * fadeOut;
+
+    if (intensity <= 0.001) {
+      continue;
+    }
+
+    if (effect.effectType === 'grayscale') {
+      filterParts.push(`grayscale(${clamp(intensity, 0, 1)})`);
+    }
+
+    if (effect.effectType === 'invert') {
+      filterParts.push(`invert(${clamp(intensity, 0, 1)})`);
+    }
+
+    if (effect.effectType === 'blur') {
+      filterParts.push(`blur(${(effect.blurAmount * intensity).toFixed(2)}px)`);
+    }
+
+    if (effect.effectType === 'flash') {
+      overlayLayers.push(
+        `radial-gradient(circle at 50% 50%, ${hexToRgba(effect.primaryColor, 0.42 * intensity)} 0%, ${hexToRgba(
+          effect.secondaryColor,
+          0.24 * intensity,
+        )} 38%, rgba(255,255,255,0) 72%)`,
+      );
+    }
+
+    if (effect.effectType === 'tint') {
+      overlayLayers.push(
+        `linear-gradient(135deg, ${hexToRgba(effect.primaryColor, 0.34 * intensity)} 0%, ${hexToRgba(
+          effect.secondaryColor,
+          0.22 * intensity,
+        )} 100%)`,
+      );
+    }
+
+    if (effect.effectType === 'scanlines') {
+      const lineAlpha = clamp(0.1 + effect.scanlineDensity * 0.28, 0.08, 0.42) * intensity;
+      overlayLayers.push(
+        `repeating-linear-gradient(180deg, ${hexToRgba(effect.primaryColor, lineAlpha)} 0 2px, rgba(0,0,0,0) 2px ${
+          6 + effect.scanlineDensity * 10
+        }px)`,
+      );
+      overlayLayers.push(
+        `linear-gradient(180deg, ${hexToRgba(effect.secondaryColor, 0.14 * intensity)} 0%, rgba(0,0,0,0) 100%)`,
+      );
+    }
+
+    if (effect.effectType === 'shake') {
+      shakePower = Math.max(shakePower, effect.shakePower * (0.6 + intensity * 8));
+    }
+  }
+
+  return {
+    canvasFilter: filterParts.join(' '),
+    overlayBackground: overlayLayers.join(', '),
+    shakePower,
+  };
+}
+
+function hexToRgba(hex: string, alpha: number) {
+  const normalized = hex.replace('#', '');
+
+  if (!/^[0-9a-f]{6}$/i.test(normalized)) {
+    return `rgba(255,255,255,${clamp(alpha, 0, 1)})`;
+  }
+
+  const red = Number.parseInt(normalized.slice(0, 2), 16);
+  const green = Number.parseInt(normalized.slice(2, 4), 16);
+  const blue = Number.parseInt(normalized.slice(4, 6), 16);
+
+  return `rgba(${red}, ${green}, ${blue}, ${clamp(alpha, 0, 1)})`;
 }
 
 function aabbIntersects(
@@ -2203,6 +2500,131 @@ function getArrowRampTriangle(object: LevelData['objects'][number]) {
   });
 }
 
+function getArrowRampSurface(object: LevelData['objects'][number]) {
+  const triangle = getArrowRampTriangle(object);
+  const edges = [
+    [triangle[0], triangle[1]],
+    [triangle[1], triangle[2]],
+    [triangle[2], triangle[0]],
+  ] as const;
+
+  let hypotenuse = edges[0];
+  let thirdVertex = triangle[2];
+  let maxLength = -1;
+
+  edges.forEach((edge, index) => {
+    const [start, end] = edge;
+    const length = (end.x - start.x) ** 2 + (end.y - start.y) ** 2;
+
+    if (length > maxLength) {
+      maxLength = length;
+      hypotenuse = edge;
+      thirdVertex = triangle[(index + 2) % 3];
+    }
+  });
+
+  const [start, end] = hypotenuse;
+
+  if (Math.abs(end.x - start.x) < 1e-6) {
+    return null;
+  }
+
+  const minX = Math.min(start.x, end.x);
+  const maxX = Math.max(start.x, end.x);
+  const surfaceYAtThirdX = start.y + ((end.y - start.y) * (thirdVertex.x - start.x)) / (end.x - start.x);
+
+  return {
+    start,
+    end,
+    minX,
+    maxX,
+    solidBelow: thirdVertex.y > surfaceYAtThirdX,
+  };
+}
+
+function getRampSurfaceYAtX(
+  surface: {
+    start: { x: number; y: number };
+    end: { x: number; y: number };
+  },
+  x: number,
+) {
+  return surface.start.y + ((surface.end.y - surface.start.y) * (x - surface.start.x)) / (surface.end.x - surface.start.x);
+}
+
+function getRampSupportX(
+  player: PlayerState,
+  surface: {
+    start: { x: number; y: number };
+    end: { x: number; y: number };
+    minX: number;
+    maxX: number;
+    solidBelow: boolean;
+  },
+) {
+  const leftX = clamp(player.x, surface.minX, surface.maxX);
+  const rightX = clamp(player.x + player.w, surface.minX, surface.maxX);
+  const leftSurfaceY = getRampSurfaceYAtX(surface, leftX);
+  const rightSurfaceY = getRampSurfaceYAtX(surface, rightX);
+  const risesTowardRight = rightSurfaceY < leftSurfaceY;
+
+  if (surface.solidBelow) {
+    return risesTowardRight ? rightX : leftX;
+  }
+
+  return risesTowardRight ? leftX : rightX;
+}
+
+function getRampForwardEdge(
+  surface: {
+    start: { x: number; y: number };
+    end: { x: number; y: number };
+    minX: number;
+    maxX: number;
+    solidBelow: boolean;
+  },
+) {
+  return surface.start.x >= surface.end.x ? surface.start : surface.end;
+}
+
+function hasRampContinuationAhead(
+  currentObject: LevelData['objects'][number],
+  surface: {
+    start: { x: number; y: number };
+    end: { x: number; y: number };
+    minX: number;
+    maxX: number;
+    solidBelow: boolean;
+  },
+  ramps: Array<LevelData['objects'][number]>,
+) {
+  const forwardEdge = getRampForwardEdge(surface);
+  const seamTolerance = 0.08;
+
+  return ramps.some((otherRamp) => {
+    if (otherRamp.id === currentObject.id) {
+      return false;
+    }
+
+    const otherSurface = getArrowRampSurface(otherRamp);
+
+    if (!otherSurface) {
+      return false;
+    }
+
+    if (forwardEdge.x < otherSurface.minX - seamTolerance || forwardEdge.x > otherSurface.maxX + seamTolerance) {
+      return false;
+    }
+
+    const otherSurfaceY = getRampSurfaceYAtX(
+      otherSurface,
+      clamp(forwardEdge.x, otherSurface.minX, otherSurface.maxX),
+    );
+
+    return Math.abs(otherSurfaceY - forwardEdge.y) <= seamTolerance;
+  });
+}
+
 function triangleIntersectsAabb(
   ax: number,
   ay: number,
@@ -2290,6 +2712,141 @@ function arrowRampIntersects(player: PlayerState, object: LevelData['objects'][n
   return triangleIntersectsAabb(player.x, player.y, player.w, player.h, triangle);
 }
 
+function resolveRampCollision(
+  player: PlayerState,
+  object: LevelData['objects'][number],
+  previousX: number,
+  previousY: number,
+  deltaSeconds: number,
+  allowGrounding: boolean,
+  nearbyRamps: Array<LevelData['objects'][number]>,
+) {
+  const surface = getArrowRampSurface(object);
+
+  if (!surface) {
+    return false;
+  }
+
+  const previousPlayer = {
+    ...player,
+    x: previousX,
+    y: previousY,
+  };
+  const previousSupportX = getRampSupportX(previousPlayer, surface);
+  const nextSupportX = getRampSupportX(player, surface);
+  const previousSurfaceY = getRampSurfaceYAtX(surface, previousSupportX);
+  const nextSurfaceY = getRampSurfaceYAtX(surface, nextSupportX);
+  const tolerance = 0.08;
+  const safeDeltaSeconds = Math.max(0.0001, deltaSeconds);
+  const surfaceVelocityY = (nextSurfaceY - previousSurfaceY) / safeDeltaSeconds;
+  const forwardEdge = getRampForwardEdge(surface);
+  const nearForwardEdge = Math.abs(nextSupportX - forwardEdge.x) <= 0.08;
+  const hasContinuationAhead = hasRampContinuationAhead(object, surface, nearbyRamps);
+  const shouldApplyBallRampCarry =
+    player.mode === 'ball' &&
+    Math.abs(surfaceVelocityY) > 0.01 &&
+    Math.sign(surfaceVelocityY) !== Math.sign(player.gravity || 1) &&
+    nearForwardEdge &&
+    !hasContinuationAhead;
+  const ballRampCarryVelocity = clamp(
+    surfaceVelocityY * BALL_RAMP_EXIT_CARRY_FACTOR,
+    -BALL_RAMP_EXIT_CARRY_MAX,
+    BALL_RAMP_EXIT_CARRY_MAX,
+  );
+
+  if (surface.solidBelow) {
+    const previousBottom = previousY + player.h;
+    const nextBottom = player.y + player.h;
+
+    if (previousBottom <= previousSurfaceY + tolerance && nextBottom >= nextSurfaceY - tolerance && player.vy >= 0) {
+      const carryApplied = shouldApplyBallRampCarry && ballRampCarryVelocity !== 0;
+      player.y = nextSurfaceY - player.h - 0.001;
+      player.vy = shouldApplyBallRampCarry ? ballRampCarryVelocity : 0;
+      player.grounded = false;
+
+      if (allowGrounding && !carryApplied) {
+        player.grounded = true;
+      }
+
+      return true;
+    }
+
+    return false;
+  }
+
+  const previousTop = previousY;
+  const nextTop = player.y;
+
+  if (previousTop >= previousSurfaceY - tolerance && nextTop <= nextSurfaceY + tolerance && player.vy <= 0) {
+    const carryApplied = shouldApplyBallRampCarry && ballRampCarryVelocity !== 0;
+    player.y = nextSurfaceY + 0.001;
+    player.vy = shouldApplyBallRampCarry ? ballRampCarryVelocity : 0;
+    player.grounded = false;
+
+    if (allowGrounding && !carryApplied) {
+      player.grounded = true;
+    }
+
+    return true;
+  }
+
+  return false;
+}
+
+function snapToRampSurface(
+  player: PlayerState,
+  object: LevelData['objects'][number],
+  allowGrounding: boolean,
+) {
+  const surface = getArrowRampSurface(object);
+  const triangle = getArrowRampTriangle(object);
+
+  if (!surface || !triangleIntersectsAabb(player.x, player.y, player.w, player.h, triangle)) {
+    return false;
+  }
+
+  const supportX = getRampSupportX(player, surface);
+  const surfaceY = getRampSurfaceYAtX(surface, supportX);
+  const snapMargin = Math.max(0.24, player.h * 0.55);
+  const penetrationLimit = Math.max(object.h + 0.18, player.h * 1.15);
+
+  if (surface.solidBelow) {
+    const bottom = player.y + player.h;
+    const penetration = bottom - surfaceY;
+
+    if (player.vy < -0.2 || penetration < -snapMargin || penetration > penetrationLimit) {
+      return false;
+    }
+
+    player.y = surfaceY - player.h - 0.001;
+    player.vy = Math.min(player.vy, 0);
+    player.grounded = false;
+
+    if (allowGrounding) {
+      player.grounded = true;
+    }
+
+    return true;
+  }
+
+  const top = player.y;
+  const penetration = surfaceY - top;
+
+  if (player.vy > 0.2 || penetration < -snapMargin || penetration > penetrationLimit) {
+    return false;
+  }
+
+  player.y = surfaceY + 0.001;
+  player.vy = Math.max(player.vy, 0);
+  player.grounded = false;
+
+  if (allowGrounding) {
+    player.grounded = true;
+  }
+
+  return true;
+}
+
 function hazardIntersects(player: PlayerState, object: LevelData['objects'][number]) {
   if (isSpikeObjectType(object.type)) {
     return spikeIntersects(player, object);
@@ -2297,10 +2854,6 @@ function hazardIntersects(player: PlayerState, object: LevelData['objects'][numb
 
   if (isSawObjectType(object.type)) {
     return sawIntersects(player, object);
-  }
-
-  if (object.type === 'ARROW_RAMP_ASC' || object.type === 'ARROW_RAMP_DESC') {
-    return arrowRampIntersects(player, object);
   }
 
   return false;
@@ -2360,6 +2913,10 @@ function buildRuntimePaintGroupMap(objects: LevelObject[]) {
 
 function objectIntersectsHorizontalRange(object: LevelObject, minX: number, maxX: number) {
   return object.x <= maxX && object.x + object.w >= minX;
+}
+
+function objectIntersectsVerticalRange(object: LevelObject, minY: number, maxY: number) {
+  return object.y <= maxY && object.y + object.h >= minY;
 }
 
 export function buildPreviewBootstrap(
@@ -2494,7 +3051,6 @@ function drawBackdrop(
 
   const drift = (elapsedMs / 1000) * (ultraLowPower ? 10 : 16);
   const starCount = ultraLowPower ? 12 : lowPower ? 24 : 56;
-  const panelStride = ultraLowPower ? 196 : lowPower ? 156 : 120;
 
   context.fillStyle = stageTheme.runtimeStarColor;
   for (let index = 0; index < starCount; index += 1) {
@@ -2502,16 +3058,6 @@ function drawBackdrop(
     const starY = ((index * 63.17) % (height * 0.8)) + 10;
     const size = index % 7 === 0 ? 2.2 : index % 3 === 0 ? 1.5 : 1;
     context.fillRect(starX, starY, size, size);
-  }
-
-  context.fillStyle = stageTheme.runtimePanelTint;
-  const panelYStride = ultraLowPower ? 168 : 120;
-  const panelSize = ultraLowPower ? 64 : 82;
-
-  for (let x = -120; x < width + 120; x += panelStride) {
-    for (let y = 18; y < height; y += panelYStride) {
-      context.fillRect(x + (drift % panelStride), y, panelSize, panelSize);
-    }
   }
 
   context.fillStyle = stageTheme.runtimeAccentPrimary;

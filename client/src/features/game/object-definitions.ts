@@ -24,6 +24,7 @@ export const levelObjectDefinitions: Record<
       | 'alphaTrigger'
       | 'toggleTrigger'
       | 'pulseTrigger'
+      | 'postFxTrigger'
       | null;
   }
 > = {
@@ -252,9 +253,18 @@ export const levelObjectDefinitions: Record<
     lethal: false,
     effect: 'jumpOrb',
   },
+  BLUE_ORB: {
+    label: 'Blue Orb',
+    color: '#60f55a',
+    strokeColor: '#ffffff',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: 'gravityOrb',
+  },
   GRAVITY_ORB: {
-    label: 'Gravity Orb',
-    color: '#62f3ff',
+    label: 'Green Orb',
+    color: '#4da6ff',
     strokeColor: '#ffffff',
     defaultSize: { w: 1, h: 1 },
     collides: false,
@@ -360,6 +370,15 @@ export const levelObjectDefinitions: Record<
     lethal: false,
     effect: 'pulseTrigger',
   },
+  POST_FX_TRIGGER: {
+    label: 'Post FX Trigger',
+    color: '#8d9cff',
+    strokeColor: '#ffffff',
+    defaultSize: { w: 1.5, h: 1.5 },
+    collides: false,
+    lethal: false,
+    effect: 'postFxTrigger',
+  },
   DECORATION_BLOCK: {
     label: 'Decoration',
     color: '#31506f',
@@ -421,7 +440,13 @@ const paintableObjectTypes = new Set<LevelObjectType>([
   ...sawObjectTypes,
 ]);
 
-const triggerObjectTypes = new Set<LevelObjectType>(['MOVE_TRIGGER', 'ALPHA_TRIGGER', 'TOGGLE_TRIGGER', 'PULSE_TRIGGER']);
+const triggerObjectTypes = new Set<LevelObjectType>([
+  'MOVE_TRIGGER',
+  'ALPHA_TRIGGER',
+  'TOGGLE_TRIGGER',
+  'PULSE_TRIGGER',
+  'POST_FX_TRIGGER',
+]);
 const legacyRunAnchorObjectTypes = new Set<LevelObjectType>(['START_MARKER', 'FINISH_PORTAL']);
 const autoFinishIgnoredObjectTypes = new Set<LevelObjectType>(['START_MARKER', 'FINISH_PORTAL', 'START_POS']);
 

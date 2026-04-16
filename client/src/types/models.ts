@@ -38,6 +38,7 @@ export type LevelObjectType =
   | 'SAW_GLOW_LARGE'
   | 'JUMP_PAD'
   | 'JUMP_ORB'
+  | 'BLUE_ORB'
   | 'GRAVITY_ORB'
   | 'GRAVITY_PORTAL'
   | 'SPEED_PORTAL'
@@ -50,6 +51,7 @@ export type LevelObjectType =
   | 'ALPHA_TRIGGER'
   | 'TOGGLE_TRIGGER'
   | 'PULSE_TRIGGER'
+  | 'POST_FX_TRIGGER'
   | 'DECORATION_BLOCK'
   | 'START_MARKER'
   | 'START_POS';
@@ -79,6 +81,7 @@ export type LevelData = {
     lengthUnits: number;
     theme: string;
     background: string;
+    groundColor?: string;
     music: string;
     musicLabel?: string;
     musicOffsetMs?: number;

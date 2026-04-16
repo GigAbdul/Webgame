@@ -1,7 +1,7 @@
 import type { ChangeEvent, CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Level, LevelData, LevelObject, LevelObjectType } from '../../types/models';
-import { Badge, Button, FieldLabel, Input, Panel, Textarea } from '../../components/ui';
+import { Badge, Button, FieldLabel, Input, Panel, Select, Textarea } from '../../components/ui';
 import { BASE_HORIZONTAL_SPEED, GameCanvas, buildPreviewBootstrap } from '../game/game-canvas';
 import {
   FIXED_LEVEL_START_X,
@@ -23,7 +23,7 @@ import {
 import { readStoredMusicVolume, resolveLevelMusic } from '../game/level-music';
 import { drawStageObjectSprite } from '../game/object-renderer';
 import { SHIP_FLIGHT_CEILING_Y, SHIP_FLIGHT_FLOOR_Y, getPlayerModeLabel } from '../game/player-mode-config';
-import { getStageThemePalette } from '../game/stage-theme-palette';
+import { getDefaultStageGroundColor, getStageGroundPalette, getStageThemePalette } from '../game/stage-theme-palette';
 import { readLocalEditorDraft, writeLocalEditorDraft } from './local-draft-storage';
 import { cn } from '../../utils/cn';
 
@@ -31,6 +31,8 @@ type EditorTool = 'select' | 'pan' | LevelObjectType;
 type PlacementMode = 'single' | 'drag';
 type EditorLayerId = 1 | 2;
 type EditorWorkspaceMode = 'build' | 'edit';
+type PostFxEffectType = 'flash' | 'grayscale' | 'invert' | 'scanlines' | 'blur' | 'shake' | 'tint';
+type PostFxActivationMode = 'touch' | 'zone';
 
 type LevelEditorProps = {
   initialLevel?: Level | null;
@@ -61,6 +63,8 @@ type DragState =
       offsetY: number;
       originX: number;
       originY: number;
+      selectedIds: string[];
+      originPositions: Record<string, { x: number; y: number }>;
     }
   | {
       mode: 'box-select';
@@ -78,6 +82,10 @@ type SelectionBox = {
   startScreenY: number;
   endScreenX: number;
   endScreenY: number;
+};
+
+type DragPreviewState = {
+  positions: Record<string, { x: number; y: number }>;
 };
 
 type EditorMusicSyncPreview = {
@@ -236,6 +244,21 @@ const themePresets = [
   { value: 'deep-space', label: 'Deep Space' },
 ] as const;
 
+const postFxEffectOptions: Array<{ value: PostFxEffectType; label: string }> = [
+  { value: 'flash', label: 'Flash' },
+  { value: 'grayscale', label: 'Grayscale' },
+  { value: 'invert', label: 'Invert' },
+  { value: 'scanlines', label: 'Scanlines' },
+  { value: 'blur', label: 'Blur' },
+  { value: 'shake', label: 'Shake' },
+  { value: 'tint', label: 'Tint Wash' },
+];
+
+const postFxActivationModeOptions: Array<{ value: PostFxActivationMode; label: string }> = [
+  { value: 'touch', label: 'Touch Trigger' },
+  { value: 'zone', label: 'Zone Trigger' },
+];
+
 const paletteGroups: Array<{ title: string; items: EditorTool[] }> = [
   { title: 'Controls', items: ['select', 'pan'] },
   {
@@ -272,12 +295,12 @@ const paletteGroups: Array<{ title: string; items: EditorTool[] }> = [
       'SAW_GLOW_LARGE',
     ],
   },
-  { title: 'Boosts', items: ['JUMP_PAD', 'JUMP_ORB', 'GRAVITY_ORB'] },
+  { title: 'Boosts', items: ['JUMP_PAD', 'JUMP_ORB', 'BLUE_ORB', 'GRAVITY_ORB'] },
   {
     title: 'Portals',
     items: ['GRAVITY_PORTAL', 'SPEED_PORTAL', 'SHIP_PORTAL', 'BALL_PORTAL', 'CUBE_PORTAL', 'ARROW_PORTAL'],
   },
-  { title: 'Triggers', items: ['MOVE_TRIGGER', 'ALPHA_TRIGGER', 'TOGGLE_TRIGGER', 'PULSE_TRIGGER'] },
+  { title: 'Triggers', items: ['MOVE_TRIGGER', 'ALPHA_TRIGGER', 'TOGGLE_TRIGGER', 'PULSE_TRIGGER', 'POST_FX_TRIGGER'] },
   { title: 'Preview', items: ['START_POS'] },
 ];
 
@@ -311,7 +334,8 @@ const toolDescriptions: Record<EditorTool, string> = {
   SAW_GLOW_LARGE: 'Large glow saw',
   JUMP_PAD: 'Forces an upward bounce',
   JUMP_ORB: 'Mid-air extra jump',
-  GRAVITY_ORB: 'Mid-air jump that flips gravity',
+  BLUE_ORB: 'Flips gravity without giving a jump boost',
+  GRAVITY_ORB: 'Flips gravity, then launches the player in the new direction',
   GRAVITY_PORTAL: 'Flips gravity',
   SPEED_PORTAL: 'Changes run speed',
   SHIP_PORTAL: 'Switches into ship mode',
@@ -323,6 +347,7 @@ const toolDescriptions: Record<EditorTool, string> = {
   ALPHA_TRIGGER: 'Changes group opacity',
   TOGGLE_TRIGGER: 'Shows or hides a group',
   PULSE_TRIGGER: 'Pulses a group color for a short burst',
+  POST_FX_TRIGGER: 'Applies fullscreen post-processing effects during the run',
   DECORATION_BLOCK: 'Visual block only',
   START_MARKER: 'Legacy spawn point',
   START_POS: 'Preview checkpoint for editor testing',
@@ -420,7 +445,8 @@ function canUseDragPlacementTool(tool: EditorTool): tool is LevelObjectType {
     tool !== 'MOVE_TRIGGER' &&
     tool !== 'ALPHA_TRIGGER' &&
     tool !== 'TOGGLE_TRIGGER' &&
-    tool !== 'PULSE_TRIGGER'
+    tool !== 'PULSE_TRIGGER' &&
+    tool !== 'POST_FX_TRIGGER'
   );
 }
 
@@ -532,7 +558,7 @@ export function LevelEditor({
   const [selectedTool, setSelectedTool] = useState<EditorTool>('select');
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
   const [selectedObjectIds, setSelectedObjectIds] = useState<string[]>([]);
-  const [dragPreviewPosition, setDragPreviewPosition] = useState<{ objectId: string; x: number; y: number } | null>(null);
+  const [dragPreviewState, setDragPreviewState] = useState<DragPreviewState | null>(null);
   const [selectionBox, setSelectionBox] = useState<SelectionBox | null>(null);
   const [activePaletteGroup, setActivePaletteGroup] = useState<string>('Blocks');
   const [paletteDrawerGroup, setPaletteDrawerGroup] = useState<string | null>(null);
@@ -570,7 +596,7 @@ export function LevelEditor({
   const dragRef = useRef<DragState>(null);
   const isSpacePressedRef = useRef(false);
   const liveLevelDataRef = useRef(levelData);
-  const dragPreviewPositionRef = useRef<{ objectId: string; x: number; y: number } | null>(null);
+  const dragPreviewStateRef = useRef<DragPreviewState | null>(null);
   const touchPointsRef = useRef(new Map<number, { x: number; y: number }>());
   const touchGestureRef = useRef<TouchGestureState | null>(null);
   const paintStrokeCellsRef = useRef<Set<string>>(new Set());
@@ -597,8 +623,8 @@ export function LevelEditor({
     setSelectedTool('select');
     setSelectedObjectId(null);
     setSelectedObjectIds([]);
-    dragPreviewPositionRef.current = null;
-    setDragPreviewPosition(null);
+    dragPreviewStateRef.current = null;
+    setDragPreviewState(null);
     setSelectionBox(null);
     setActivePaletteGroup('Blocks');
     setPaletteDrawerGroup(null);
@@ -691,8 +717,8 @@ export function LevelEditor({
 
   const clearSelection = useCallback(() => {
     applySelection([], null);
-    dragPreviewPositionRef.current = null;
-    setDragPreviewPosition(null);
+    dragPreviewStateRef.current = null;
+    setDragPreviewState(null);
     setSelectionBox(null);
   }, [applySelection]);
 
@@ -719,31 +745,35 @@ export function LevelEditor({
       return null;
     }
 
-    if (dragPreviewPosition?.objectId === baseObject.id) {
+    const previewPosition = dragPreviewState?.positions[baseObject.id];
+
+    if (previewPosition) {
       return {
         ...baseObject,
-        x: dragPreviewPosition.x,
-        y: dragPreviewPosition.y,
+        x: previewPosition.x,
+        y: previewPosition.y,
       };
     }
 
     return baseObject;
-  }, [dragPreviewPosition, levelData.objects, selectedObjectId]);
+  }, [dragPreviewState, levelData.objects, selectedObjectId]);
   const selectedObjectIdSet = useMemo(() => new Set(selectedObjectIds), [selectedObjectIds]);
   const selectedObjects = useMemo(
     () =>
       levelData.objects.filter((object) => selectedObjectIdSet.has(object.id)).map((object) => {
-        if (dragPreviewPosition?.objectId === object.id) {
+        const previewPosition = dragPreviewState?.positions[object.id];
+
+        if (previewPosition) {
           return {
             ...object,
-            x: dragPreviewPosition.x,
-            y: dragPreviewPosition.y,
+            x: previewPosition.x,
+            y: previewPosition.y,
           };
         }
 
         return object;
       }),
-    [dragPreviewPosition, levelData.objects, selectedObjectIdSet],
+    [dragPreviewState, levelData.objects, selectedObjectIdSet],
   );
   const selectedDefinition = useMemo(
     () => (selectedObject ? levelObjectDefinitions[selectedObject.type] : null),
@@ -757,6 +787,10 @@ export function LevelEditor({
     [paletteDrawerGroup],
   );
   const stageThemePalette = useMemo(() => getStageThemePalette(theme), [theme]);
+  const resolvedGroundColor = useMemo(
+    () => getStageGroundPalette(theme, levelData.meta.groundColor).base,
+    [levelData.meta.groundColor, theme],
+  );
   const colorGroups = useMemo(() => levelData.meta.colorGroups ?? [], [levelData.meta.colorGroups]);
   const resolvedMusic = useMemo(() => resolveLevelMusic(levelData.meta), [levelData.meta]);
   const selectionLabel =
@@ -772,6 +806,8 @@ export function LevelEditor({
   );
   const selectedTriggerObject =
     selectedObjects.length === 1 && selectedObject && isTriggerObjectType(selectedObject.type) ? selectedObject : null;
+  const selectedPaintGroupTriggerObject =
+    selectedTriggerObject && selectedTriggerObject.type !== 'POST_FX_TRIGGER' ? selectedTriggerObject : null;
   const selectedPaintGroupId = getObjectPaintGroupId(paintableSelectedObject);
   const normalizedSelectedRotation = normalizeQuarterRotation(selectedObject?.rotation ?? 0);
   const activePaintTool =
@@ -1100,8 +1136,8 @@ export function LevelEditor({
         if (historyIndex > 0) {
           const nextIndex = historyIndex - 1;
           setSelectionBox(null);
-          dragPreviewPositionRef.current = null;
-          setDragPreviewPosition(null);
+          dragPreviewStateRef.current = null;
+          setDragPreviewState(null);
           setHistoryIndex(nextIndex);
           liveLevelDataRef.current = history[nextIndex];
           setLevelData(history[nextIndex]);
@@ -1116,8 +1152,8 @@ export function LevelEditor({
         if (historyIndex < history.length - 1) {
           const nextIndex = historyIndex + 1;
           setSelectionBox(null);
-          dragPreviewPositionRef.current = null;
-          setDragPreviewPosition(null);
+          dragPreviewStateRef.current = null;
+          setDragPreviewState(null);
           setHistoryIndex(nextIndex);
           liveLevelDataRef.current = history[nextIndex];
           setLevelData(history[nextIndex]);
@@ -1265,13 +1301,6 @@ export function LevelEditor({
       context.fillRect(starX, starY, size, size);
     }
 
-    context.fillStyle = stageTheme.editorPanelTint;
-    for (let x = -80; x < width + 120; x += 160) {
-      for (let y = 24; y < height; y += 140) {
-        context.fillRect(x + ((x / 2 + y) % 36), y, 118, 82);
-      }
-    }
-
     const cell = levelData.meta.gridSize * zoom;
 
     context.strokeStyle = stageTheme.editorGridLine;
@@ -1308,7 +1337,15 @@ export function LevelEditor({
     }
 
     const permanentFloorY = worldToScreen(0, SHIP_FLIGHT_FLOOR_Y, pan.x, pan.y, cell).y;
-    drawEditorPermanentStageFloor(context, width, height, permanentFloorY, cell, pan.x);
+    drawEditorPermanentStageFloor(
+      context,
+      width,
+      height,
+      permanentFloorY,
+      cell,
+      pan.x,
+      getStageGroundPalette(levelData.meta.theme, levelData.meta.groundColor),
+    );
 
     const orderedObjects = [
       ...levelData.objects.filter((object) => object.editorLayer === activeEditorLayer),
@@ -1316,12 +1353,13 @@ export function LevelEditor({
     ];
 
     for (const object of orderedObjects) {
+      const previewPosition = dragPreviewState?.positions[object.id];
       const drawableObject =
-        dragPreviewPosition?.objectId === object.id
+        previewPosition
           ? {
               ...object,
-              x: dragPreviewPosition.x,
-              y: dragPreviewPosition.y,
+              x: previewPosition.x,
+              y: previewPosition.y,
             }
           : object;
       const { x, y } = worldToScreen(drawableObject.x, drawableObject.y, pan.x, pan.y, cell);
@@ -1437,7 +1475,7 @@ export function LevelEditor({
     canvasViewport.height,
     canvasViewport.width,
     colorGroups,
-    dragPreviewPosition,
+    dragPreviewState,
     inlineTestDeathMarker,
     inlineTestPathPoints,
     isMusicSyncPreviewActive,
@@ -1466,8 +1504,8 @@ export function LevelEditor({
     }
 
     const nextIndex = historyIndex - 1;
-    dragPreviewPositionRef.current = null;
-    setDragPreviewPosition(null);
+    dragPreviewStateRef.current = null;
+    setDragPreviewState(null);
     setHistoryIndex(nextIndex);
     liveLevelDataRef.current = history[nextIndex];
     setLevelData(history[nextIndex]);
@@ -1479,8 +1517,8 @@ export function LevelEditor({
     }
 
     const nextIndex = historyIndex + 1;
-    dragPreviewPositionRef.current = null;
-    setDragPreviewPosition(null);
+    dragPreviewStateRef.current = null;
+    setDragPreviewState(null);
     setHistoryIndex(nextIndex);
     liveLevelDataRef.current = history[nextIndex];
     setLevelData(history[nextIndex]);
@@ -1540,6 +1578,18 @@ export function LevelEditor({
             ? { groupId: 1, enabled: false }
             : type === 'PULSE_TRIGGER'
               ? { groupId: 1, fillColor: '#ffffff', strokeColor: '#ffffff', durationMs: 900 }
+              : type === 'POST_FX_TRIGGER'
+                ? {
+                    effectType: 'flash',
+                    activationMode: 'touch',
+                    durationMs: 900,
+                    intensity: 0.75,
+                    primaryColor: '#ffffff',
+                    secondaryColor: '#7c3aed',
+                    blurAmount: 8,
+                    scanlineDensity: 0.45,
+                    shakePower: 0.85,
+                  }
               : isSawObjectType(type)
                 ? { rotationSpeed: 240 }
                 : {};
@@ -1623,13 +1673,23 @@ export function LevelEditor({
   };
 
   const applyThemePreset = (nextTheme: string) => {
+    const previousTheme = theme;
     setTheme(nextTheme);
     updateLevelData((draft) => {
+      const currentGroundColor = getEditorColorInputValue(
+        typeof draft.meta.groundColor === 'string' ? draft.meta.groundColor : '',
+        getDefaultStageGroundColor(previousTheme),
+      );
+
       draft.meta = {
         ...draft.meta,
         theme: nextTheme,
         background: nextTheme,
       };
+
+      if (currentGroundColor.toLowerCase() === getDefaultStageGroundColor(previousTheme).toLowerCase()) {
+        delete draft.meta.groundColor;
+      }
     });
   };
 
@@ -1665,6 +1725,35 @@ export function LevelEditor({
     });
   };
 
+  const updateSelectedObjects = (mutator: (objects: LevelObject[], draft: LevelData) => void) => {
+    if (!selectedObjectIds.length) {
+      return;
+    }
+
+    updateLevelData((draft) => {
+      const selectedIdsSet = new Set(selectedObjectIds);
+      const objects = draft.objects.filter((entry) => selectedIdsSet.has(entry.id));
+
+      if (!objects.length) {
+        return;
+      }
+
+      mutator(objects, draft);
+
+      for (const object of objects) {
+        if (object.type === 'START_MARKER') {
+          draft.player.startX = object.x;
+          draft.player.startY = object.y;
+        }
+
+        if (object.type === 'FINISH_PORTAL') {
+          draft.finish.x = object.x;
+          draft.finish.y = object.y;
+        }
+      }
+    });
+  };
+
   const updateSelectedObjectNumeric = (
     field: 'x' | 'y' | 'w' | 'h',
     rawValue: string,
@@ -1688,6 +1777,34 @@ export function LevelEditor({
   };
 
   const rotateSelectedObject = (direction: -1 | 1) => {
+    if (selectedObjects.length > 1) {
+      updateSelectedObjects((objects) => {
+        const bounds = getObjectSelectionBounds(objects);
+        const pivotX = (bounds.left + bounds.right) / 2;
+        const pivotY = (bounds.top + bounds.bottom) / 2;
+
+        for (const object of objects) {
+          const previousRotation = normalizeQuarterRotation(object.rotation);
+          const nextRotation = normalizeQuarterRotation(previousRotation + 90 * direction);
+          const previousQuarterTurns = ((previousRotation / 90) % 4 + 4) % 4;
+          const nextQuarterTurns = ((nextRotation / 90) % 4 + 4) % 4;
+          const toggledOrientation = previousQuarterTurns % 2 !== nextQuarterTurns % 2;
+          const centerX = object.x + object.w / 2;
+          const centerY = object.y + object.h / 2;
+          const rotatedCenter = rotateObjectCenterAroundPivot(centerX, centerY, pivotX, pivotY, direction);
+          const nextWidth = toggledOrientation && Math.abs(object.w - object.h) > 0.001 ? object.h : object.w;
+          const nextHeight = toggledOrientation && Math.abs(object.w - object.h) > 0.001 ? object.w : object.h;
+
+          object.rotation = nextRotation;
+          object.w = nextWidth;
+          object.h = nextHeight;
+          object.x = roundToStep(rotatedCenter.x - nextWidth / 2, 0.25);
+          object.y = roundToStep(rotatedCenter.y - nextHeight / 2, 0.25);
+        }
+      });
+      return;
+    }
+
     updateSelectedObject((object) => {
       const previousRotation = normalizeQuarterRotation(object.rotation);
       const nextRotation = normalizeQuarterRotation(previousRotation + 90 * direction);
@@ -1993,8 +2110,8 @@ export function LevelEditor({
         event.preventDefault();
         event.stopPropagation();
         event.currentTarget.setPointerCapture(event.pointerId);
-        dragPreviewPositionRef.current = null;
-        setDragPreviewPosition(null);
+        dragPreviewStateRef.current = null;
+        setDragPreviewState(null);
         const nextSelectionBox = {
           startScreenX: screenX,
           startScreenY: screenY,
@@ -2054,15 +2171,21 @@ export function LevelEditor({
         .find((object) => pointInsideObject(world.x, world.y, object));
 
       if (hitObject) {
-        applySelection([hitObject.id], hitObject.id);
+        const nextSelectedIds =
+          selectedObjectIdSet.has(hitObject.id) && selectedObjectIds.length > 1 ? selectedObjectIds : [hitObject.id];
+        const originPositions = Object.fromEntries(
+          levelData.objects
+            .filter((object) => nextSelectedIds.includes(object.id))
+            .map((object) => [object.id, { x: object.x, y: object.y }]),
+        );
+
+        applySelection(nextSelectedIds, hitObject.id);
         setSelectionBox(null);
-        const previewPosition = {
-          objectId: hitObject.id,
-          x: hitObject.x,
-          y: hitObject.y,
+        const previewState = {
+          positions: originPositions,
         };
-        dragPreviewPositionRef.current = previewPosition;
-        setDragPreviewPosition(previewPosition);
+        dragPreviewStateRef.current = previewState;
+        setDragPreviewState(previewState);
         dragRef.current = {
           mode: 'move',
           objectId: hitObject.id,
@@ -2070,6 +2193,8 @@ export function LevelEditor({
           offsetY: world.y - hitObject.y,
           originX: hitObject.x,
           originY: hitObject.y,
+          selectedIds: nextSelectedIds,
+          originPositions,
         };
       } else {
         clearSelection();
@@ -2200,24 +2325,27 @@ export function LevelEditor({
     if (dragState.mode === 'move') {
       const nextX = Math.floor(world.x - dragState.offsetX);
       const nextY = Math.floor(world.y - dragState.offsetY);
-      const currentPreview = dragPreviewPositionRef.current;
+      const deltaX = nextX - dragState.originX;
+      const deltaY = nextY - dragState.originY;
+      const nextPreviewState = {
+        positions: Object.fromEntries(
+          dragState.selectedIds.map((id) => [
+            id,
+            {
+              x: dragState.originPositions[id].x + deltaX,
+              y: dragState.originPositions[id].y + deltaY,
+            },
+          ]),
+        ),
+      };
+      const currentPreview = dragPreviewStateRef.current;
 
-      if (
-        currentPreview?.objectId === dragState.objectId &&
-        currentPreview.x === nextX &&
-        currentPreview.y === nextY
-      ) {
+      if (dragPreviewStatesEqual(currentPreview, nextPreviewState)) {
         return;
       }
 
-      const nextPreviewPosition = {
-        objectId: dragState.objectId,
-        x: nextX,
-        y: nextY,
-      };
-
-      dragPreviewPositionRef.current = nextPreviewPosition;
-      setDragPreviewPosition(nextPreviewPosition);
+      dragPreviewStateRef.current = nextPreviewState;
+      setDragPreviewState(nextPreviewState);
     }
   };
 
@@ -2263,19 +2391,32 @@ export function LevelEditor({
     }
 
     if (dragState?.mode === 'move') {
-      const previewPosition = dragPreviewPositionRef.current;
+      const previewState = dragPreviewStateRef.current;
 
       if (
-        previewPosition &&
-        previewPosition.objectId === dragState.objectId &&
-        (previewPosition.x !== dragState.originX || previewPosition.y !== dragState.originY)
+        previewState &&
+        dragState.selectedIds.some((id) => {
+          const origin = dragState.originPositions[id];
+          const preview = previewState.positions[id];
+          return preview && (preview.x !== origin.x || preview.y !== origin.y);
+        })
       ) {
         const next = structuredClone(liveLevelDataRef.current);
-        const object = next.objects.find((entry) => entry.id === dragState.objectId);
+        const selectedIdsSet = new Set(dragState.selectedIds);
 
-        if (object) {
-          object.x = previewPosition.x;
-          object.y = previewPosition.y;
+        for (const object of next.objects) {
+          if (!selectedIdsSet.has(object.id)) {
+            continue;
+          }
+
+          const preview = previewState.positions[object.id];
+
+          if (!preview) {
+            continue;
+          }
+
+          object.x = preview.x;
+          object.y = preview.y;
 
           if (object.type === 'START_MARKER') {
             next.player.startX = object.x;
@@ -2305,8 +2446,8 @@ export function LevelEditor({
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
 
-    dragPreviewPositionRef.current = null;
-    setDragPreviewPosition(null);
+    dragPreviewStateRef.current = null;
+    setDragPreviewState(null);
     setSelectionBox(null);
     dragRef.current = null;
   };
@@ -3680,6 +3821,10 @@ export function LevelEditor({
             previewStartPosEnabled
             fullscreen
             className="editor-mobile-preview-runtime"
+            onExitToMenu={() => {
+              setShowPreview(false);
+              setMessage('Returned to the editor from preview.');
+            }}
           />
         </div>
       ) : null}
@@ -4023,25 +4168,31 @@ export function LevelEditor({
               <div className="space-y-3">
                 <div className="flex items-center justify-between gap-3">
                   <FieldLabel>Trigger Settings</FieldLabel>
-                  <Badge tone="accent">Group {Number(selectedTriggerObject.props.groupId ?? 1)}</Badge>
+                  <Badge tone="accent">
+                    {selectedPaintGroupTriggerObject
+                      ? `Group ${Number(selectedPaintGroupTriggerObject.props.groupId ?? 1)}`
+                      : 'Post FX'}
+                  </Badge>
                 </div>
 
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                  <div>
-                    <FieldLabel>Target Group</FieldLabel>
-                    <Input
-                      type="number"
-                      min="1"
-                      max={String(PAINT_GROUP_SLOT_COUNT)}
-                      value={Number(selectedTriggerObject.props.groupId ?? 1)}
-                      onChange={(event) =>
-                        updateSelectedTriggerNumericProp('groupId', event.target.value, {
-                          min: 1,
-                          max: PAINT_GROUP_SLOT_COUNT,
-                        })
-                      }
-                    />
-                  </div>
+                  {selectedPaintGroupTriggerObject ? (
+                    <div>
+                      <FieldLabel>Target Group</FieldLabel>
+                      <Input
+                        type="number"
+                        min="1"
+                        max={String(PAINT_GROUP_SLOT_COUNT)}
+                        value={Number(selectedPaintGroupTriggerObject.props.groupId ?? 1)}
+                        onChange={(event) =>
+                          updateSelectedTriggerNumericProp('groupId', event.target.value, {
+                            min: 1,
+                            max: PAINT_GROUP_SLOT_COUNT,
+                          })
+                        }
+                      />
+                    </div>
+                  ) : null}
 
                   {selectedTriggerObject.type === 'MOVE_TRIGGER' ? (
                     <>
@@ -4099,17 +4250,21 @@ export function LevelEditor({
                       <div className="editor-inline-actions">
                         <Button
                           variant={selectedTriggerObject.props.enabled ? 'primary' : 'ghost'}
-                          onClick={() => updateSelectedObject((object) => {
-                            object.props = { ...object.props, enabled: true };
-                          })}
+                          onClick={() =>
+                            updateSelectedObject((object) => {
+                              object.props = { ...object.props, enabled: true };
+                            })
+                          }
                         >
                           Show Group
                         </Button>
                         <Button
                           variant={!selectedTriggerObject.props.enabled ? 'primary' : 'ghost'}
-                          onClick={() => updateSelectedObject((object) => {
-                            object.props = { ...object.props, enabled: false };
-                          })}
+                          onClick={() =>
+                            updateSelectedObject((object) => {
+                              object.props = { ...object.props, enabled: false };
+                            })
+                          }
                         >
                           Hide Group
                         </Button>
@@ -4158,6 +4313,144 @@ export function LevelEditor({
                       </div>
                     </>
                   ) : null}
+
+                  {selectedTriggerObject.type === 'POST_FX_TRIGGER' ? (
+                    <>
+                      <div>
+                        <FieldLabel>Activation Mode</FieldLabel>
+                        <Select
+                          value={String(selectedTriggerObject.props.activationMode ?? 'touch')}
+                          onChange={(event) =>
+                            updateSelectedTriggerStringProp('activationMode', event.target.value as PostFxActivationMode)
+                          }
+                        >
+                          {postFxActivationModeOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </Select>
+                      </div>
+                      <div>
+                        <FieldLabel>Effect</FieldLabel>
+                        <Select
+                          value={String(selectedTriggerObject.props.effectType ?? 'flash')}
+                          onChange={(event) =>
+                            updateSelectedTriggerStringProp('effectType', event.target.value as PostFxEffectType)
+                          }
+                        >
+                          {postFxEffectOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </Select>
+                      </div>
+                      <div>
+                        <FieldLabel>Duration (ms)</FieldLabel>
+                        <Input
+                          type="number"
+                          min="1"
+                          value={Number(selectedTriggerObject.props.durationMs ?? 900)}
+                          onChange={(event) =>
+                            updateSelectedTriggerNumericProp('durationMs', event.target.value, { min: 1 })
+                          }
+                        />
+                      </div>
+                      <div>
+                        <FieldLabel>Strength</FieldLabel>
+                        <Input
+                          type="number"
+                          step="0.05"
+                          min="0"
+                          max="1.5"
+                          value={Number(selectedTriggerObject.props.intensity ?? 0.75)}
+                          onChange={(event) =>
+                            updateSelectedTriggerNumericProp('intensity', event.target.value, { min: 0, max: 1.5 })
+                          }
+                        />
+                      </div>
+                      <div>
+                        <FieldLabel>Primary Color</FieldLabel>
+                        <Input
+                          type="color"
+                          value={getEditorColorInputValue(
+                            typeof selectedTriggerObject.props.primaryColor === 'string'
+                              ? selectedTriggerObject.props.primaryColor
+                              : '#ffffff',
+                            '#ffffff',
+                          )}
+                          onChange={(event) => updateSelectedTriggerStringProp('primaryColor', event.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <FieldLabel>Secondary Color</FieldLabel>
+                        <Input
+                          type="color"
+                          value={getEditorColorInputValue(
+                            typeof selectedTriggerObject.props.secondaryColor === 'string'
+                              ? selectedTriggerObject.props.secondaryColor
+                              : '#7c3aed',
+                            '#7c3aed',
+                          )}
+                          onChange={(event) => updateSelectedTriggerStringProp('secondaryColor', event.target.value)}
+                        />
+                      </div>
+
+                      {selectedTriggerObject.props.effectType === 'blur' ? (
+                        <div>
+                          <FieldLabel>Blur Amount (px)</FieldLabel>
+                          <Input
+                            type="number"
+                            min="0"
+                            step="0.5"
+                            value={Number(selectedTriggerObject.props.blurAmount ?? 8)}
+                            onChange={(event) =>
+                              updateSelectedTriggerNumericProp('blurAmount', event.target.value, { min: 0, max: 24 })
+                            }
+                          />
+                        </div>
+                      ) : null}
+
+                      {selectedTriggerObject.props.effectType === 'scanlines' ? (
+                        <div>
+                          <FieldLabel>Line Density</FieldLabel>
+                          <Input
+                            type="number"
+                            min="0.1"
+                            max="1"
+                            step="0.05"
+                            value={Number(selectedTriggerObject.props.scanlineDensity ?? 0.45)}
+                            onChange={(event) =>
+                              updateSelectedTriggerNumericProp('scanlineDensity', event.target.value, {
+                                min: 0.1,
+                                max: 1,
+                              })
+                            }
+                          />
+                        </div>
+                      ) : null}
+
+                      {selectedTriggerObject.props.effectType === 'shake' ? (
+                        <div>
+                          <FieldLabel>Shake Power</FieldLabel>
+                          <Input
+                            type="number"
+                            min="0"
+                            max="2"
+                            step="0.05"
+                            value={Number(selectedTriggerObject.props.shakePower ?? 0.85)}
+                            onChange={(event) =>
+                              updateSelectedTriggerNumericProp('shakePower', event.target.value, {
+                                min: 0,
+                                max: 2,
+                              })
+                            }
+                          />
+                        </div>
+                      ) : null}
+                    </>
+                  ) : null}
                 </div>
               </div>
             ) : null}
@@ -4195,6 +4488,44 @@ export function LevelEditor({
                   applyThemePreset(event.target.value);
                 }}
               />
+            </div>
+
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <FieldLabel>Ground Color</FieldLabel>
+                <Badge tone={levelData.meta.groundColor ? 'accent' : 'default'}>
+                  {levelData.meta.groundColor ? 'Custom Ground' : 'Theme Ground'}
+                </Badge>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-[92px,1fr,auto]">
+                <Input
+                  type="color"
+                  value={resolvedGroundColor}
+                  onChange={(event) =>
+                    updateLevelData((draft) => {
+                      draft.meta.groundColor = event.target.value;
+                    })
+                  }
+                />
+                <Input
+                  value={resolvedGroundColor}
+                  onChange={(event) =>
+                    updateLevelData((draft) => {
+                      draft.meta.groundColor = getEditorColorInputValue(event.target.value, resolvedGroundColor);
+                    })
+                  }
+                />
+                <Button
+                  variant="ghost"
+                  onClick={() =>
+                    updateLevelData((draft) => {
+                      delete draft.meta.groundColor;
+                    })
+                  }
+                >
+                  Use Theme
+                </Button>
+              </div>
             </div>
 
             <div className="space-y-3">
@@ -4660,20 +4991,21 @@ function drawEditorPermanentStageFloor(
   topY: number,
   cell: number,
   panX: number,
+  groundPalette: ReturnType<typeof getStageGroundPalette>,
 ) {
   const deckHeight = Math.max(cell * 1.06, 18);
   const floorGradient = context.createLinearGradient(0, topY, 0, topY + deckHeight);
-  floorGradient.addColorStop(0, '#62ebff');
-  floorGradient.addColorStop(0.18, '#2aaeff');
-  floorGradient.addColorStop(1, '#0b59d7');
+  floorGradient.addColorStop(0, groundPalette.top);
+  floorGradient.addColorStop(0.18, groundPalette.mid);
+  floorGradient.addColorStop(1, groundPalette.bottom);
 
   context.fillStyle = floorGradient;
   context.fillRect(0, topY, width, deckHeight);
 
-  context.fillStyle = 'rgba(5, 10, 28, 0.82)';
+  context.fillStyle = groundPalette.shadow;
   context.fillRect(0, topY + deckHeight, width, Math.max(0, height - topY - deckHeight));
 
-  context.strokeStyle = 'rgba(255,255,255,0.34)';
+  context.strokeStyle = groundPalette.seam;
   context.lineWidth = 1;
   const seamOffset = ((panX % cell) + cell) % cell;
   for (let x = seamOffset - cell; x < width + cell; x += cell) {
@@ -4683,7 +5015,7 @@ function drawEditorPermanentStageFloor(
     context.stroke();
   }
 
-  context.strokeStyle = 'rgba(144, 245, 255, 0.92)';
+  context.strokeStyle = groundPalette.highlight;
   context.lineWidth = 3;
   context.beginPath();
   context.moveTo(0, topY);
@@ -4706,6 +5038,68 @@ function roundToStep(value: number, step: number) {
 function normalizeQuarterRotation(value: number) {
   const normalized = ((Math.round(value / 90) * 90) % 360 + 360) % 360;
   return normalized === 360 ? 0 : normalized;
+}
+
+function dragPreviewStatesEqual(left: DragPreviewState | null, right: DragPreviewState | null) {
+  if (left === right) {
+    return true;
+  }
+
+  if (!left || !right) {
+    return false;
+  }
+
+  const leftIds = Object.keys(left.positions);
+  const rightIds = Object.keys(right.positions);
+
+  if (leftIds.length !== rightIds.length) {
+    return false;
+  }
+
+  return leftIds.every((id) => {
+    const leftPosition = left.positions[id];
+    const rightPosition = right.positions[id];
+
+    return !!leftPosition && !!rightPosition && leftPosition.x === rightPosition.x && leftPosition.y === rightPosition.y;
+  });
+}
+
+function getObjectSelectionBounds(objects: LevelObject[]) {
+  return objects.reduce(
+    (bounds, object) => ({
+      left: Math.min(bounds.left, object.x),
+      top: Math.min(bounds.top, object.y),
+      right: Math.max(bounds.right, object.x + object.w),
+      bottom: Math.max(bounds.bottom, object.y + object.h),
+    }),
+    {
+      left: Number.POSITIVE_INFINITY,
+      top: Number.POSITIVE_INFINITY,
+      right: Number.NEGATIVE_INFINITY,
+      bottom: Number.NEGATIVE_INFINITY,
+    },
+  );
+}
+
+function rotateObjectCenterAroundPivot(
+  centerX: number,
+  centerY: number,
+  pivotX: number,
+  pivotY: number,
+  direction: -1 | 1,
+) {
+  const deltaX = centerX - pivotX;
+  const deltaY = centerY - pivotY;
+
+  return direction === 1
+    ? {
+        x: pivotX - deltaY,
+        y: pivotY + deltaX,
+      }
+    : {
+        x: pivotX + deltaY,
+        y: pivotY - deltaX,
+      };
 }
 
 function normalizeSelectionBox(selectionBox: SelectionBox) {

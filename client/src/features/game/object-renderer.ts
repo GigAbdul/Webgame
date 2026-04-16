@@ -93,7 +93,7 @@ export function drawStageObjectSprite({
     return;
   }
 
-  if (object.type === 'JUMP_ORB' || object.type === 'GRAVITY_ORB') {
+  if (object.type === 'JUMP_ORB' || object.type === 'BLUE_ORB' || object.type === 'GRAVITY_ORB') {
     drawJumpOrbSprite(
       context,
       x,
@@ -104,7 +104,7 @@ export function drawStageObjectSprite({
       strokeColor,
       isUsedOrb,
       animationTimeMs,
-      object.type === 'GRAVITY_ORB' ? 'gravity' : 'jump',
+      object.type === 'GRAVITY_ORB' ? 'greenGravity' : object.type === 'BLUE_ORB' ? 'blueGravity' : 'jump',
     );
     context.restore();
     return;
@@ -134,9 +134,10 @@ export function drawStageObjectSprite({
     object.type === 'MOVE_TRIGGER' ||
     object.type === 'ALPHA_TRIGGER' ||
     object.type === 'TOGGLE_TRIGGER' ||
-    object.type === 'PULSE_TRIGGER'
+    object.type === 'PULSE_TRIGGER' ||
+    object.type === 'POST_FX_TRIGGER'
   ) {
-    drawTriggerSprite(context, object.type, x, y, w, h, fillColor, strokeColor, isActive);
+    drawTriggerSprite(context, object, x, y, w, h, fillColor, strokeColor, isActive);
     context.restore();
     return;
   }
@@ -471,14 +472,25 @@ function drawJumpOrbSprite(
   strokeColor: string,
   isUsedOrb: boolean,
   animationTimeMs: number,
-  variant: 'jump' | 'gravity',
+  variant: 'jump' | 'blueGravity' | 'greenGravity',
 ) {
   const centerX = x + w / 2;
   const centerY = y + h / 2;
   const radius = Math.max(8, Math.min(w, h) * 0.42);
   const pulse = isUsedOrb ? 0.22 : 0.5 + Math.sin(animationTimeMs / 180) * 0.14;
-  const innerRingColor = variant === 'gravity' ? 'rgba(210,255,255,0.68)' : 'rgba(255,255,255,0.48)';
-  const highlightColor = variant === 'gravity' ? 'rgba(225,255,255,0.34)' : 'rgba(255,255,255,0.28)';
+  const isGravityVariant = variant === 'blueGravity' || variant === 'greenGravity';
+  const innerRingColor =
+    variant === 'greenGravity'
+      ? 'rgba(220,236,255,0.7)'
+      : variant === 'blueGravity'
+        ? 'rgba(230,255,220,0.72)'
+        : 'rgba(255,255,255,0.48)';
+  const highlightColor =
+    variant === 'greenGravity'
+      ? 'rgba(228,240,255,0.34)'
+      : variant === 'blueGravity'
+        ? 'rgba(232,255,222,0.36)'
+        : 'rgba(255,255,255,0.28)';
   const glow = context.createRadialGradient(centerX, centerY, radius * 0.15, centerX, centerY, radius * 1.15);
   glow.addColorStop(0, lightenColor(fillColor, 0.26 + pulse * 0.18));
   glow.addColorStop(0.62, fillColor);
@@ -505,6 +517,23 @@ function drawJumpOrbSprite(
   context.arc(centerX, centerY, radius * 0.56, 0, Math.PI * 2);
   context.stroke();
 
+  if (isGravityVariant) {
+    context.strokeStyle = variant === 'greenGravity' ? 'rgba(18, 53, 112, 0.88)' : 'rgba(14, 74, 18, 0.88)';
+    context.lineWidth = Math.max(2.2, radius * 0.12);
+    context.beginPath();
+    context.moveTo(centerX - radius * 0.22, centerY - radius * 0.24);
+    context.lineTo(centerX + radius * 0.24, centerY);
+    context.lineTo(centerX - radius * 0.22, centerY + radius * 0.24);
+    context.stroke();
+
+    if (variant === 'greenGravity') {
+      context.beginPath();
+      context.moveTo(centerX + radius * 0.08, centerY - radius * 0.28);
+      context.lineTo(centerX + radius * 0.08, centerY + radius * 0.28);
+      context.stroke();
+    }
+  }
+
   context.fillStyle = isUsedOrb ? 'rgba(255,255,255,0.18)' : highlightColor;
   context.beginPath();
   context.arc(centerX - radius * 0.18, centerY - radius * 0.18, radius * 0.22, 0, Math.PI * 2);
@@ -518,12 +547,22 @@ function drawJumpOrbParticles(
   radius: number,
   fillColor: string,
   animationTimeMs: number,
-  variant: 'jump' | 'gravity',
+  variant: 'jump' | 'blueGravity' | 'greenGravity',
 ) {
   const particleCount = 6;
   const time = animationTimeMs / 1000;
-  const trailColor = variant === 'gravity' ? mixColor(fillColor, '#dffcff', 0.32) : mixColor(fillColor, '#ffe88c', 0.26);
-  const sparkColor = variant === 'gravity' ? mixColor(fillColor, '#ffffff', 0.66) : mixColor(fillColor, '#fff6b7', 0.55);
+  const trailColor =
+    variant === 'greenGravity'
+      ? mixColor(fillColor, '#dbeaff', 0.34)
+      : variant === 'blueGravity'
+        ? mixColor(fillColor, '#e7ffd8', 0.34)
+        : mixColor(fillColor, '#ffe88c', 0.26);
+  const sparkColor =
+    variant === 'greenGravity'
+      ? mixColor(fillColor, '#eff6ff', 0.7)
+      : variant === 'blueGravity'
+        ? mixColor(fillColor, '#ffffff', 0.72)
+        : mixColor(fillColor, '#fff6b7', 0.55);
 
   context.save();
   context.lineCap = 'round';
@@ -758,7 +797,7 @@ function drawPortalGlyph(
 
 function drawTriggerSprite(
   context: CanvasRenderingContext2D,
-  type: 'MOVE_TRIGGER' | 'ALPHA_TRIGGER' | 'TOGGLE_TRIGGER' | 'PULSE_TRIGGER',
+  object: Pick<LevelData['objects'][number], 'type' | 'props'>,
   x: number,
   y: number,
   w: number,
@@ -767,6 +806,7 @@ function drawTriggerSprite(
   strokeColor: string,
   isActive: boolean,
 ) {
+  const type = object.type;
   const radius = Math.min(w, h) * 0.22;
   const frameGradient = context.createLinearGradient(x, y, x, y + h);
   frameGradient.addColorStop(0, lightenColor(fillColor, 0.18));
@@ -788,6 +828,48 @@ function drawTriggerSprite(
   context.fillStyle = 'rgba(255,255,255,0.15)';
   roundedRectPath(context, x + w * 0.18, y + h * 0.18, w * 0.64, h * 0.18, Math.min(w, h) * 0.08);
   context.fill();
+
+  if (type === 'POST_FX_TRIGGER') {
+    const activationMode = object.props.activationMode === 'zone' ? 'zone' : 'touch';
+    context.strokeStyle = activationMode === 'zone' ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.64)';
+    context.lineWidth = activationMode === 'zone' ? 1.4 : 2.1;
+    if (activationMode === 'zone') {
+      context.setLineDash([5, 4]);
+      roundedRectPath(context, x + w * 0.08, y + h * 0.08, w * 0.84, h * 0.84, Math.min(w, h) * 0.14);
+      context.stroke();
+      context.setLineDash([]);
+    } else {
+      context.beginPath();
+      context.arc(x + w / 2, y + h / 2, Math.min(w, h) * 0.14, 0, Math.PI * 2);
+      context.stroke();
+    }
+
+    const effectType =
+      typeof object.props.effectType === 'string' && object.props.effectType.trim().length > 0
+        ? object.props.effectType.trim().toLowerCase()
+        : 'flash';
+    const label =
+      effectType === 'grayscale'
+        ? 'BW'
+        : effectType === 'invert'
+          ? 'INV'
+          : effectType === 'scanlines'
+            ? 'SCAN'
+            : effectType === 'blur'
+              ? 'BLR'
+              : effectType === 'shake'
+                ? 'SHAKE'
+                : effectType === 'tint'
+                  ? 'TINT'
+                  : 'FLASH';
+
+    context.fillStyle = 'rgba(255,255,255,0.88)';
+    context.font = `${Math.max(8, Math.min(w, h) * 0.18)}px Arial Black`;
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText(label, x + w / 2, y + h * 0.56);
+    return;
+  }
 
   context.strokeStyle = 'rgba(255,255,255,0.92)';
   context.lineWidth = 2.2;
