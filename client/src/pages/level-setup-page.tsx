@@ -99,6 +99,7 @@ export function LevelSetupPage() {
   const [isPublishPanelOpen, setIsPublishPanelOpen] = useState(false);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [previewRunSeed, setPreviewRunSeed] = useState(0);
+  const [isEditorOpening, setIsEditorOpening] = useState(false);
 
   const levelQuery = useQuery({
     queryKey: ['level-setup', id],
@@ -258,6 +259,7 @@ export function LevelSetupPage() {
     submitMutation.isPending ||
     adminPublishMutation.isPending ||
     deleteMutation.isPending;
+  const isBusy = isWorking || isEditorOpening;
 
   function buildLevelPayload(baseLevel?: Level | null) {
     const levelData = baseLevel ? structuredClone(baseLevel.dataJson) : createEmptyLevelData('neon-grid');
@@ -293,11 +295,13 @@ export function LevelSetupPage() {
 
   async function handleCreateAndOpenEditor() {
     setMessage('');
+    setIsEditorOpening(true);
 
     try {
       const payload = await saveDraftMutation.mutateAsync(buildLevelPayload(null));
       navigate(`/editor/${payload.level.id}`);
     } catch (error) {
+      setIsEditorOpening(false);
       setMessage(error instanceof Error ? error.message : 'Could not create the draft.');
     }
   }
@@ -319,11 +323,13 @@ export function LevelSetupPage() {
     }
 
     setMessage('');
+    setIsEditorOpening(true);
 
     try {
       await saveMetadata();
       navigate(`/editor/${level.id}`);
     } catch (error) {
+      setIsEditorOpening(false);
       setMessage(error instanceof Error ? error.message : 'Could not open the editor.');
     }
   }
@@ -410,7 +416,7 @@ export function LevelSetupPage() {
   }
 
   function handleDeleteCurrentLevel() {
-    if (!level || level.isOfficial || isWorking) {
+    if (!level || level.isOfficial || isBusy) {
       return;
     }
 
@@ -467,7 +473,7 @@ export function LevelSetupPage() {
             type="button"
             className="gd-draft-view-side-button gd-draft-view-side-button--danger"
             onClick={handleDeleteCurrentLevel}
-            disabled={isWorking || level.isOfficial}
+            disabled={isBusy || level.isOfficial}
             aria-label="Delete draft"
           >
             <span className="gd-draft-view-side-icon gd-draft-view-side-icon--close" aria-hidden="true" />
@@ -486,7 +492,7 @@ export function LevelSetupPage() {
             type="button"
             className="gd-draft-view-side-button"
             onClick={handleSaveMetadata}
-            disabled={isWorking}
+            disabled={isBusy}
             aria-label="Save level details"
           >
             <span className="gd-draft-view-side-icon gd-draft-view-side-icon--save" aria-hidden="true" />
@@ -525,7 +531,7 @@ export function LevelSetupPage() {
               variant="editor"
               label="Editor"
               onClick={handleOpenEditor}
-              disabled={isWorking || level.isOfficial}
+              disabled={isBusy || level.isOfficial}
             />
             <DraftViewActionButton
               variant="play"
@@ -534,13 +540,13 @@ export function LevelSetupPage() {
                 setPreviewRunSeed((current) => current + 1);
                 setIsPreviewOpen(true);
               }}
-              disabled={isWorking || !previewLevelData}
+              disabled={isBusy || !previewLevelData}
             />
             <DraftViewActionButton
               variant="publish"
               label="Publish"
               onClick={() => setIsPublishPanelOpen(true)}
-              disabled={isWorking}
+              disabled={isBusy}
             />
           </div>
 
@@ -567,6 +573,8 @@ export function LevelSetupPage() {
             <div className="gd-draft-view-footer-chip">ID: {getLevelIdCopy(level)}</div>
           </div>
         </div>
+
+        {isEditorOpening ? <EditorLaunchOverlay /> : null}
 
         {isPreviewOpen && previewLevelData ? (
           <div className="gd-draft-view-preview-shell" role="dialog" aria-modal="true" aria-label="Draft preview">
@@ -654,7 +662,7 @@ export function LevelSetupPage() {
                   <Button variant="ghost" onClick={clearMusic} type="button">
                     Clear Music
                   </Button>
-                  <Button type="button" onClick={handleSaveMetadata} disabled={isWorking}>
+                  <Button type="button" onClick={handleSaveMetadata} disabled={isBusy}>
                     Save Draft
                   </Button>
                 </div>
@@ -727,10 +735,10 @@ export function LevelSetupPage() {
                 ) : null}
 
                 <div className="gd-draft-view-modal-actions">
-                  <Button onClick={handlePublish} disabled={isWorking || !canPublish}>
+                  <Button onClick={handlePublish} disabled={isBusy || !canPublish}>
                     {publishButtonLabel}
                   </Button>
-                  <Button variant="ghost" onClick={handleSaveMetadata} disabled={isWorking}>
+                  <Button variant="ghost" onClick={handleSaveMetadata} disabled={isBusy}>
                     Save Draft
                   </Button>
                   {!canPublish ? <Badge tone="accent">Already submitted</Badge> : null}
@@ -834,12 +842,28 @@ export function LevelSetupPage() {
               The draft will be created first, then the editor opens with that level.
             </p>
           </div>
-          <Button onClick={handleCreateAndOpenEditor} disabled={isWorking}>
+          <Button onClick={handleCreateAndOpenEditor} disabled={isBusy}>
             Create Draft And Open Editor
           </Button>
         </div>
         {message ? <p className="mt-4 text-sm leading-7 text-[#ffd44a]">{message}</p> : null}
+        {isEditorOpening ? <EditorLaunchOverlay /> : null}
       </Panel>
+    </div>
+  );
+}
+
+function EditorLaunchOverlay() {
+  return (
+    <div className="gd-draft-view-transition-overlay" role="status" aria-live="polite" aria-label="Opening editor">
+      <div className="gd-draft-view-transition-card">
+        <p className="play-screen-loading-kicker">Editor</p>
+        <p className="gd-draft-view-transition-title">Opening editor...</p>
+        <p className="gd-draft-view-transition-copy">Saving the draft and launching the build surface.</p>
+        <div className="loading-bar" aria-hidden="true">
+          <div className="loading-bar-fill loading-bar-fill--indeterminate" />
+        </div>
+      </div>
     </div>
   );
 }
