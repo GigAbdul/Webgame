@@ -457,6 +457,13 @@ function getPlacementStrokeKey(type: LevelObjectType, x: number, y: number, edit
 function getDefaultPlacementPosition(type: LevelObjectType, x: number, y: number) {
   const definition = levelObjectDefinitions[type];
 
+  if (type === 'JUMP_PAD') {
+    return {
+      x,
+      y: y + Math.max(0, 1 - definition.defaultSize.h),
+    };
+  }
+
   if (isSpikeObjectType(type)) {
     return {
       x: x + Math.max(0, (1 - definition.defaultSize.w) / 2),

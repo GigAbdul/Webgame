@@ -111,7 +111,7 @@ export function drawStageObjectSprite({
   }
 
   if (object.type === 'JUMP_PAD') {
-    drawJumpPadSprite(context, x, y, w, h, fillColor, strokeColor, isActive);
+    drawJumpPadSprite(context, x, y, w, h, fillColor, strokeColor, isActive, animationTimeMs);
     context.restore();
     return;
   }
@@ -604,27 +604,116 @@ function drawJumpPadSprite(
   fillColor: string,
   strokeColor: string,
   isActive: boolean,
+  animationTimeMs: number,
 ) {
-  const gradient = context.createLinearGradient(x, y, x, y + h);
-  gradient.addColorStop(0, lightenColor(fillColor, 0.18));
-  gradient.addColorStop(1, darkenColor(fillColor, 0.28));
-
-  context.fillStyle = gradient;
+  const time = animationTimeMs / 1000;
+  const surfaceY = y + h;
+  const centerX = x + w / 2;
+  const domeCenterY = surfaceY + h * 0.14;
+  const domeRadiusX = w * 0.46;
+  const domeRadiusY = h * 0.31;
+  const padTopY = surfaceY - domeRadiusY * 0.68;
+  const pulse = isActive ? 0.26 : 0.52 + Math.sin(animationTimeMs / 170) * 0.1;
+  const glowColor = '#f3ffab';
+  const aura = context.createRadialGradient(centerX, surfaceY - h * 0.035, 0, centerX, surfaceY - h * 0.035, w * 0.72);
+  aura.addColorStop(0, toRgba('#fffbc7', isActive ? 0.38 : 0.26));
+  aura.addColorStop(0.46, toRgba(glowColor, 0.11 + pulse * 0.04));
+  aura.addColorStop(1, 'rgba(255,255,255,0)');
+  context.fillStyle = aura;
   context.beginPath();
-  context.moveTo(x + w * 0.08, y + h);
-  context.lineTo(x + w * 0.18, y + h * 0.18);
-  context.lineTo(x + w * 0.82, y + h * 0.18);
-  context.lineTo(x + w * 0.92, y + h);
-  context.closePath();
+  context.ellipse(centerX, surfaceY - h * 0.04, w * 0.48, h * 0.17, 0, 0, Math.PI * 2);
   context.fill();
 
-  context.strokeStyle = strokeColor;
-  context.lineWidth = 2;
+  const coreGlow = context.createRadialGradient(centerX, surfaceY - h * 0.045, 0, centerX, surfaceY - h * 0.045, w * 0.29);
+  coreGlow.addColorStop(0, toRgba('#fffef6', isActive ? 0.99 : 0.94));
+  coreGlow.addColorStop(0.44, toRgba('#fff56f', isActive ? 0.98 : 0.9));
+  coreGlow.addColorStop(0.82, toRgba('#ffe33a', 0.58));
+  coreGlow.addColorStop(1, 'rgba(255,255,255,0)');
+  context.fillStyle = coreGlow;
+  context.beginPath();
+  context.ellipse(centerX, surfaceY - h * 0.045, w * 0.22, h * 0.08, 0, 0, Math.PI * 2);
+  context.fill();
+
+  context.save();
+  context.beginPath();
+  context.rect(x - w * 0.2, y - h, w * 1.4, surfaceY - (y - h));
+  context.clip();
+
+  const domeGradient = context.createLinearGradient(0, surfaceY - domeRadiusY * 1.2, 0, surfaceY + domeRadiusY);
+  domeGradient.addColorStop(0, '#fffef2');
+  domeGradient.addColorStop(0.3, '#fff98e');
+  domeGradient.addColorStop(0.7, '#ffe228');
+  domeGradient.addColorStop(1, '#fff06a');
+  context.fillStyle = domeGradient;
+  context.beginPath();
+  context.ellipse(centerX, domeCenterY, domeRadiusX, domeRadiusY, 0, 0, Math.PI * 2);
+  context.fill();
+
+  context.strokeStyle = toRgba('#ffffff', isActive ? 1 : 0.95);
+  context.lineWidth = Math.max(2.1, h * 0.11);
+  context.beginPath();
+  context.ellipse(centerX, domeCenterY, domeRadiusX * 1.04, domeRadiusY * 1.04, 0, Math.PI * 1.06, Math.PI * 1.94);
   context.stroke();
 
-  context.fillStyle = isActive ? 'rgba(255,255,255,0.32)' : 'rgba(255,255,255,0.22)';
-  drawChevron(context, x + w * 0.36, y + h * 0.52, w * 0.16, h * 0.22);
-  drawChevron(context, x + w * 0.54, y + h * 0.52, w * 0.16, h * 0.22);
+  context.strokeStyle = toRgba('#d9ff58', isActive ? 0.86 : 0.72);
+  context.lineWidth = Math.max(1.4, h * 0.075);
+  context.beginPath();
+  context.ellipse(centerX, domeCenterY + h * 0.016, domeRadiusX * 0.84, domeRadiusY * 0.72, 0, Math.PI * 1.08, Math.PI * 1.92);
+  context.stroke();
+
+  context.restore();
+
+  const rimGlow = context.createLinearGradient(0, surfaceY - h * 0.1, 0, surfaceY + h * 0.04);
+  rimGlow.addColorStop(0, toRgba('#ffffff', 0));
+  rimGlow.addColorStop(0.48, toRgba('#fffef0', isActive ? 0.84 : 0.66));
+  rimGlow.addColorStop(1, toRgba('#ffe84f', 0));
+  context.fillStyle = rimGlow;
+  context.beginPath();
+  context.ellipse(centerX, surfaceY - h * 0.01, w * 0.42, h * 0.04, 0, 0, Math.PI * 2);
+  context.fill();
+
+  drawJumpPadParticles(context, centerX, padTopY, w, h, time, glowColor, isActive);
+}
+
+function drawJumpPadParticles(
+  context: CanvasRenderingContext2D,
+  centerX: number,
+  topY: number,
+  w: number,
+  h: number,
+  time: number,
+  glowColor: string,
+  isActive: boolean,
+) {
+  const particleCount = 10;
+  const driftSpan = w * 0.055;
+  const maxRise = h * 5.4;
+  const brightColor = '#fbffda';
+  const dimColor = mixColor(glowColor, '#efffb1', 0.56);
+
+  context.save();
+
+  for (let index = 0; index < particleCount; index += 1) {
+    const progress = ((time * 0.58 + index * 0.109) % 1 + 1) % 1;
+    const rise = progress * maxRise;
+    const sway = Math.sin(time * 1.8 + index * 1.51) * driftSpan * (0.02 + progress * 0.11);
+    const x = centerX + sway;
+    const y = topY - rise;
+    const size = Math.max(1, w * (0.011 + (1 - progress) * 0.022));
+    const alpha = (isActive ? 0.34 : 0.2) + (1 - progress) * (isActive ? 0.48 : 0.28);
+
+    context.globalAlpha = alpha;
+    context.fillStyle = progress > 0.58 ? brightColor : dimColor;
+    context.fillRect(x - size / 2, y - size / 2, size, size);
+
+    if (progress < 0.22) {
+      context.globalAlpha = alpha * 0.38;
+      const trailSize = size * 0.74;
+      context.fillRect(x - trailSize / 2, y + size * 0.92, trailSize, trailSize);
+    }
+  }
+
+  context.restore();
 }
 
 function drawPortalSprite(

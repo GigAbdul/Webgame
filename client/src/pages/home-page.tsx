@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { HomeMenuTraffic } from '../components/home-menu-traffic';
 import { cn } from '../utils/cn';
 import { useAuthStore } from '../store/auth-store';
 
@@ -95,6 +96,7 @@ export function HomePage() {
   const user = useAuthStore((state) => state.user);
   const playRoute = '/levels';
   const builderRoute = user ? '/my-levels' : '/register';
+  const homeScreenRef = useRef<HTMLDivElement | null>(null);
   const [activePanel, setActivePanel] = useState<HomePanel>(null);
   const [selectedSkin, setSelectedSkin] = useState<SkinId>(() => readStoredSkin());
   const [settings, setSettings] = useState<HomeSettings>(() => readStoredSettings());
@@ -134,7 +136,7 @@ export function HomePage() {
   }, [activePanel]);
 
   return (
-    <div className="game-home-screen" data-screen-shake={settings.screenShake ? 'on' : 'off'}>
+    <div ref={homeScreenRef} className="game-home-screen" data-screen-shake={settings.screenShake ? 'on' : 'off'}>
       <div className="game-home-atmosphere" aria-hidden="true">
         <div className="game-home-stars" />
         <div className="game-home-planet-glow" />
@@ -148,70 +150,76 @@ export function HomePage() {
         <div className="game-home-floating-cube game-home-floating-cube--right" />
       </div>
 
+      <HomeMenuTraffic screenRef={homeScreenRef} showHitFlash={settings.showHitFlash} />
+
       <div className="game-home-shell">
-        <header className="game-home-hero">
-          <h1 className="game-home-title" aria-label="DashForge">
-            <span>Dash</span>
-            <span>Forge</span>
-          </h1>
-        </header>
-
-        <div className="game-home-primary">
-          <div className="game-home-button-row">
-            <div className="game-home-button-slot game-home-button-slot--skin">
-              <button
-                type="button"
-                className="game-home-main-button game-home-main-button--skin"
-                onClick={() => setActivePanel('skins')}
-                aria-label="Skin Select"
-              >
-                <span className="game-home-main-button-core">
-                  <span className="game-home-main-button-sprite game-home-main-button-sprite--skin" />
-                </span>
-              </button>
-              <span className="game-home-button-caption">Character Select</span>
-            </div>
-
-            <Link
-              to={playRoute}
-              className="game-home-main-button game-home-main-button--play"
-              aria-label="Play"
-            >
-              <span className="game-home-main-button-core">
-                <span className="game-home-main-button-sprite game-home-main-button-sprite--play" />
+        <div className="game-home-shell-content">
+          <header className="game-home-hero">
+            <h1 className="game-home-title" aria-label="DashForge">
+              <span className="game-home-title-word" data-title="Dash">
+                Dash
               </span>
-            </Link>
+              <span className="game-home-title-word" data-title="Forge">
+                Forge
+              </span>
+            </h1>
+          </header>
 
-            <div className="game-home-button-slot game-home-button-slot--builder">
+          <div className="game-home-primary">
+            <div className="game-home-button-row">
+              <div className="game-home-button-slot game-home-button-slot--skin">
+                <button
+                  type="button"
+                  className="game-home-main-button game-home-main-button--skin"
+                  onClick={() => setActivePanel('skins')}
+                  aria-label="Skin Select"
+                >
+                  <span className="game-home-main-button-core">
+                    <span className="game-home-main-button-sprite game-home-main-button-sprite--skin" />
+                  </span>
+                </button>
+                <span className="game-home-button-caption">Character Select</span>
+              </div>
+
               <Link
-                to={builderRoute}
-                className="game-home-main-button game-home-main-button--builder"
-                aria-label="Level Builder"
+                to={playRoute}
+                className="game-home-main-button game-home-main-button--play"
+                aria-label="Play"
               >
                 <span className="game-home-main-button-core">
-                  <span className="game-home-main-button-sprite game-home-main-button-sprite--builder" />
+                  <span className="game-home-main-button-sprite game-home-main-button-sprite--play" />
                 </span>
               </Link>
+
+              <div className="game-home-button-slot game-home-button-slot--builder">
+                <Link
+                  to={builderRoute}
+                  className="game-home-main-button game-home-main-button--builder"
+                  aria-label="Level Builder"
+                >
+                  <span className="game-home-main-button-core">
+                    <span className="game-home-main-button-sprite game-home-main-button-sprite--builder" />
+                  </span>
+                </Link>
+              </div>
             </div>
           </div>
-        </div>
 
-        <div className="game-home-submenu">
-          <button
-            type="button"
-            className="game-home-submenu-button game-home-submenu-button--settings"
-            onClick={() => setActivePanel('settings')}
-            aria-label="Settings"
-          >
-            <span className="game-home-submenu-icon game-home-submenu-icon--settings" aria-hidden="true" />
-          </button>
-          <Link
-            to="/leaderboard"
-            className="game-home-submenu-button game-home-submenu-button--leaderboard"
-            aria-label="Leaderboard"
-          >
-            <span className="game-home-submenu-icon game-home-submenu-icon--leaderboard" aria-hidden="true" />
-          </Link>
+          <div className="game-home-submenu">
+            <button
+              type="button"
+              className="game-home-submenu-button game-home-submenu-button--settings"
+              onClick={() => setActivePanel('settings')}
+              aria-label="Settings"
+            />
+            <Link
+              to="/leaderboard"
+              className="game-home-submenu-button game-home-submenu-button--leaderboard"
+              aria-label="Leaderboard"
+            >
+              <span className="game-home-submenu-icon game-home-submenu-icon--leaderboard" aria-hidden="true" />
+            </Link>
+          </div>
         </div>
       </div>
 

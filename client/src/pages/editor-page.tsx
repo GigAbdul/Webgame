@@ -5,6 +5,7 @@ import { LevelEditor } from '../features/editor/level-editor';
 import { apiRequest } from '../services/api';
 import { useAuthStore } from '../store/auth-store';
 import type { Level } from '../types/models';
+import { ViewportFit } from '../components/viewport-fit';
 
 export function EditorPage() {
   const { id } = useParams();
@@ -57,17 +58,19 @@ export function EditorPage() {
 
   if (id && levelQuery.isLoading) {
     return (
-      <div className="editor-page-shell">
-        <div className="editor-page-loading-screen">
-          <div className="play-screen-loading-card">
-            <p className="play-screen-loading-kicker">Loading</p>
-            <p>Loading level editor...</p>
-            <div className="loading-bar" aria-hidden="true">
-              <div className="loading-bar-fill loading-bar-fill--indeterminate" />
+      <ViewportFit className="viewport-fit-frame--editor">
+        <div className="editor-page-shell">
+          <div className="editor-page-loading-screen">
+            <div className="play-screen-loading-card">
+              <p className="play-screen-loading-kicker">Loading</p>
+              <p>Loading level editor...</p>
+              <div className="loading-bar" aria-hidden="true">
+                <div className="loading-bar-fill loading-bar-fill--indeterminate" />
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      </ViewportFit>
     );
   }
 
@@ -82,18 +85,20 @@ export function EditorPage() {
   };
 
   return (
-    <div className="editor-page-shell">
-      <LevelEditor
-        initialLevel={level}
-        draftStorageKey={id ?? 'new'}
-        onClose={handleCloseEditor}
-        onSave={(payload) => saveMutation.mutateAsync(payload).then(() => undefined)}
-        onSubmit={
-          id && user?.role !== 'ADMIN' && !level?.isOfficial
-            ? () => submitMutation.mutateAsync().then(() => undefined)
-            : undefined
-        }
-      />
-    </div>
+    <ViewportFit className="viewport-fit-frame--editor">
+      <div className="editor-page-shell">
+        <LevelEditor
+          initialLevel={level}
+          draftStorageKey={id ?? 'new'}
+          onClose={handleCloseEditor}
+          onSave={(payload) => saveMutation.mutateAsync(payload).then(() => undefined)}
+          onSubmit={
+            id && user?.role !== 'ADMIN' && !level?.isOfficial
+              ? () => submitMutation.mutateAsync().then(() => undefined)
+              : undefined
+          }
+        />
+      </div>
+    </ViewportFit>
   );
 }

@@ -449,6 +449,7 @@ const triggerObjectTypes = new Set<LevelObjectType>([
 ]);
 const legacyRunAnchorObjectTypes = new Set<LevelObjectType>(['START_MARKER', 'FINISH_PORTAL']);
 const autoFinishIgnoredObjectTypes = new Set<LevelObjectType>(['START_MARKER', 'FINISH_PORTAL', 'START_POS']);
+const JUMP_PAD_LEGACY_TOP_ALIGN_EPSILON = 0.001;
 
 export function isPaintableObjectType(type: LevelObjectType) {
   return paintableObjectTypes.has(type);
@@ -470,8 +471,24 @@ export function isLegacyRunAnchorObjectType(type: LevelObjectType) {
   return legacyRunAnchorObjectTypes.has(type);
 }
 
+function normalizeObjectPlacement(object: LevelObject) {
+  if (
+    object.type === 'JUMP_PAD' &&
+    Math.abs(object.y - Math.round(object.y)) <= JUMP_PAD_LEGACY_TOP_ALIGN_EPSILON
+  ) {
+    return {
+      ...object,
+      y: object.y + 0.5,
+    };
+  }
+
+  return object;
+}
+
 export function stripLegacyRunAnchorObjects(objects: LevelObject[]) {
-  return objects.filter((object) => !isLegacyRunAnchorObjectType(object.type));
+  return objects
+    .filter((object) => !isLegacyRunAnchorObjectType(object.type))
+    .map((object) => normalizeObjectPlacement(object));
 }
 
 export function computeAutoLevelFinishX(levelData: Pick<LevelData, 'objects'>) {

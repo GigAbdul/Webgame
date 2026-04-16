@@ -1,7 +1,7 @@
 import { ChangeEvent, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { Badge, Button, FieldLabel, Input, Panel, Select, Textarea } from '../components/ui';
+import { Badge, Button, FieldLabel, Input, Select } from '../components/ui';
 import { createEmptyLevelData } from '../features/game/object-definitions';
 import { GameCanvas } from '../features/game/game-canvas';
 import { resolveLevelMusic } from '../features/game/level-music';
@@ -81,6 +81,28 @@ function getLevelIdCopy(level: Level) {
   return level.id.slice(0, 8).toUpperCase();
 }
 
+function getNextUnnamedTitle(levels: Level[]) {
+  const unnamedPattern = /^unnamed(?:\s+(\d+))?$/i;
+  const usedNumbers = new Set<number>();
+
+  for (const level of levels) {
+    const match = level.title.trim().match(unnamedPattern);
+
+    if (!match) {
+      continue;
+    }
+
+    usedNumbers.add(match[1] ? Number(match[1]) : 0);
+  }
+
+  let nextNumber = 0;
+  while (usedNumbers.has(nextNumber)) {
+    nextNumber += 1;
+  }
+
+  return nextNumber === 0 ? 'Unnamed' : `Unnamed ${nextNumber}`;
+}
+
 export function LevelSetupPage() {
   const { id } = useParams();
   const isNewLevel = !id;
@@ -105,6 +127,11 @@ export function LevelSetupPage() {
     queryKey: ['level-setup', id],
     queryFn: () => apiRequest<{ level: Level }>(`/api/levels/${id}`),
     enabled: Boolean(id),
+  });
+  const myLevelsQuery = useQuery({
+    queryKey: ['my-levels'],
+    queryFn: () => apiRequest<{ levels: Level[] }>('/api/levels/mine'),
+    enabled: isNewLevel && Boolean(user),
   });
 
   const level = levelQuery.data?.level ?? null;
@@ -142,6 +169,13 @@ export function LevelSetupPage() {
 
     return previewData;
   }, [level, musicLabelInput, musicValue]);
+  const newLevelPreviewData = useMemo(() => {
+    if (!isNewLevel) {
+      return null;
+    }
+
+    return buildLevelPayload(null).dataJson;
+  }, [description, isNewLevel, musicLabelInput, musicValue, title]);
 
   useEffect(() => {
     if (isNewLevel) {
@@ -149,7 +183,7 @@ export function LevelSetupPage() {
       setDescription('');
       setMusicValue('none');
       setMusicUrlInput('');
-      setMusicLabelInput('');
+      setMusicLabelInput('Stereo Madness');
       setSelectedDifficulty('NORMAL');
       setPublishAsOfficial(false);
       return;
@@ -261,7 +295,7 @@ export function LevelSetupPage() {
     deleteMutation.isPending;
   const isBusy = isWorking || isEditorOpening;
 
-  function buildLevelPayload(baseLevel?: Level | null) {
+  function buildLevelPayload(baseLevel?: Level | null, resolvedTitle?: string) {
     const levelData = baseLevel ? structuredClone(baseLevel.dataJson) : createEmptyLevelData('neon-grid');
     const trimmedMusicSource = musicValue.trim();
     const normalizedMusicSource = trimmedMusicSource || 'none';
@@ -276,11 +310,32 @@ export function LevelSetupPage() {
     }
 
     return {
-      title: title.trim(),
+      title: resolvedTitle ?? title.trim(),
       description: description.trim(),
       theme: baseLevel?.theme ?? 'neon-grid',
       dataJson: levelData,
     };
+  }
+
+  async function resolveDraftTitle() {
+    const trimmedTitle = title.trim();
+
+    if (trimmedTitle) {
+      return trimmedTitle;
+    }
+
+    const knownLevels =
+      myLevelsQuery.data?.levels ??
+      (
+        await queryClient.fetchQuery({
+          queryKey: ['my-levels'],
+          queryFn: () => apiRequest<{ levels: Level[] }>('/api/levels/mine'),
+        })
+      ).levels;
+    const fallbackTitle = getNextUnnamedTitle(knownLevels);
+
+    setTitle(fallbackTitle);
+    return fallbackTitle;
   }
 
   async function saveMetadata() {
@@ -298,10 +353,23 @@ export function LevelSetupPage() {
     setIsEditorOpening(true);
 
     try {
-      const payload = await saveDraftMutation.mutateAsync(buildLevelPayload(null));
+      const resolvedTitle = await resolveDraftTitle();
+      const payload = await saveDraftMutation.mutateAsync(buildLevelPayload(null, resolvedTitle));
       navigate(`/editor/${payload.level.id}`);
     } catch (error) {
       setIsEditorOpening(false);
+      setMessage(error instanceof Error ? error.message : 'Could not create the draft.');
+    }
+  }
+
+  async function handleCreateDraftOnly() {
+    setMessage('');
+
+    try {
+      const resolvedTitle = await resolveDraftTitle();
+      const payload = await saveDraftMutation.mutateAsync(buildLevelPayload(null, resolvedTitle));
+      navigate(`/my-levels/${payload.level.id}`);
+    } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not create the draft.');
     }
   }
@@ -443,13 +511,12 @@ export function LevelSetupPage() {
     );
   }
 
-  const currentStatus = level?.status ?? 'NEW';
   const publishButtonLabel =
     user?.role === 'ADMIN'
       ? publishAsOfficial
         ? 'Publish Official'
         : 'Send To Review Queue'
-      : currentStatus === 'SUBMITTED'
+      : level?.status === 'SUBMITTED'
         ? 'Awaiting Admin Review'
         : 'Publish For Review';
 
@@ -457,7 +524,7 @@ export function LevelSetupPage() {
     const canPublish = user?.role === 'ADMIN' || level.status === 'DRAFT';
 
     return (
-      <div className="gd-draft-view-page">
+      <div className="gd-draft-view-page gd-draft-view-page--arcade">
         <div className="gd-draft-view-scene" aria-hidden="true">
           <div className="gd-draft-view-grid" />
           <div className="gd-draft-view-corner gd-draft-view-corner--left" />
@@ -468,7 +535,7 @@ export function LevelSetupPage() {
           <span className="gd-draft-view-back-icon" />
         </Link>
 
-        <div className="gd-draft-view-side-stack">
+        <div className="gd-draft-view-side-stack gd-draft-view-side-stack--arcade">
           <button
             type="button"
             className="gd-draft-view-side-button gd-draft-view-side-button--danger"
@@ -499,7 +566,7 @@ export function LevelSetupPage() {
           </button>
         </div>
 
-        <div className="gd-draft-view-shell">
+        <div className="gd-draft-view-shell gd-draft-view-shell--arcade">
           <div className="gd-draft-view-title-frame">
             <input
               value={title}
@@ -520,18 +587,13 @@ export function LevelSetupPage() {
             />
           </div>
 
-          <div className="gd-draft-view-status-row">
-            <span className="gd-draft-view-status-pill">{currentStatus}</span>
-            <span className="gd-draft-view-status-pill">{selectedDifficultyPresentation.label}</span>
-            {level.isOfficial ? <span className="gd-draft-view-status-pill">Official</span> : null}
-          </div>
-
-          <div className="gd-draft-view-action-row">
+          <div className="gd-draft-view-action-row gd-draft-view-action-row--arcade">
             <DraftViewActionButton
               variant="editor"
               label="Editor"
               onClick={handleOpenEditor}
               disabled={isBusy || level.isOfficial}
+              hideLabel
             />
             <DraftViewActionButton
               variant="play"
@@ -541,37 +603,26 @@ export function LevelSetupPage() {
                 setIsPreviewOpen(true);
               }}
               disabled={isBusy || !previewLevelData}
+              hideLabel
             />
             <DraftViewActionButton
               variant="publish"
               label="Publish"
               onClick={() => setIsPublishPanelOpen(true)}
               disabled={isBusy}
+              hideLabel
             />
           </div>
 
           {message ? <p className="gd-draft-view-message">{message}</p> : null}
 
-          <div className="gd-draft-view-info-row">
-            <button type="button" className="gd-draft-view-info-pill" onClick={() => setIsPublishPanelOpen(true)}>
-              <span className="gd-draft-view-info-label">Difficulty</span>
-              <span className="gd-draft-view-info-value">{selectedDifficultyPresentation.label}</span>
-            </button>
-            <button type="button" className="gd-draft-view-info-pill" onClick={() => setIsMusicPanelOpen(true)}>
-              <span className="gd-draft-view-info-label">Music</span>
-              <span className="gd-draft-view-info-value">{resolvedMusic.label}</span>
-            </button>
-            <div className="gd-draft-view-info-pill">
-              <span className="gd-draft-view-info-label">Verification</span>
-              <span className="gd-draft-view-info-value">{getVerificationCopy(level)}</span>
-            </div>
-          </div>
+          <DraftViewMetaRow
+            lengthCopy={getLengthCopy(level.dataJson.meta.lengthUnits)}
+            musicCopy={resolvedMusic.label}
+            verificationCopy={getVerificationCopy(level)}
+          />
 
-          <div className="gd-draft-view-footer">
-            <div className="gd-draft-view-footer-chip">Length: {getLengthCopy(level.dataJson.meta.lengthUnits)}</div>
-            <div className="gd-draft-view-footer-chip">Version: {level.versionNumber}</div>
-            <div className="gd-draft-view-footer-chip">ID: {getLevelIdCopy(level)}</div>
-          </div>
+          <DraftViewFooter versionCopy={`Version: ${level.versionNumber}`} idCopy={`ID: ${getLevelIdCopy(level)}`} />
         </div>
 
         {isEditorOpening ? <EditorLaunchOverlay /> : null}
@@ -752,103 +803,146 @@ export function LevelSetupPage() {
   }
 
   return (
-    <div className="mx-auto grid max-w-5xl gap-6">
-      <Panel className="game-screen bg-transparent">
-        <div className="space-y-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="arcade-eyebrow">Level Card</p>
-              <h2 className="font-display text-4xl text-white">Create Draft</h2>
-            </div>
-            <Link to="/my-levels">
-              <Button variant="ghost">Back To Drafts</Button>
-            </Link>
-          </div>
-
-          <p className="text-sm leading-7 text-white/78">
-            Name the level, add its description, pick the soundtrack, then create the draft and jump straight into the editor.
-          </p>
-        </div>
-      </Panel>
-
-      <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
-        <Panel className="game-screen bg-transparent">
-          <div className="space-y-4">
-            <div>
-              <FieldLabel>Level Title</FieldLabel>
-              <Input value={title} placeholder="My New Route" onChange={(event) => setTitle(event.target.value)} />
-            </div>
-
-            <div>
-              <FieldLabel>Description</FieldLabel>
-              <Textarea
-                rows={6}
-                value={description}
-                placeholder="Tell the player what kind of route and mood to expect."
-                onChange={(event) => setDescription(event.target.value)}
-              />
-            </div>
-          </div>
-        </Panel>
-
-        <Panel className="game-screen bg-transparent">
-          <div className="space-y-4">
-            <div>
-              <FieldLabel>Track Label</FieldLabel>
-              <Input
-                value={musicLabelInput}
-                placeholder="Stereo Madness"
-                onChange={(event) => setMusicLabelInput(event.target.value)}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <FieldLabel>Music URL</FieldLabel>
-              <div className="flex flex-col gap-2 sm:flex-row">
-                <Input
-                  value={musicUrlInput}
-                  placeholder="https://example.com/track.mp3"
-                  onChange={(event) => setMusicUrlInput(event.target.value)}
-                />
-                <Button variant="ghost" onClick={applyCustomMusicUrl} type="button">
-                  Apply URL
-                </Button>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap gap-3">
-              <label className="arcade-btn arcade-btn--ghost cursor-pointer">
-                <span>Upload Audio</span>
-                <input type="file" accept="audio/*" className="hidden" onChange={handleMusicFilePicked} />
-              </label>
-              <Button variant="ghost" onClick={clearMusic} type="button">
-                Clear Music
-              </Button>
-            </div>
-
-            <div className="game-stat px-4 py-4">
-              <p className="font-display text-[10px] tracking-[0.22em] text-[#ffd44a]">Selected Music</p>
-              <p className="mt-2 font-display text-xl text-white">{resolvedMusic.label}</p>
-            </div>
-          </div>
-        </Panel>
+    <div className="gd-draft-view-page gd-draft-view-page--arcade">
+      <div className="gd-draft-view-scene" aria-hidden="true">
+        <div className="gd-draft-view-grid" />
+        <div className="gd-draft-view-corner gd-draft-view-corner--left" />
+        <div className="gd-draft-view-corner gd-draft-view-corner--right" />
       </div>
 
-      <Panel className="game-screen bg-transparent">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <p className="arcade-eyebrow">Next Step</p>
-            <p className="text-sm leading-7 text-white/76">
-              The draft will be created first, then the editor opens with that level.
-            </p>
-          </div>
-          <Button onClick={handleCreateAndOpenEditor} disabled={isBusy}>
-            Create Draft And Open Editor
-          </Button>
+      <Link to="/my-levels" className="gd-draft-view-back-button" aria-label="Back to my levels">
+        <span className="gd-draft-view-back-icon" />
+      </Link>
+
+      <div className="gd-draft-view-side-stack gd-draft-view-side-stack--arcade">
+        <button
+          type="button"
+          className="gd-draft-view-side-button gd-draft-view-side-button--danger"
+          onClick={() => navigate('/my-levels')}
+          aria-label="Cancel new level creation"
+        >
+          <span className="gd-draft-view-side-icon gd-draft-view-side-icon--close" aria-hidden="true" />
+        </button>
+
+        <button
+          type="button"
+          className="gd-draft-view-side-button"
+          onClick={() =>
+            setMessage(
+              'Add the level name and optional description, preview the route if you want, then use Editor to create the draft and keep configuring it there.',
+            )
+          }
+          aria-label="Show create level help"
+        >
+          <span className="gd-draft-view-side-copy">Help</span>
+        </button>
+
+        <button
+          type="button"
+          className="gd-draft-view-side-button"
+          onClick={() => navigate('/my-levels')}
+          aria-label="Return to my levels"
+        >
+          <span className="gd-draft-view-side-copy">Drafts</span>
+        </button>
+      </div>
+
+      <div className="gd-draft-view-shell gd-draft-view-shell--arcade">
+        <div className="gd-draft-view-title-frame">
+          <input
+            value={title}
+            placeholder="Level Name"
+            onChange={(event) => setTitle(event.target.value)}
+            className="gd-draft-view-title-input"
+            aria-label="Level title"
+          />
         </div>
-        {message ? <p className="mt-4 text-sm leading-7 text-[#ffd44a]">{message}</p> : null}
-        {isEditorOpening ? <EditorLaunchOverlay /> : null}
-      </Panel>
+
+        <div className="gd-draft-view-description-frame">
+          <textarea
+            value={description}
+            placeholder="Description [Optional]"
+            onChange={(event) => setDescription(event.target.value)}
+            className="gd-draft-view-description-input"
+            aria-label="Level description"
+          />
+        </div>
+
+        <div className="gd-draft-view-action-row gd-draft-view-action-row--arcade">
+          <DraftViewActionButton
+            variant="editor"
+            label="Create And Edit"
+            onClick={handleCreateAndOpenEditor}
+            disabled={isBusy}
+            hideLabel
+          />
+          <DraftViewActionButton
+            variant="play"
+            label="Play"
+            onClick={() => {
+              setPreviewRunSeed((current) => current + 1);
+              setIsPreviewOpen(true);
+            }}
+            disabled={isBusy}
+            hideLabel
+          />
+          <DraftViewActionButton
+            variant="publish"
+            label="Save Draft"
+            onClick={handleCreateDraftOnly}
+            disabled={isBusy}
+            hideLabel
+          />
+        </div>
+
+        {message ? <p className="gd-draft-view-message">{message}</p> : null}
+
+        <DraftViewMetaRow
+          lengthCopy={getLengthCopy(120)}
+          musicCopy={resolvedMusic.label}
+          verificationCopy="Unverified"
+        />
+
+        <DraftViewFooter versionCopy="Version: 1" idCopy="ID: NA" />
+      </div>
+
+      {isEditorOpening ? <EditorLaunchOverlay /> : null}
+
+      {isPreviewOpen && newLevelPreviewData ? (
+        <div className="gd-draft-view-preview-shell" role="dialog" aria-modal="true" aria-label="New level preview">
+          <div className="gd-draft-view-preview-actions" aria-label="Preview controls">
+            <button
+              type="button"
+              className="gd-draft-view-preview-action"
+              onClick={() => setPreviewRunSeed((current) => current + 1)}
+              aria-label="Restart preview"
+              title="Restart preview"
+            >
+              Restart
+            </button>
+            <button
+              type="button"
+              className="gd-draft-view-preview-action gd-draft-view-preview-action--close"
+              onClick={() => setIsPreviewOpen(false)}
+              aria-label="Close preview"
+              title="Close preview"
+            >
+              Close
+            </button>
+          </div>
+          <GameCanvas
+            key={`new-draft-preview-${previewRunSeed}`}
+            levelData={newLevelPreviewData}
+            attemptNumber={1}
+            runId={`new-draft-preview-${previewRunSeed}`}
+            autoRestartOnFail
+            previewStartPosEnabled
+            fullscreen
+            className="gd-draft-view-preview-fullscreen"
+            onExitToMenu={() => setIsPreviewOpen(false)}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -873,21 +967,80 @@ function DraftViewActionButton({
   label,
   onClick,
   disabled = false,
+  hideLabel = false,
 }: {
   variant: 'editor' | 'play' | 'publish';
   label: string;
   onClick: () => void;
   disabled?: boolean;
+  hideLabel?: boolean;
 }) {
   return (
     <button
       type="button"
-      className={`gd-draft-view-action-button gd-draft-view-action-button--${variant}`}
+      className={`gd-draft-view-action-button gd-draft-view-action-button--${variant}${hideLabel ? ' gd-draft-view-action-button--icon-only' : ''}`}
       onClick={onClick}
       disabled={disabled}
+      aria-label={label}
+      title={label}
     >
       <span className={`gd-draft-view-action-icon gd-draft-view-action-icon--${variant}`} aria-hidden="true" />
-      <span className="gd-draft-view-action-label">{label}</span>
+      {!hideLabel ? <span className="gd-draft-view-action-label">{label}</span> : null}
     </button>
+  );
+}
+
+function DraftViewMetaRow({
+  lengthCopy,
+  musicCopy,
+  verificationCopy,
+}: {
+  lengthCopy: string;
+  musicCopy: string;
+  verificationCopy: string;
+}) {
+  return (
+    <div className="gd-draft-view-meta-row">
+      <div className="gd-draft-view-meta-item">
+        <svg viewBox="0 0 64 64" className="gd-draft-view-meta-icon" aria-hidden="true">
+          <circle cx="32" cy="32" r="26" fill="#ffffff" stroke="#1a1b32" strokeWidth="4" />
+          <path d="M32 18v15l9 7" fill="none" stroke="#1a1b32" strokeWidth="5" strokeLinecap="round" />
+          <circle cx="32" cy="32" r="3.8" fill="#1a1b32" />
+        </svg>
+        <span className="gd-draft-view-meta-copy">{lengthCopy}</span>
+      </div>
+
+      <div className="gd-draft-view-meta-item">
+        <svg viewBox="0 0 64 64" className="gd-draft-view-meta-icon" aria-hidden="true">
+          <path
+            d="M16 12v27.5c0 4.7 3.8 8.5 8.5 8.5S33 44.2 33 39.5 29.2 31 24.5 31c-1.8 0-3.5.5-5 1.5V20.6l20-4.9v19.8c0 4.7 3.8 8.5 8.5 8.5S56.5 40.2 56.5 35.5 52.7 27 48 27c-1.6 0-3.1.4-4.5 1.2V10.3L16 12Z"
+            fill="#ffffff"
+            stroke="#1a1b32"
+            strokeWidth="4"
+            strokeLinejoin="round"
+          />
+        </svg>
+        <span className="gd-draft-view-meta-copy">{musicCopy}</span>
+      </div>
+
+      <div className="gd-draft-view-meta-item">
+        <svg viewBox="0 0 64 64" className="gd-draft-view-meta-icon" aria-hidden="true">
+          <circle cx="32" cy="32" r="26" fill="#22dcff" stroke="#1a1b32" strokeWidth="4" />
+          <path d="M32 20v4" stroke="#ffffff" strokeWidth="5" strokeLinecap="round" />
+          <circle cx="32" cy="43" r="3.5" fill="#ffffff" />
+          <path d="M32 29v9" stroke="#ffffff" strokeWidth="5" strokeLinecap="round" />
+        </svg>
+        <span className="gd-draft-view-meta-copy">{verificationCopy}</span>
+      </div>
+    </div>
+  );
+}
+
+function DraftViewFooter({ versionCopy, idCopy }: { versionCopy: string; idCopy: string }) {
+  return (
+    <div className="gd-draft-view-footer gd-draft-view-footer--split">
+      <div className="gd-draft-view-footer-chip">{versionCopy}</div>
+      <div className="gd-draft-view-footer-chip">{idCopy}</div>
+    </div>
   );
 }

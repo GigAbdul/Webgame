@@ -128,6 +128,10 @@ export function LevelsPage() {
         <div className="gd-classic-level-corner gd-classic-level-corner--right" />
       </div>
 
+      <Link to="/" className="gd-classic-menu-button" aria-label="Back to main menu">
+        <span className="gd-classic-back-button-icon" />
+      </Link>
+
       {displayedLevel ? (
         <>
           {canGoPrevious ? (

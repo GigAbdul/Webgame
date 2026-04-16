@@ -21,12 +21,24 @@ import {
   getPlayerModeDescription,
   getPlayerModeLabel,
 } from './player-mode-config';
+import {
+  AIR_ROTATION_SPEED,
+  ARROW_VERTICAL_SPEED_FACTOR,
+  BASE_GRAVITY_ACCELERATION,
+  BASE_HORIZONTAL_SPEED,
+  DEFAULT_JUMP_VELOCITY,
+  PERMANENT_STAGE_FLOOR_Y,
+  normalizeAngle,
+  snapCubeRotation,
+} from './player-physics';
 import { readStoredMusicVolume, resolveLevelMusic } from './level-music';
 import { drawStageObjectSprite } from './object-renderer';
 import { getStageGroundPalette, getStageThemePalette } from './stage-theme-palette';
 import type { LevelData, LevelObject } from '../../types/models';
 import { Panel } from '../../components/ui';
 import { cn } from '../../utils/cn';
+
+export { BASE_HORIZONTAL_SPEED } from './player-physics';
 
 type GameCanvasProps = {
   levelData: LevelData;
@@ -44,9 +56,15 @@ type GameCanvasProps = {
     completionTimeMs: number;
     deathX?: number;
     deathY?: number;
+    jumpCount?: number;
     pathPoints?: Array<{ x: number; y: number }>;
   }) => void;
-  onComplete?: (payload: { progressPercent: number; completionTimeMs: number; pathPoints?: Array<{ x: number; y: number }> }) => void;
+  onComplete?: (payload: {
+    progressPercent: number;
+    completionTimeMs: number;
+    jumpCount?: number;
+    pathPoints?: Array<{ x: number; y: number }>;
+  }) => void;
   onExitToMenu?: (payload: { progressPercent: number; pathPoints?: Array<{ x: number; y: number }> }) => void;
   onStop?: (payload: { progressPercent: number; pathPoints?: Array<{ x: number; y: number }> }) => void;
 };
@@ -103,28 +121,43 @@ type RuntimePostFxState = {
   shakePower: number;
 };
 
+type FinishSequenceState = {
+  startedAt: number;
+  durationMs: number;
+  cameraAnchorX: number;
+  startCenterX: number;
+  startCenterY: number;
+  targetCenterX: number;
+  targetCenterY: number;
+  startRotation: number;
+  targetRotation: number;
+  arcHeight: number;
+};
+
 const solidTypes = new Set(['GROUND_BLOCK', 'HALF_GROUND_BLOCK', 'PLATFORM_BLOCK', 'HALF_PLATFORM_BLOCK']);
 const arrowGroundSafeTypes = new Set(['GROUND_BLOCK', 'HALF_GROUND_BLOCK']);
 const JUMP_BUFFER_MS = 130;
 const ORB_PRESS_BUFFER_MS = 130;
 const COYOTE_TIME_MS = 110;
 const AUTO_RESTART_DELAY_MS = 850;
-export const BASE_HORIZONTAL_SPEED = 7.55;
-const BASE_GRAVITY_ACCELERATION = 55;
-const DEFAULT_JUMP_VELOCITY = 15.65;
 const GREEN_ORB_LAUNCH_VELOCITY = DEFAULT_JUMP_VELOCITY * 0.76;
 const GREEN_ORB_MIN_VELOCITY = DEFAULT_JUMP_VELOCITY * 0.48;
 const GREEN_ORB_INERTIA_BLEND = 0.72;
-const BALL_RAMP_EXIT_CARRY_FACTOR = 0.72;
-const BALL_RAMP_EXIT_CARRY_MAX = DEFAULT_JUMP_VELOCITY * 0.42;
-const PERMANENT_STAGE_FLOOR_Y = SHIP_FLIGHT_FLOOR_Y;
-const AIR_ROTATION_SPEED = Math.PI * 1.6;
-const QUARTER_TURN = Math.PI / 2;
-const ARROW_VERTICAL_SPEED_FACTOR = 1;
+const BALL_RAMP_EXIT_CARRY_FACTOR = 0.96;
+const BALL_RAMP_EXIT_CARRY_MAX = DEFAULT_JUMP_VELOCITY * 0.58;
+const BALL_RAMP_EXIT_CARRY_MIN = DEFAULT_JUMP_VELOCITY * 0.34;
+const BALL_RAMP_EDGE_TOLERANCE = 0.14;
 const RUNTIME_BUCKET_WIDTH_UNITS = 8;
 const DESKTOP_MAX_PATH_POINTS = 6000;
 const LOW_POWER_MAX_PATH_POINTS = 2400;
 const MOBILE_PREVIEW_MAX_PATH_POINTS = 900;
+const FINISH_SEQUENCE_DURATION_MS = 620;
+const FINISH_SEQUENCE_MAX_DURATION_MS = 1500;
+const FINISH_SEQUENCE_DISTANCE_DURATION_FACTOR_MS = 78;
+const EARLY_FINISH_PULL_DISTANCE_UNITS = 15;
+const FINISH_GATEWAY_OFFSET_UNITS = 0.96;
+const FINISH_GATEWAY_HALF_WIDTH_UNITS = 0.42;
+const FINISH_GATEWAY_SCREEN_ANCHOR_RATIO = 0.78;
 const GAMEPLAY_INPUT_CODES = new Set(['Space', 'ArrowUp', 'KeyW']);
 const postFxEffectTypes = new Set<PostFxEffectType>(['flash', 'grayscale', 'invert', 'scanlines', 'blur', 'shake', 'tint']);
 
@@ -177,6 +210,7 @@ export function GameCanvas({
   const musicOffsetMs = Math.max(0, Number(levelData.meta.musicOffsetMs ?? 0) || 0);
   const sanitizedLevelObjects = useMemo(() => stripLegacyRunAnchorObjects(levelData.objects), [levelData.objects]);
   const autoFinishX = useMemo(() => computeAutoLevelFinishX({ objects: levelData.objects }), [levelData.objects]);
+  const finishGatewayX = autoFinishX + FINISH_GATEWAY_OFFSET_UNITS;
   const previewStartPos = useMemo(() => {
     if (!previewStartPosEnabled) {
       return null;
@@ -512,11 +546,14 @@ export function GameCanvas({
     let orbBufferedUntil = 0;
     let lastGroundedAt = 0;
     let currentStatus: 'running' | 'failed' | 'completed' = 'running';
+    let finishSequence: FinishSequenceState | null = null;
+    let playerConsumedByFinishGateway = false;
     let lastHudCommit = 0;
     let cameraX = 0;
     let shakeTime = 0;
     let shakePower = 0;
     let restartTimeout = 0;
+    let jumpCount = 0;
 
     const syncInputHeldState = () => {
       inputHeldRef.current = keyboardInputHeldRef.current || activePointerIdsRef.current.size > 0;
@@ -639,9 +676,11 @@ export function GameCanvas({
       player.speedMultiplier = previewBootstrap.speedMultiplier;
       player.mode = previewBootstrap.mode;
       player.grounded = false;
+      jumpCount = 0;
       releaseAllHeldInput();
       restartMusicFromOffset();
       currentStatus = 'running';
+      playerConsumedByFinishGateway = false;
       resetRuntimeObjects();
       activeTriggers.clear();
       usedOrbs.clear();
@@ -671,6 +710,10 @@ export function GameCanvas({
 
       shakePower = Math.max(shakePower, power);
       shakeTime = Math.max(shakeTime, duration);
+    };
+
+    const registerJump = () => {
+      jumpCount += 1;
     };
 
     const launchPlayer = (velocity: number) => {
@@ -714,6 +757,7 @@ export function GameCanvas({
         return false;
       }
 
+      registerJump();
       launchPlayer(jumpVelocity);
       jumpBufferedUntil = 0;
       return true;
@@ -923,6 +967,7 @@ export function GameCanvas({
         completionTimeMs: elapsedMs,
         deathX: player.x + player.w / 2,
         deathY: player.y + player.h / 2,
+        jumpCount,
         pathPoints: pathLine.map((point) => ({ ...point })),
       });
 
@@ -948,8 +993,50 @@ export function GameCanvas({
       onCompleteRef.current?.({
         progressPercent: 100,
         completionTimeMs: elapsedMs,
+        jumpCount,
         pathPoints: pathLine.map((point) => ({ ...point })),
       });
+    };
+
+    const beginFinishSequence = (elapsedMs: number, sourceCenterY?: number) => {
+      if (currentStatus !== 'running' || finishSequence) {
+        return;
+      }
+
+      const playerCenterX = player.x + player.w / 2;
+      const playerCenterY = player.y + player.h / 2;
+      const distanceToGateway = Math.max(0, finishGatewayX - playerCenterX);
+      const portalCenterY = clamp(
+        sourceCenterY ?? playerCenterY,
+        player.h * 0.6,
+        PERMANENT_STAGE_FLOOR_Y - player.h * 0.5,
+      );
+      const sequenceDurationMs = clamp(
+        distanceToGateway * FINISH_SEQUENCE_DISTANCE_DURATION_FACTOR_MS,
+        FINISH_SEQUENCE_DURATION_MS,
+        FINISH_SEQUENCE_MAX_DURATION_MS,
+      );
+      const arcHeight = clamp(0.2 + distanceToGateway * 0.02, 0.2, 0.58);
+      const desiredPortalScreenX = width * FINISH_GATEWAY_SCREEN_ANCHOR_RATIO;
+      const cameraAnchorX = Math.max(0, finishGatewayX * cell - desiredPortalScreenX);
+
+      finishSequence = {
+        startedAt: elapsedMs,
+        durationMs: sequenceDurationMs,
+        cameraAnchorX,
+        startCenterX: playerCenterX,
+        startCenterY: playerCenterY,
+        targetCenterX: finishGatewayX,
+        targetCenterY: portalCenterY,
+        startRotation: player.rotation,
+        targetRotation: player.rotation + Math.PI * 1.2 * Math.sign(player.gravity || 1),
+        arcHeight,
+      };
+
+      player.vy = 0;
+      player.grounded = false;
+      releaseAllHeldInput();
+      bumpCamera(8, 0.16);
     };
 
     const loop = (timestamp: number) => {
@@ -965,7 +1052,7 @@ export function GameCanvas({
       const elapsedMs = Math.max(1, Math.floor(timestamp - startTime - pausedElapsedMs));
       const isPaused = pauseMenuOpenRef.current && currentStatus === 'running';
 
-      if (currentStatus === 'running' && !isPaused) {
+      if (currentStatus === 'running' && !isPaused && !finishSequence) {
         if (player.mode === 'cube' && inputHeldRef.current) {
           jumpBufferedUntil = Math.max(jumpBufferedUntil, timestamp + JUMP_BUFFER_MS);
         }
@@ -1038,17 +1125,17 @@ export function GameCanvas({
         const interactionRangeMinY = collisionRangeMinY - 0.75;
         const interactionRangeMaxY = collisionRangeMaxY + 0.75;
 
-        if (player.mode === 'ship') {
-          const shipMinY = SHIP_FLIGHT_CEILING_Y + SHIP_VISUAL_BOUND_PADDING;
-          const shipMaxY = SHIP_FLIGHT_FLOOR_Y - player.h - SHIP_VISUAL_BOUND_PADDING;
+        if (player.mode === 'ship' || player.mode === 'arrow') {
+          const flightMinY = SHIP_FLIGHT_CEILING_Y + SHIP_VISUAL_BOUND_PADDING;
+          const flightMaxY = SHIP_FLIGHT_FLOOR_Y - player.h - SHIP_VISUAL_BOUND_PADDING;
 
-          if (player.y < shipMinY) {
-            player.y = shipMinY;
+          if (player.y < flightMinY) {
+            player.y = flightMinY;
             player.vy = Math.max(0, player.vy);
           }
 
-          if (player.y > shipMaxY) {
-            player.y = shipMaxY;
+          if (player.y > flightMaxY) {
+            player.y = flightMaxY;
             player.vy = Math.min(0, player.vy);
           }
         }
@@ -1110,8 +1197,9 @@ export function GameCanvas({
                 deltaSeconds,
                 player.mode !== 'ship',
                 collisionRamps,
+                horizontalSpeed,
               ) ||
-              snapToRampSurface(player, object, player.mode !== 'ship')
+              snapToRampSurface(player, object, player.mode !== 'ship', collisionRamps, horizontalSpeed)
             ) {
               if (player.grounded) {
                 lastGroundedAt = timestamp;
@@ -1237,6 +1325,7 @@ export function GameCanvas({
 
           if (canGroundJump) {
             launchPlayer(jumpVelocity);
+            registerJump();
             jumpBufferedUntil = 0;
           } else if (orbBufferedUntil < timestamp) {
             jumpBufferedUntil = 0;
@@ -1265,6 +1354,7 @@ export function GameCanvas({
 
           if (orb) {
             usedOrbs.add(orb.id);
+            registerJump();
             if (orb.type === 'BLUE_ORB') {
               applyBlueOrbGravityFlip();
             } else if (orb.type === 'GRAVITY_ORB') {
@@ -1305,6 +1395,7 @@ export function GameCanvas({
 
             if (object.type === 'JUMP_PAD' && (player.mode === 'cube' || player.mode === 'ball')) {
               const boost = Number(object.props.boost ?? 16);
+              registerJump();
               launchPlayer(-boost * Math.sign(player.gravity || 1));
               bumpCamera(5, 0.14);
             }
@@ -1349,7 +1440,7 @@ export function GameCanvas({
             }
 
             if (object.type === 'FINISH_PORTAL') {
-              markCompleted(elapsedMs);
+              beginFinishSequence(elapsedMs, object.y + object.h / 2);
             }
 
             if (
@@ -1440,8 +1531,13 @@ export function GameCanvas({
           }
         }
 
+        const remainingToAutoFinish = autoFinishX - (player.x + player.w);
+        if (currentStatus === 'running' && player.gravity < 0 && remainingToAutoFinish <= EARLY_FINISH_PULL_DISTANCE_UNITS) {
+          beginFinishSequence(elapsedMs);
+        }
+
         if (currentStatus === 'running' && player.x + player.w >= autoFinishX) {
-          markCompleted(elapsedMs);
+          beginFinishSequence(elapsedMs);
         }
 
         if (currentStatus === 'running') {
@@ -1537,16 +1633,83 @@ export function GameCanvas({
         if (previousRight <= levelBounds.maxX && nextRight > levelBounds.maxX + 4) {
           markFailed(elapsedMs);
         }
+      } else if (currentStatus === 'running' && finishSequence && !isPaused) {
+        const finishElapsedMs = Math.max(0, elapsedMs - finishSequence.startedAt);
+        const finishProgress = clamp(finishElapsedMs / finishSequence.durationMs, 0, 1);
+        const pullProgress = -(Math.cos(Math.PI * finishProgress) - 1) / 2;
+        const arcLift = Math.sin(finishProgress * Math.PI) * finishSequence.arcHeight;
+        const centerX =
+          finishSequence.startCenterX +
+          (finishSequence.targetCenterX - finishSequence.startCenterX) * pullProgress;
+        const centerY =
+          finishSequence.startCenterY +
+          (finishSequence.targetCenterY - finishSequence.startCenterY) * pullProgress -
+          arcLift;
+
+        player.x = centerX - player.w / 2;
+        player.y = centerY - player.h / 2;
+        player.vy = 0;
+        player.grounded = false;
+        player.rotation =
+          finishSequence.startRotation +
+          (finishSequence.targetRotation - finishSequence.startRotation) * pullProgress +
+          finishProgress * Math.PI * 0.28;
+
+        trail.push({
+          x: centerX,
+          y: centerY,
+          alpha: 0.2 * (1 - finishProgress * 0.45),
+          size: 0.82 - finishProgress * 0.18,
+        });
+
+        if (trail.length > (isMobilePreviewPerformanceMode ? 4 : isLowPowerDevice ? 8 : 14)) {
+          trail.shift();
+        }
+
+        for (const point of trail) {
+          point.alpha *= 0.9;
+          point.size *= 0.992;
+        }
+
+        if (showRunPath) {
+          const lastPathPoint = pathLine[pathLine.length - 1];
+          if (!lastPathPoint || !Number.isFinite(lastPathPoint.x)) {
+            pathLine.push({ x: centerX, y: centerY });
+          } else {
+            const deltaX = centerX - lastPathPoint.x;
+            const deltaY = centerY - lastPathPoint.y;
+            if (deltaX * deltaX + deltaY * deltaY >= 0.008 * 0.008) {
+              pathLine.push({ x: centerX, y: centerY });
+            }
+          }
+        }
+
+        if (finishProgress >= 1) {
+          playerConsumedByFinishGateway = true;
+          finishSequence = null;
+          markCompleted(elapsedMs);
+        }
       }
 
-      const targetCameraX = Math.max(0, player.x * cell - width * 0.28);
-      cameraX += (targetCameraX - cameraX) * Math.min(1, deltaSeconds * 8);
+      if (finishSequence) {
+        cameraX = finishSequence.cameraAnchorX;
+      } else if (currentStatus === 'completed') {
+        cameraX = cameraX;
+      } else {
+        const targetCameraX = Math.max(0, player.x * cell - width * 0.28);
+        cameraX += (targetCameraX - cameraX) * Math.min(1, deltaSeconds * 8);
+      }
       shakeTime = Math.max(0, shakeTime - deltaSeconds);
       const runtimePostFxState = getRuntimePostFxState(activePostFxEffects, elapsedMs);
       const combinedShakePower = shakeTime > 0 || runtimePostFxState.shakePower > 0 ? shakePower + runtimePostFxState.shakePower : 0;
       const shakeOffsetX = combinedShakePower > 0 ? (Math.random() - 0.5) * combinedShakePower : 0;
       const shakeOffsetY = combinedShakePower > 0 ? (Math.random() - 0.5) * combinedShakePower * 0.7 : 0;
       const progressPercent = clampProgress((player.x / levelBounds.maxX) * 100);
+      const finishGatewayProgress = finishSequence
+        ? clamp((elapsedMs - finishSequence.startedAt) / finishSequence.durationMs, 0, 1)
+        : currentStatus === 'completed'
+          ? 1
+          : 0;
 
       const hudCommitIntervalMs = isLowPowerDevice ? 120 : 80;
       if (timestamp - lastHudCommit > hudCommitIntervalMs) {
@@ -1588,6 +1751,7 @@ export function GameCanvas({
         cell,
         getStageGroundPalette(levelData.meta.theme, levelData.meta.groundColor),
       );
+      drawFinishGateway(context, finishGatewayX, verticalOffset, height, cell, elapsedMs, finishGatewayProgress);
 
       const drawRangeMinX = (cameraX + shakeOffsetX) / cell - 3;
       const drawRangeMaxX = drawRangeMinX + width / cell + 6;
@@ -1636,7 +1800,10 @@ export function GameCanvas({
         context.fillRect(point.x * cell - size / 2, verticalOffset + point.y * cell - size / 2, size, size);
       }
 
-      drawPlayer(context, player, cell, verticalOffset);
+      drawPlayer(context, player, cell, verticalOffset, {
+        alpha: playerConsumedByFinishGateway ? 0 : finishSequence ? 1 - finishGatewayProgress * 0.82 : 1,
+        scale: playerConsumedByFinishGateway ? 0.66 : finishSequence ? 1 - finishGatewayProgress * 0.34 : 1,
+      });
       context.restore();
 
       const shouldDrawStatusOverlay =
@@ -1951,15 +2118,28 @@ function drawObject(
   });
 }
 
-function drawPlayer(context: CanvasRenderingContext2D, player: PlayerState, cell: number, verticalOffset: number) {
+function drawPlayer(
+  context: CanvasRenderingContext2D,
+  player: PlayerState,
+  cell: number,
+  verticalOffset: number,
+  visual: {
+    alpha?: number;
+    scale?: number;
+  } = {},
+) {
   const playerX = player.x * cell;
   const playerY = verticalOffset + player.y * cell;
   const sizeW = player.w * cell;
   const sizeH = player.h * cell;
+  const alpha = visual.alpha ?? 1;
+  const scale = visual.scale ?? 1;
 
   context.save();
+  context.globalAlpha *= alpha;
   context.translate(playerX + sizeW / 2, playerY + sizeH / 2);
   context.rotate(player.rotation);
+  context.scale(scale, scale);
 
   if (player.mode === 'ship') {
     const bodyLength = sizeW * 0.84;
@@ -2218,6 +2398,103 @@ function drawPermanentStageFloor(
   context.moveTo(startX, topY);
   context.lineTo(endX, topY);
   context.stroke();
+}
+
+function drawFinishGateway(
+  context: CanvasRenderingContext2D,
+  gatewayX: number,
+  verticalOffset: number,
+  height: number,
+  cell: number,
+  elapsedMs: number,
+  activationProgress = 0,
+) {
+  const worldX = gatewayX * cell;
+  const topY = verticalOffset - cell * 9;
+  const bottomY = height + cell * 2;
+  const beamHalfWidth = Math.max(12, cell * FINISH_GATEWAY_HALF_WIDTH_UNITS);
+  const pulse = 0.62 + 0.38 * Math.sin(elapsedMs / 130);
+  const glowAlpha = 0.2 + activationProgress * 0.42;
+
+  const glowGradient = context.createLinearGradient(worldX - beamHalfWidth * 4, 0, worldX + beamHalfWidth * 4, 0);
+  glowGradient.addColorStop(0, 'rgba(83,255,211,0)');
+  glowGradient.addColorStop(0.18, `rgba(83,255,211,${0.12 + glowAlpha * 0.34})`);
+  glowGradient.addColorStop(0.5, `rgba(208,255,226,${0.18 + glowAlpha * 0.46})`);
+  glowGradient.addColorStop(0.82, `rgba(83,255,211,${0.12 + glowAlpha * 0.34})`);
+  glowGradient.addColorStop(1, 'rgba(83,255,211,0)');
+  context.fillStyle = glowGradient;
+  context.fillRect(worldX - beamHalfWidth * 4, topY, beamHalfWidth * 8, bottomY - topY);
+
+  context.fillStyle = `rgba(123,255,187,${0.22 + pulse * 0.16})`;
+  context.fillRect(worldX - beamHalfWidth * 2.2, topY, beamHalfWidth * 2.6, bottomY - topY);
+
+  context.fillStyle = `rgba(255,255,255,${0.82 + activationProgress * 0.18})`;
+  context.fillRect(worldX - beamHalfWidth * 0.16, topY, beamHalfWidth * 0.32, bottomY - topY);
+
+  context.fillStyle = 'rgba(8,20,48,0.82)';
+  context.fillRect(worldX + beamHalfWidth * 0.5, topY, beamHalfWidth * 2.4, bottomY - topY);
+
+  context.strokeStyle = 'rgba(151,255,221,0.7)';
+  context.lineWidth = 1.4;
+  const gridStep = Math.max(12, cell * 0.56);
+  for (let x = worldX + beamHalfWidth * 0.5; x <= worldX + beamHalfWidth * 2.9; x += gridStep) {
+    context.beginPath();
+    context.moveTo(x, topY);
+    context.lineTo(x, bottomY);
+    context.stroke();
+  }
+  for (let y = topY; y <= bottomY; y += gridStep) {
+    context.beginPath();
+    context.moveTo(worldX + beamHalfWidth * 0.5, y);
+    context.lineTo(worldX + beamHalfWidth * 2.9, y);
+    context.stroke();
+  }
+
+  context.fillStyle = `rgba(165,255,147,${0.58 + activationProgress * 0.22})`;
+  for (let index = 0; index < 24; index += 1) {
+    const seed = index * 47.13;
+    const drift = ((elapsedMs / 1000) * (28 + (index % 5) * 8) + seed) % (bottomY - topY + cell * 4);
+    const px = worldX - beamHalfWidth * (1.2 + ((index * 13.7) % 7) * 0.34);
+    const py = topY + drift - cell * 2;
+    const size = index % 3 === 0 ? 8 : 5;
+    context.fillRect(px, py, size, size);
+  }
+
+  if (activationProgress <= 0) {
+    return;
+  }
+
+  context.save();
+  context.globalAlpha *= activationProgress;
+  const burstRadius = cell * (2.4 + activationProgress * 3.2);
+  const burstGradient = context.createRadialGradient(worldX, verticalOffset + PERMANENT_STAGE_FLOOR_Y * cell - cell * 0.2, 0, worldX, verticalOffset + PERMANENT_STAGE_FLOOR_Y * cell - cell * 0.2, burstRadius);
+  burstGradient.addColorStop(0, 'rgba(166,255,223,0.72)');
+  burstGradient.addColorStop(0.48, 'rgba(120,255,201,0.28)');
+  burstGradient.addColorStop(1, 'rgba(120,255,201,0)');
+  context.fillStyle = burstGradient;
+  context.beginPath();
+  context.arc(worldX, verticalOffset + PERMANENT_STAGE_FLOOR_Y * cell - cell * 0.2, burstRadius, 0, Math.PI * 2);
+  context.fill();
+
+  context.strokeStyle = 'rgba(171,255,218,0.72)';
+  context.lineWidth = 2;
+  for (let index = 0; index < 5; index += 1) {
+    const sweep = (index + 1) / 5;
+    const startX = worldX - cell * (4.5 + index * 0.9);
+    const startY = verticalOffset + PERMANENT_STAGE_FLOOR_Y * cell - cell * (0.4 + index * 0.28);
+    const endY = verticalOffset + PERMANENT_STAGE_FLOOR_Y * cell - cell * (1.2 - sweep * 0.9);
+
+    context.beginPath();
+    context.moveTo(startX, startY);
+    context.quadraticCurveTo(
+      worldX - cell * (1.4 + index * 0.16),
+      startY + cell * (0.42 + sweep),
+      worldX,
+      endY,
+    );
+    context.stroke();
+  }
+  context.restore();
 }
 
 function clearRuntimePostFx(
@@ -2587,6 +2864,15 @@ function getRampForwardEdge(
   return surface.start.x >= surface.end.x ? surface.start : surface.end;
 }
 
+function getRampSlope(
+  surface: {
+    start: { x: number; y: number };
+    end: { x: number; y: number };
+  },
+) {
+  return (surface.end.y - surface.start.y) / Math.max(0.0001, surface.end.x - surface.start.x);
+}
+
 function hasRampContinuationAhead(
   currentObject: LevelData['objects'][number],
   surface: {
@@ -2600,6 +2886,7 @@ function hasRampContinuationAhead(
 ) {
   const forwardEdge = getRampForwardEdge(surface);
   const seamTolerance = 0.08;
+  const currentSlope = getRampSlope(surface);
 
   return ramps.some((otherRamp) => {
     if (otherRamp.id === currentObject.id) {
@@ -2621,8 +2908,60 @@ function hasRampContinuationAhead(
       clamp(forwardEdge.x, otherSurface.minX, otherSurface.maxX),
     );
 
-    return Math.abs(otherSurfaceY - forwardEdge.y) <= seamTolerance;
+    const otherSlope = getRampSlope(otherSurface);
+    const sameSlopeDirection = Math.sign(otherSlope || 0) === Math.sign(currentSlope || 0);
+
+    return Math.abs(otherSurfaceY - forwardEdge.y) <= seamTolerance && sameSlopeDirection;
   });
+}
+
+function getBallRampExitCarryVelocity(
+  player: PlayerState,
+  surface: {
+    start: { x: number; y: number };
+    end: { x: number; y: number };
+    minX: number;
+    maxX: number;
+    solidBelow: boolean;
+  },
+  currentObject: LevelData['objects'][number],
+  ramps: Array<LevelData['objects'][number]>,
+  horizontalSpeed: number,
+) {
+  if (player.mode !== 'ball') {
+    return null;
+  }
+
+  const forwardEdge = getRampForwardEdge(surface);
+  const supportX = getRampSupportX(player, surface);
+  const nearForwardEdge = Math.abs(supportX - forwardEdge.x) <= BALL_RAMP_EDGE_TOLERANCE;
+
+  if (!nearForwardEdge || hasRampContinuationAhead(currentObject, surface, ramps)) {
+    return null;
+  }
+
+  const rampSlope = getRampSlope(surface);
+  const desiredVelocity = clamp(
+    rampSlope * horizontalSpeed * BALL_RAMP_EXIT_CARRY_FACTOR,
+    -BALL_RAMP_EXIT_CARRY_MAX,
+    BALL_RAMP_EXIT_CARRY_MAX,
+  );
+  const launchDirection = Math.sign(desiredVelocity || 0);
+
+  if (!launchDirection) {
+    return null;
+  }
+
+  const boostedVelocity =
+    Math.abs(desiredVelocity) < BALL_RAMP_EXIT_CARRY_MIN
+      ? BALL_RAMP_EXIT_CARRY_MIN * launchDirection
+      : desiredVelocity;
+
+  if (Math.abs(boostedVelocity) <= 0.01) {
+    return null;
+  }
+
+  return Math.sign(boostedVelocity) !== Math.sign(player.gravity || 1) ? boostedVelocity : null;
 }
 
 function triangleIntersectsAabb(
@@ -2720,6 +3059,7 @@ function resolveRampCollision(
   deltaSeconds: number,
   allowGrounding: boolean,
   nearbyRamps: Array<LevelData['objects'][number]>,
+  horizontalSpeed: number,
 ) {
   const surface = getArrowRampSurface(object);
 
@@ -2737,31 +3077,16 @@ function resolveRampCollision(
   const previousSurfaceY = getRampSurfaceYAtX(surface, previousSupportX);
   const nextSurfaceY = getRampSurfaceYAtX(surface, nextSupportX);
   const tolerance = 0.08;
-  const safeDeltaSeconds = Math.max(0.0001, deltaSeconds);
-  const surfaceVelocityY = (nextSurfaceY - previousSurfaceY) / safeDeltaSeconds;
-  const forwardEdge = getRampForwardEdge(surface);
-  const nearForwardEdge = Math.abs(nextSupportX - forwardEdge.x) <= 0.08;
-  const hasContinuationAhead = hasRampContinuationAhead(object, surface, nearbyRamps);
-  const shouldApplyBallRampCarry =
-    player.mode === 'ball' &&
-    Math.abs(surfaceVelocityY) > 0.01 &&
-    Math.sign(surfaceVelocityY) !== Math.sign(player.gravity || 1) &&
-    nearForwardEdge &&
-    !hasContinuationAhead;
-  const ballRampCarryVelocity = clamp(
-    surfaceVelocityY * BALL_RAMP_EXIT_CARRY_FACTOR,
-    -BALL_RAMP_EXIT_CARRY_MAX,
-    BALL_RAMP_EXIT_CARRY_MAX,
-  );
+  const ballRampCarryVelocity = getBallRampExitCarryVelocity(player, surface, object, nearbyRamps, horizontalSpeed);
 
   if (surface.solidBelow) {
     const previousBottom = previousY + player.h;
     const nextBottom = player.y + player.h;
 
     if (previousBottom <= previousSurfaceY + tolerance && nextBottom >= nextSurfaceY - tolerance && player.vy >= 0) {
-      const carryApplied = shouldApplyBallRampCarry && ballRampCarryVelocity !== 0;
+      const carryApplied = ballRampCarryVelocity !== null;
       player.y = nextSurfaceY - player.h - 0.001;
-      player.vy = shouldApplyBallRampCarry ? ballRampCarryVelocity : 0;
+      player.vy = carryApplied ? ballRampCarryVelocity : 0;
       player.grounded = false;
 
       if (allowGrounding && !carryApplied) {
@@ -2778,9 +3103,9 @@ function resolveRampCollision(
   const nextTop = player.y;
 
   if (previousTop >= previousSurfaceY - tolerance && nextTop <= nextSurfaceY + tolerance && player.vy <= 0) {
-    const carryApplied = shouldApplyBallRampCarry && ballRampCarryVelocity !== 0;
+    const carryApplied = ballRampCarryVelocity !== null;
     player.y = nextSurfaceY + 0.001;
-    player.vy = shouldApplyBallRampCarry ? ballRampCarryVelocity : 0;
+    player.vy = carryApplied ? ballRampCarryVelocity : 0;
     player.grounded = false;
 
     if (allowGrounding && !carryApplied) {
@@ -2797,6 +3122,8 @@ function snapToRampSurface(
   player: PlayerState,
   object: LevelData['objects'][number],
   allowGrounding: boolean,
+  nearbyRamps: Array<LevelData['objects'][number]>,
+  horizontalSpeed: number,
 ) {
   const surface = getArrowRampSurface(object);
   const triangle = getArrowRampTriangle(object);
@@ -2819,10 +3146,12 @@ function snapToRampSurface(
     }
 
     player.y = surfaceY - player.h - 0.001;
-    player.vy = Math.min(player.vy, 0);
+    const ballRampCarryVelocity = getBallRampExitCarryVelocity(player, surface, object, nearbyRamps, horizontalSpeed);
+    const carryApplied = ballRampCarryVelocity !== null;
+    player.vy = carryApplied ? ballRampCarryVelocity : Math.min(player.vy, 0);
     player.grounded = false;
 
-    if (allowGrounding) {
+    if (allowGrounding && !carryApplied) {
       player.grounded = true;
     }
 
@@ -2837,10 +3166,12 @@ function snapToRampSurface(
   }
 
   player.y = surfaceY + 0.001;
-  player.vy = Math.max(player.vy, 0);
+  const ballRampCarryVelocity = getBallRampExitCarryVelocity(player, surface, object, nearbyRamps, horizontalSpeed);
+  const carryApplied = ballRampCarryVelocity !== null;
+  player.vy = carryApplied ? ballRampCarryVelocity : Math.max(player.vy, 0);
   player.grounded = false;
 
-  if (allowGrounding) {
+  if (allowGrounding && !carryApplied) {
     player.grounded = true;
   }
 
@@ -3012,18 +3343,9 @@ export function buildPreviewBootstrap(
   return bootstrap;
 }
 
-function normalizeAngle(value: number) {
-  const fullTurn = Math.PI * 2;
-  return ((value % fullTurn) + fullTurn) % fullTurn;
-}
-
 function normalizeQuarterRotationDegrees(value: number) {
   const normalized = ((Math.round(value / 90) * 90) % 360 + 360) % 360;
   return normalized === 360 ? 0 : normalized;
-}
-
-function snapCubeRotation(value: number) {
-  return normalizeAngle(Math.round(value / QUARTER_TURN) * QUARTER_TURN);
 }
 
 function drawBackdrop(
