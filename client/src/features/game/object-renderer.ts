@@ -14,6 +14,8 @@ type DrawStageObjectOptions = {
   isUsedOrb?: boolean;
   alpha?: number;
   animationTimeMs?: number;
+  editorGuideTop?: number;
+  editorGuideBottom?: number;
 };
 
 type BlockObjectType =
@@ -42,6 +44,7 @@ const spritePortalPathByType: Record<SpritePortalType, string> = {
   ARROW_PORTAL: '/portals/wave.svg',
 };
 const spritePortalCache = new Map<SpritePortalType, HTMLImageElement>();
+type TriggerActivationMode = 'touch' | 'zone';
 
 function isBlockType(type: LevelData['objects'][number]['type']): type is BlockObjectType {
   return blockTypes.has(type as BlockObjectType);
@@ -68,6 +71,8 @@ export function drawStageObjectSprite({
   isUsedOrb = false,
   alpha = 1,
   animationTimeMs = 0,
+  editorGuideTop,
+  editorGuideBottom,
 }: DrawStageObjectOptions) {
   context.save();
   context.globalAlpha = alpha;
@@ -137,7 +142,7 @@ export function drawStageObjectSprite({
     object.type === 'PULSE_TRIGGER' ||
     object.type === 'POST_FX_TRIGGER'
   ) {
-    drawTriggerSprite(context, object, x, y, w, h, fillColor, strokeColor, isActive);
+    drawTriggerSprite(context, object, x, y, w, h, fillColor, strokeColor, isActive, editorGuideTop, editorGuideBottom);
     context.restore();
     return;
   }
@@ -161,7 +166,7 @@ export function drawStageObjectSprite({
   }
 
   if (object.type === 'START_MARKER' || object.type === 'START_POS') {
-    drawStartMarkerSprite(context, x, y, w, h, fillColor, strokeColor, object.type === 'START_POS');
+    drawStartMarkerSprite(context, object.type, x, y, w, h, fillColor, strokeColor, editorGuideTop, editorGuideBottom);
     context.restore();
     return;
   }
@@ -169,6 +174,10 @@ export function drawStageObjectSprite({
   context.fillStyle = fillColor;
   context.fillRect(x, y, w, h);
   context.restore();
+}
+
+export function getStageObjectPreviewSpriteImage(type: LevelData['objects'][number]['type']) {
+  return isSpritePortalType(type) ? getSpritePortalImage(type) : null;
 }
 
 function drawBlockSprite(
@@ -735,6 +744,9 @@ function drawPortalSprite(
       drawPortalSpriteImage(context, sprite, x, y, w, h, isActive, rotationDegrees);
       return;
     }
+
+    drawSpritePortalPlaceholder(context, type, x, y, w, h, isActive);
+    return;
   }
 
   const outerGradient = context.createLinearGradient(x, y, x, y + h);
@@ -819,6 +831,66 @@ function drawPortalSpriteImage(
   context.restore();
 }
 
+function drawSpritePortalPlaceholder(
+  context: CanvasRenderingContext2D,
+  type: SpritePortalType,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  isActive: boolean,
+) {
+  const portalCode = type === 'SHIP_PORTAL' ? 'S' : type === 'BALL_PORTAL' ? 'B' : type === 'CUBE_PORTAL' ? 'C' : 'W';
+  const fillColor =
+    type === 'SHIP_PORTAL'
+      ? '#ffb44a'
+      : type === 'BALL_PORTAL'
+        ? '#ffd95e'
+        : type === 'CUBE_PORTAL'
+          ? '#b3ff5e'
+          : '#5ee7ff';
+  const outerGradient = context.createLinearGradient(x, y, x, y + h);
+  outerGradient.addColorStop(0, 'rgba(15, 23, 54, 0.92)');
+  outerGradient.addColorStop(1, 'rgba(7, 12, 30, 0.98)');
+  roundedRectPath(context, x, y, w, h, Math.min(w, h) * 0.22);
+  context.fillStyle = outerGradient;
+  context.fill();
+
+  const coreGradient = context.createLinearGradient(x, y, x, y + h);
+  coreGradient.addColorStop(0, lightenColor(fillColor, 0.22));
+  coreGradient.addColorStop(0.58, fillColor);
+  coreGradient.addColorStop(1, darkenColor(fillColor, 0.22));
+  roundedRectPath(context, x + w * 0.19, y + h * 0.12, w * 0.62, h * 0.76, Math.min(w, h) * 0.18);
+  context.fillStyle = coreGradient;
+  context.fill();
+
+  context.strokeStyle = 'rgba(255,255,255,0.92)';
+  context.lineWidth = 2;
+  roundedRectPath(context, x + w * 0.19, y + h * 0.12, w * 0.62, h * 0.76, Math.min(w, h) * 0.18);
+  context.stroke();
+
+  context.fillStyle = 'rgba(255,255,255,0.18)';
+  roundedRectPath(context, x + w * 0.26, y + h * 0.18, w * 0.48, h * 0.16, Math.min(w, h) * 0.08);
+  context.fill();
+
+  context.fillStyle = '#fffdf5';
+  context.strokeStyle = '#132339';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.lineJoin = 'round';
+  context.font = `${Math.max(8, Math.min(w, h) * 0.26)}px Arial Black`;
+  context.lineWidth = Math.max(2.5, Math.min(w, h) * 0.09);
+  context.strokeText(portalCode, x + w / 2, y + h * 0.56);
+  context.fillText(portalCode, x + w / 2, y + h * 0.56);
+
+  if (isActive) {
+    context.strokeStyle = 'rgba(255,255,255,0.48)';
+    context.lineWidth = 1.5;
+    roundedRectPath(context, x + w * 0.12, y + h * 0.08, w * 0.76, h * 0.84, Math.min(w, h) * 0.18);
+    context.stroke();
+  }
+}
+
 function drawPortalGlyph(
   context: CanvasRenderingContext2D,
   type: LevelData['objects'][number]['type'],
@@ -894,113 +966,145 @@ function drawTriggerSprite(
   fillColor: string,
   strokeColor: string,
   isActive: boolean,
+  editorGuideTop?: number,
+  editorGuideBottom?: number,
 ) {
   const type = object.type;
-  const radius = Math.min(w, h) * 0.22;
-  const frameGradient = context.createLinearGradient(x, y, x, y + h);
-  frameGradient.addColorStop(0, lightenColor(fillColor, 0.18));
-  frameGradient.addColorStop(1, darkenColor(fillColor, 0.3));
-  roundedRectPath(context, x, y, w, h, radius);
-  context.fillStyle = frameGradient;
-  context.fill();
+  const activationMode = getTriggerActivationMode(object.props.activationMode);
+  const hasGuideBounds = hasFiniteGuideBounds(editorGuideTop, editorGuideBottom);
 
-  context.lineWidth = 2;
-  context.strokeStyle = strokeColor;
-  roundedRectPath(context, x + 1.5, y + 1.5, Math.max(0, w - 3), Math.max(0, h - 3), Math.max(0, radius - 1));
-  context.stroke();
+  if (hasGuideBounds) {
+    const centerX = x + w / 2;
+    const centerY = y + h / 2;
+    const badgeRadius = Math.max(10, Math.min(w, h) * 0.38);
+    const badgeGradient = context.createLinearGradient(centerX, centerY - badgeRadius, centerX, centerY + badgeRadius);
+    const labelLines = getTriggerEditorLabelLines(object);
+    const labelBottomY = y - Math.max(8, h * 0.16);
+    const badgeValue = getTriggerEditorValue(object);
 
-  context.strokeStyle = isActive ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.4)';
-  context.lineWidth = 1.6;
-  roundedRectPath(context, x + w * 0.12, y + h * 0.12, w * 0.76, h * 0.76, Math.min(w, h) * 0.16);
-  context.stroke();
+    badgeGradient.addColorStop(0, lightenColor(fillColor, 0.22));
+    badgeGradient.addColorStop(0.52, fillColor);
+    badgeGradient.addColorStop(1, darkenColor(fillColor, 0.22));
 
-  context.fillStyle = 'rgba(255,255,255,0.15)';
-  roundedRectPath(context, x + w * 0.18, y + h * 0.18, w * 0.64, h * 0.18, Math.min(w, h) * 0.08);
-  context.fill();
-
-  if (type === 'POST_FX_TRIGGER') {
-    const activationMode = object.props.activationMode === 'zone' ? 'zone' : 'touch';
-    context.strokeStyle = activationMode === 'zone' ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.64)';
-    context.lineWidth = activationMode === 'zone' ? 1.4 : 2.1;
     if (activationMode === 'zone') {
-      context.setLineDash([5, 4]);
-      roundedRectPath(context, x + w * 0.08, y + h * 0.08, w * 0.84, h * 0.84, Math.min(w, h) * 0.14);
-      context.stroke();
-      context.setLineDash([]);
-    } else {
-      context.beginPath();
-      context.arc(x + w / 2, y + h / 2, Math.min(w, h) * 0.14, 0, Math.PI * 2);
-      context.stroke();
+      drawEditorGuideLine(context, centerX, editorGuideTop!, editorGuideBottom!, fillColor, strokeColor);
     }
 
-    const effectType =
-      typeof object.props.effectType === 'string' && object.props.effectType.trim().length > 0
-        ? object.props.effectType.trim().toLowerCase()
-        : 'flash';
-    const label =
-      effectType === 'grayscale'
-        ? 'BW'
-        : effectType === 'invert'
-          ? 'INV'
-          : effectType === 'scanlines'
-            ? 'SCAN'
-            : effectType === 'blur'
-              ? 'BLR'
-              : effectType === 'shake'
-                ? 'SHAKE'
-                : effectType === 'tint'
-                  ? 'TINT'
-                  : 'FLASH';
+    drawArcadeHelperLabel(context, labelLines, centerX, labelBottomY, Math.max(14, Math.min(w, h) * 0.34));
 
-    context.fillStyle = 'rgba(255,255,255,0.88)';
-    context.font = `${Math.max(8, Math.min(w, h) * 0.18)}px Arial Black`;
+    context.fillStyle = 'rgba(20, 11, 34, 0.34)';
+    context.beginPath();
+    context.arc(centerX, centerY + badgeRadius * 0.12, badgeRadius * 1.14, 0, Math.PI * 2);
+    context.fill();
+
+    context.fillStyle = '#fffdf5';
+    context.beginPath();
+    context.arc(centerX, centerY, badgeRadius * 1.1, 0, Math.PI * 2);
+    context.fill();
+
+    context.fillStyle = '#120d19';
+    context.beginPath();
+    context.arc(centerX, centerY, badgeRadius, 0, Math.PI * 2);
+    context.fill();
+
+    context.fillStyle = badgeGradient;
+    context.beginPath();
+    context.arc(centerX, centerY, badgeRadius * 0.84, 0, Math.PI * 2);
+    context.fill();
+
+    context.fillStyle = 'rgba(255,255,255,0.24)';
+    context.beginPath();
+    context.ellipse(centerX, centerY - badgeRadius * 0.28, badgeRadius * 0.48, badgeRadius * 0.22, 0, 0, Math.PI * 2);
+    context.fill();
+
+    if (activationMode === 'touch') {
+      context.save();
+      context.strokeStyle = 'rgba(255,255,255,0.9)';
+      context.lineWidth = Math.max(1.2, badgeRadius * 0.16);
+      context.setLineDash([badgeRadius * 0.16, badgeRadius * 0.12]);
+      context.beginPath();
+      context.arc(centerX, centerY, badgeRadius * 0.58, 0, Math.PI * 2);
+      context.stroke();
+      context.restore();
+    }
+
+    context.fillStyle = '#fffdf5';
+    context.strokeStyle = '#120d19';
+    context.lineJoin = 'round';
     context.textAlign = 'center';
     context.textBaseline = 'middle';
-    context.fillText(label, x + w / 2, y + h * 0.56);
+    context.font = `${Math.max(12, badgeRadius * 0.9)}px Arial Black`;
+    context.lineWidth = Math.max(3, badgeRadius * 0.24);
+    context.strokeText(badgeValue, centerX, centerY + badgeRadius * 0.04);
+    context.fillText(badgeValue, centerX, centerY + badgeRadius * 0.04);
     return;
   }
-
-  context.strokeStyle = 'rgba(255,255,255,0.92)';
-  context.lineWidth = 2.2;
-  context.beginPath();
-
-  const centerX = x + w / 2;
-  const centerY = y + h / 2;
-
-  if (type === 'MOVE_TRIGGER') {
-    drawChevronOutline(context, centerX - w * 0.1, centerY, w * 0.16, h * 0.16);
-    drawChevronOutline(context, centerX + w * 0.1, centerY, w * 0.16, h * 0.16);
-    context.moveTo(centerX - w * 0.18, centerY);
-    context.lineTo(centerX + w * 0.18, centerY);
-  } else if (type === 'ALPHA_TRIGGER') {
-    context.arc(centerX, centerY, Math.min(w, h) * 0.16, 0, Math.PI * 2);
-    context.moveTo(centerX, centerY - h * 0.2);
-    context.lineTo(centerX, centerY + h * 0.2);
-  } else if (type === 'TOGGLE_TRIGGER') {
-    context.moveTo(centerX - w * 0.16, centerY);
-    context.lineTo(centerX - w * 0.02, centerY + h * 0.14);
-    context.lineTo(centerX + w * 0.18, centerY - h * 0.12);
-  } else if (type === 'PULSE_TRIGGER') {
-    context.moveTo(centerX - w * 0.2, centerY + h * 0.02);
-    context.lineTo(centerX - w * 0.08, centerY - h * 0.08);
-    context.lineTo(centerX, centerY + h * 0.08);
-    context.lineTo(centerX + w * 0.08, centerY - h * 0.12);
-    context.lineTo(centerX + w * 0.2, centerY);
-  }
-
-  context.stroke();
+  drawCompactTriggerPreviewSprite(context, object, x, y, w, h, fillColor, activationMode, isActive);
 }
 
 function drawStartMarkerSprite(
   context: CanvasRenderingContext2D,
+  type: 'START_MARKER' | 'START_POS',
   x: number,
   y: number,
   w: number,
   h: number,
   fillColor: string,
   strokeColor: string,
-  isPreviewStart = false,
+  editorGuideTop?: number,
+  editorGuideBottom?: number,
 ) {
+  const hasGuideBounds = hasFiniteGuideBounds(editorGuideTop, editorGuideBottom);
+
+  if (hasGuideBounds) {
+    const centerX = x + w / 2;
+    const centerY = y + h / 2;
+    const labelCenterX = type === 'START_POS' ? x + w * 1.42 : centerX;
+    const labelBottomY = type === 'START_POS' ? centerY - h * 0.08 : y - Math.max(8, h * 0.16);
+    const labelLines = type === 'START_POS' ? ['START', 'POS'] : ['START'];
+
+    drawEditorGuideLine(context, centerX, editorGuideTop!, editorGuideBottom!, fillColor, strokeColor);
+    drawArcadeHelperLabel(context, labelLines, labelCenterX, labelBottomY, Math.max(14, Math.min(w, h) * 0.34));
+
+    if (type === 'START_POS') {
+      return;
+    }
+
+    const badgeRadius = Math.max(10, Math.min(w, h) * 0.34);
+    context.fillStyle = '#fffdf5';
+    context.beginPath();
+    context.arc(centerX, centerY, badgeRadius * 1.06, 0, Math.PI * 2);
+    context.fill();
+
+    context.fillStyle = '#120d19';
+    context.beginPath();
+    context.arc(centerX, centerY, badgeRadius * 0.94, 0, Math.PI * 2);
+    context.fill();
+
+    const badgeGradient = context.createLinearGradient(centerX, centerY - badgeRadius, centerX, centerY + badgeRadius);
+    badgeGradient.addColorStop(0, lightenColor(fillColor, 0.18));
+    badgeGradient.addColorStop(0.55, fillColor);
+    badgeGradient.addColorStop(1, darkenColor(fillColor, 0.2));
+    context.fillStyle = badgeGradient;
+    context.beginPath();
+    context.arc(centerX, centerY, badgeRadius * 0.78, 0, Math.PI * 2);
+    context.fill();
+
+    context.fillStyle = 'rgba(255,255,255,0.18)';
+    context.beginPath();
+    context.ellipse(centerX, centerY - badgeRadius * 0.24, badgeRadius * 0.44, badgeRadius * 0.18, 0, 0, Math.PI * 2);
+    context.fill();
+
+    context.fillStyle = '#fffdf5';
+    context.beginPath();
+    context.moveTo(centerX - badgeRadius * 0.24, centerY - badgeRadius * 0.3);
+    context.lineTo(centerX + badgeRadius * 0.32, centerY);
+    context.lineTo(centerX - badgeRadius * 0.24, centerY + badgeRadius * 0.3);
+    context.closePath();
+    context.fill();
+    return;
+  }
+
   const gradient = context.createLinearGradient(x, y, x, y + h);
   gradient.addColorStop(0, lightenColor(fillColor, 0.2));
   gradient.addColorStop(1, darkenColor(fillColor, 0.2));
@@ -1011,7 +1115,7 @@ function drawStartMarkerSprite(
   context.strokeRect(x + 1, y + 1, Math.max(0, w - 2), Math.max(0, h - 2));
   context.fillStyle = 'rgba(255,255,255,0.18)';
   context.beginPath();
-  if (isPreviewStart) {
+  if (type === 'START_POS') {
     context.moveTo(x + w * 0.24, y + h * 0.24);
     context.lineTo(x + w * 0.74, y + h * 0.24);
     context.lineTo(x + w * 0.74, y + h * 0.76);
@@ -1061,6 +1165,139 @@ function drawChevronOutline(
   context.lineTo(centerX - width / 2, centerY + height / 2);
 }
 
+function drawCompactTriggerPreviewSprite(
+  context: CanvasRenderingContext2D,
+  object: Pick<LevelData['objects'][number], 'type' | 'props'>,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  fillColor: string,
+  activationMode: TriggerActivationMode,
+  isActive: boolean,
+) {
+  const centerX = x + w / 2;
+  const badgeCenterY = y + h * 0.64;
+  const badgeRadius = Math.max(7, Math.min(w, h) * 0.24);
+  const label = getTriggerCompactPreviewLabel(object);
+  const labelFontSize = Math.max(7, Math.min(9.5, Math.min(w, h) * 0.22));
+  const badgeGradient = context.createLinearGradient(centerX, badgeCenterY - badgeRadius, centerX, badgeCenterY + badgeRadius);
+
+  badgeGradient.addColorStop(0, lightenColor(fillColor, 0.22));
+  badgeGradient.addColorStop(0.52, fillColor);
+  badgeGradient.addColorStop(1, darkenColor(fillColor, 0.24));
+
+  context.fillStyle = 'rgba(16, 11, 28, 0.3)';
+  context.beginPath();
+  context.arc(centerX, badgeCenterY + badgeRadius * 0.12, badgeRadius * 1.14, 0, Math.PI * 2);
+  context.fill();
+
+  context.fillStyle = '#fffdf5';
+  context.beginPath();
+  context.arc(centerX, badgeCenterY, badgeRadius * 1.1, 0, Math.PI * 2);
+  context.fill();
+
+  context.fillStyle = '#120d19';
+  context.beginPath();
+  context.arc(centerX, badgeCenterY, badgeRadius, 0, Math.PI * 2);
+  context.fill();
+
+  context.fillStyle = badgeGradient;
+  context.beginPath();
+  context.arc(centerX, badgeCenterY, badgeRadius * 0.84, 0, Math.PI * 2);
+  context.fill();
+
+  context.fillStyle = 'rgba(255,255,255,0.24)';
+  context.beginPath();
+  context.ellipse(centerX, badgeCenterY - badgeRadius * 0.28, badgeRadius * 0.46, badgeRadius * 0.2, 0, 0, Math.PI * 2);
+  context.fill();
+
+  if (activationMode === 'touch') {
+    context.save();
+    context.strokeStyle = 'rgba(255,255,255,0.9)';
+    context.lineWidth = Math.max(1, badgeRadius * 0.16);
+    context.setLineDash([badgeRadius * 0.16, badgeRadius * 0.12]);
+    context.beginPath();
+    context.arc(centerX, badgeCenterY, badgeRadius * 0.58, 0, Math.PI * 2);
+    context.stroke();
+    context.restore();
+  }
+
+  drawCompactTriggerPreviewGlyph(context, object.type, centerX, badgeCenterY, badgeRadius);
+
+  context.fillStyle = '#fffdf5';
+  context.strokeStyle = '#120d19';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.lineJoin = 'round';
+  context.font = `${labelFontSize}px Arial Black`;
+  context.lineWidth = Math.max(2, labelFontSize * 0.28);
+  context.strokeText(label, centerX, y + h * 0.18);
+  context.fillText(label, centerX, y + h * 0.18);
+
+  if (isActive) {
+    context.strokeStyle = 'rgba(255,255,255,0.42)';
+    context.lineWidth = 1.25;
+    context.beginPath();
+    context.arc(centerX, badgeCenterY, badgeRadius * 1.22, 0, Math.PI * 2);
+    context.stroke();
+  }
+}
+
+function drawCompactTriggerPreviewGlyph(
+  context: CanvasRenderingContext2D,
+  type: LevelData['objects'][number]['type'],
+  centerX: number,
+  centerY: number,
+  radius: number,
+) {
+  context.save();
+  context.strokeStyle = '#fffdf5';
+  context.fillStyle = '#fffdf5';
+  context.lineCap = 'round';
+  context.lineJoin = 'round';
+  context.lineWidth = Math.max(1.35, radius * 0.18);
+
+  if (type === 'POST_FX_TRIGGER') {
+    context.strokeStyle = '#120d19';
+    context.fillStyle = '#fffdf5';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.font = `${Math.max(6.5, radius * 0.72)}px Arial Black`;
+    context.lineWidth = Math.max(1.8, radius * 0.18);
+    context.strokeText('FX', centerX, centerY + radius * 0.04);
+    context.fillText('FX', centerX, centerY + radius * 0.04);
+    context.restore();
+    return;
+  }
+
+  context.beginPath();
+
+  if (type === 'MOVE_TRIGGER') {
+    drawChevronOutline(context, centerX - radius * 0.32, centerY, radius * 0.48, radius * 0.42);
+    drawChevronOutline(context, centerX + radius * 0.28, centerY, radius * 0.48, radius * 0.42);
+    context.moveTo(centerX - radius * 0.52, centerY);
+    context.lineTo(centerX + radius * 0.52, centerY);
+  } else if (type === 'ALPHA_TRIGGER') {
+    context.arc(centerX, centerY, radius * 0.4, 0, Math.PI * 2);
+    context.moveTo(centerX, centerY - radius * 0.58);
+    context.lineTo(centerX, centerY + radius * 0.58);
+  } else if (type === 'TOGGLE_TRIGGER') {
+    context.moveTo(centerX - radius * 0.5, centerY);
+    context.lineTo(centerX - radius * 0.16, centerY + radius * 0.34);
+    context.lineTo(centerX + radius * 0.56, centerY - radius * 0.4);
+  } else if (type === 'PULSE_TRIGGER') {
+    context.moveTo(centerX - radius * 0.62, centerY + radius * 0.06);
+    context.lineTo(centerX - radius * 0.28, centerY - radius * 0.26);
+    context.lineTo(centerX, centerY + radius * 0.22);
+    context.lineTo(centerX + radius * 0.22, centerY - radius * 0.36);
+    context.lineTo(centerX + radius * 0.58, centerY);
+  }
+
+  context.stroke();
+  context.restore();
+}
+
 function roundedRectPath(
   context: CanvasRenderingContext2D,
   x: number,
@@ -1081,6 +1318,141 @@ function roundedRectPath(
   context.lineTo(x, y + safeRadius);
   context.quadraticCurveTo(x, y, x + safeRadius, y);
   context.closePath();
+}
+
+function getTriggerActivationMode(value: unknown): TriggerActivationMode {
+  return value === 'touch' ? 'touch' : 'zone';
+}
+
+function hasFiniteGuideBounds(top?: number, bottom?: number) {
+  return Number.isFinite(top) && Number.isFinite(bottom) && Number(bottom) > Number(top);
+}
+
+function drawEditorGuideLine(
+  context: CanvasRenderingContext2D,
+  centerX: number,
+  top: number,
+  bottom: number,
+  fillColor: string,
+  strokeColor: string,
+) {
+  context.save();
+  context.lineCap = 'round';
+  context.strokeStyle = toRgba(lightenColor(strokeColor, 0.16), 0.24);
+  context.lineWidth = 3.8;
+  context.beginPath();
+  context.moveTo(centerX, top);
+  context.lineTo(centerX, bottom);
+  context.stroke();
+
+  context.strokeStyle = toRgba(fillColor, 0.96);
+  context.shadowColor = toRgba(fillColor, 0.34);
+  context.shadowBlur = 6;
+  context.lineWidth = 1.35;
+  context.beginPath();
+  context.moveTo(centerX, top);
+  context.lineTo(centerX, bottom);
+  context.stroke();
+  context.restore();
+}
+
+function drawArcadeHelperLabel(
+  context: CanvasRenderingContext2D,
+  lines: string[],
+  centerX: number,
+  bottomY: number,
+  fontSize: number,
+) {
+  if (!lines.length) {
+    return;
+  }
+
+  const safeFontSize = Math.max(10, fontSize);
+  const lineHeight = safeFontSize * 0.9;
+  const firstCenterY = bottomY - lineHeight * (lines.length - 0.5);
+
+  context.save();
+  context.fillStyle = '#fffdf5';
+  context.strokeStyle = '#120d19';
+  context.lineJoin = 'round';
+  context.lineWidth = Math.max(4, safeFontSize * 0.24);
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.font = `${safeFontSize}px Arial Black`;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const textY = firstCenterY + index * lineHeight;
+    context.strokeText(lines[index]!, centerX, textY);
+    context.fillText(lines[index]!, centerX, textY);
+  }
+
+  context.restore();
+}
+
+function getTriggerEditorLabelLines(object: Pick<LevelData['objects'][number], 'type' | 'props'>) {
+  if (object.type === 'MOVE_TRIGGER') {
+    return ['MOVE'];
+  }
+
+  if (object.type === 'ALPHA_TRIGGER') {
+    return ['ALPHA'];
+  }
+
+  if (object.type === 'TOGGLE_TRIGGER') {
+    return ['TOGGLE'];
+  }
+
+  if (object.type === 'PULSE_TRIGGER') {
+    return ['PULSE'];
+  }
+
+  const effectType =
+    typeof object.props.effectType === 'string' && object.props.effectType.trim().length > 0
+      ? object.props.effectType.trim().toLowerCase()
+      : 'post';
+
+  if (effectType === 'scanlines') {
+    return ['SCAN'];
+  }
+
+  if (effectType === 'grayscale') {
+    return ['GRAY'];
+  }
+
+  if (effectType === 'invert') {
+    return ['INVERT'];
+  }
+
+  if (effectType === 'shake') {
+    return ['SHAKE'];
+  }
+
+  if (effectType === 'blur') {
+    return ['BLUR'];
+  }
+
+  if (effectType === 'tint') {
+    return ['TINT'];
+  }
+
+  return ['FLASH'];
+}
+
+function getTriggerEditorValue(object: Pick<LevelData['objects'][number], 'type' | 'props'>) {
+  if (object.type === 'POST_FX_TRIGGER') {
+    return 'FX';
+  }
+
+  const groupId = Number(object.props.groupId ?? object.props.paintGroupId ?? 0);
+  if (!Number.isFinite(groupId)) {
+    return '0';
+  }
+
+  return String(Math.max(0, Math.round(groupId))).slice(0, 3);
+}
+
+function getTriggerCompactPreviewLabel(object: Pick<LevelData['objects'][number], 'type' | 'props'>) {
+  return getTriggerEditorLabelLines(object)[0] ?? 'TRG';
 }
 
 function lightenColor(hex: string, amount: number) {

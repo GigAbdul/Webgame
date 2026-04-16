@@ -374,7 +374,7 @@ export const levelObjectDefinitions: Record<
     label: 'Post FX Trigger',
     color: '#8d9cff',
     strokeColor: '#ffffff',
-    defaultSize: { w: 1.5, h: 1.5 },
+    defaultSize: { w: 1, h: 1 },
     collides: false,
     lethal: false,
     effect: 'postFxTrigger',
@@ -428,18 +428,6 @@ export const sawObjectTypes = [
   'SAW_GLOW_MEDIUM',
   'SAW_GLOW_LARGE',
 ] as const satisfies readonly LevelObjectType[];
-const paintableObjectTypes = new Set<LevelObjectType>([
-  'GROUND_BLOCK',
-  'HALF_GROUND_BLOCK',
-  'PLATFORM_BLOCK',
-  'HALF_PLATFORM_BLOCK',
-  'ARROW_RAMP_ASC',
-  'ARROW_RAMP_DESC',
-  'DECORATION_BLOCK',
-  ...spikeObjectTypes,
-  ...sawObjectTypes,
-]);
-
 const triggerObjectTypes = new Set<LevelObjectType>([
   'MOVE_TRIGGER',
   'ALPHA_TRIGGER',
@@ -447,12 +435,20 @@ const triggerObjectTypes = new Set<LevelObjectType>([
   'PULSE_TRIGGER',
   'POST_FX_TRIGGER',
 ]);
+const nonPaintableObjectTypes = new Set<LevelObjectType>([
+  ...triggerObjectTypes,
+  'START_MARKER',
+  'START_POS',
+]);
 const legacyRunAnchorObjectTypes = new Set<LevelObjectType>(['START_MARKER', 'FINISH_PORTAL']);
 const autoFinishIgnoredObjectTypes = new Set<LevelObjectType>(['START_MARKER', 'FINISH_PORTAL', 'START_POS']);
 const JUMP_PAD_LEGACY_TOP_ALIGN_EPSILON = 0.001;
+export const SPIKE_HITBOX_NARROW_FACTOR = 0.17;
+export const SPIKE_HITBOX_LONG_FACTOR = 0.5;
+export const SPIKE_HITBOX_TIP_INSET_FACTOR = 0.28;
 
 export function isPaintableObjectType(type: LevelObjectType) {
-  return paintableObjectTypes.has(type);
+  return !nonPaintableObjectTypes.has(type);
 }
 
 export function isSpikeObjectType(type: LevelObjectType): type is (typeof spikeObjectTypes)[number] {
@@ -471,6 +467,53 @@ export function isLegacyRunAnchorObjectType(type: LevelObjectType) {
   return legacyRunAnchorObjectTypes.has(type);
 }
 
+export function getSpikeHitboxRect(object: Pick<LevelObject, 'x' | 'y' | 'w' | 'h' | 'rotation'>) {
+  const normalizedRotation = normalizeQuarterRotation(object.rotation ?? 0);
+  const crossInsetFactor = (1 - SPIKE_HITBOX_NARROW_FACTOR) / 2;
+  const tipInsetFactor = SPIKE_HITBOX_TIP_INSET_FACTOR;
+  const longFactor = SPIKE_HITBOX_LONG_FACTOR;
+  const narrowFactor = SPIKE_HITBOX_NARROW_FACTOR;
+
+  if (normalizedRotation === 90) {
+    return {
+      x: object.x + object.w * tipInsetFactor,
+      y: object.y + object.h * crossInsetFactor,
+      w: object.w * longFactor,
+      h: object.h * narrowFactor,
+    };
+  }
+
+  if (normalizedRotation === 180) {
+    return {
+      x: object.x + object.w * crossInsetFactor,
+      y: object.y + object.h * (1 - tipInsetFactor - longFactor),
+      w: object.w * narrowFactor,
+      h: object.h * longFactor,
+    };
+  }
+
+  if (normalizedRotation === 270) {
+    return {
+      x: object.x + object.w * (1 - tipInsetFactor - longFactor),
+      y: object.y + object.h * crossInsetFactor,
+      w: object.w * longFactor,
+      h: object.h * narrowFactor,
+    };
+  }
+
+  return {
+    x: object.x + object.w * crossInsetFactor,
+    y: object.y + object.h * tipInsetFactor,
+    w: object.w * narrowFactor,
+    h: object.h * longFactor,
+  };
+}
+
+function normalizeQuarterRotation(value: number) {
+  const normalized = ((Math.round(value / 90) * 90) % 360 + 360) % 360;
+  return normalized === 360 ? 0 : normalized;
+}
+
 function normalizeObjectPlacement(object: LevelObject) {
   if (
     object.type === 'JUMP_PAD' &&
@@ -479,6 +522,20 @@ function normalizeObjectPlacement(object: LevelObject) {
     return {
       ...object,
       y: object.y + 0.5,
+    };
+  }
+
+  if (
+    object.type === 'POST_FX_TRIGGER' &&
+    Math.abs(object.w - 1.5) <= 0.001 &&
+    Math.abs(object.h - 1.5) <= 0.001
+  ) {
+    return {
+      ...object,
+      x: object.x + 0.25,
+      y: object.y + 0.25,
+      w: 1,
+      h: 1,
     };
   }
 

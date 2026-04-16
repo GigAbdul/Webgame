@@ -1,6 +1,6 @@
 import type { ChangeEvent, CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Level, LevelData, LevelObject, LevelObjectType } from '../../types/models';
+import type { Level, LevelColorGroup, LevelData, LevelObject, LevelObjectType } from '../../types/models';
 import { Badge, Button, FieldLabel, Input, Panel, Select, Textarea } from '../../components/ui';
 import { BASE_HORIZONTAL_SPEED, GameCanvas, buildPreviewBootstrap } from '../game/game-canvas';
 import {
@@ -12,6 +12,7 @@ import {
   getColorGroupById,
   getObjectFillColor,
   getObjectPaintGroupId,
+  getSpikeHitboxRect,
   getObjectStrokeColor,
   isPaintableObjectType,
   isSpikeObjectType,
@@ -21,7 +22,8 @@ import {
   levelObjectDefinitions,
 } from '../game/object-definitions';
 import { readStoredMusicVolume, resolveLevelMusic } from '../game/level-music';
-import { drawStageObjectSprite } from '../game/object-renderer';
+import { drawStageObjectSprite, getStageObjectPreviewSpriteImage } from '../game/object-renderer';
+import { getPlayerHitboxLayout } from '../game/player-physics';
 import { SHIP_FLIGHT_CEILING_Y, SHIP_FLIGHT_FLOOR_Y, getPlayerModeLabel } from '../game/player-mode-config';
 import { getDefaultStageGroundColor, getStageGroundPalette, getStageThemePalette } from '../game/stage-theme-palette';
 import { readLocalEditorDraft, writeLocalEditorDraft } from './local-draft-storage';
@@ -32,7 +34,8 @@ type PlacementMode = 'single' | 'drag';
 type EditorLayerId = 1 | 2;
 type EditorWorkspaceMode = 'build' | 'edit';
 type PostFxEffectType = 'flash' | 'grayscale' | 'invert' | 'scanlines' | 'blur' | 'shake' | 'tint';
-type PostFxActivationMode = 'touch' | 'zone';
+type TriggerActivationMode = 'touch' | 'zone';
+type MoveTriggerEasing = 'none' | 'easeIn' | 'easeOut' | 'easeInOut';
 
 type LevelEditorProps = {
   initialLevel?: Level | null;
@@ -103,6 +106,33 @@ type TouchGestureState = {
   startCenterX: number;
   startCenterY: number;
 };
+
+type PaintHsvState = {
+  hue: number;
+  saturation: number;
+  brightness: number;
+};
+
+function getTriggerSetupTitle(type: LevelObjectType) {
+  switch (type) {
+    case 'MOVE_TRIGGER':
+      return 'Setup Move Command';
+    case 'ALPHA_TRIGGER':
+      return 'Setup Alpha Trigger';
+    case 'TOGGLE_TRIGGER':
+      return 'Setup Toggle Trigger';
+    case 'PULSE_TRIGGER':
+      return 'Setup Pulse Trigger';
+    case 'POST_FX_TRIGGER':
+      return 'Setup Post FX Trigger';
+    default:
+      return 'Trigger Setup';
+  }
+}
+
+function getDefaultTriggerDurationMs(type: LevelObjectType) {
+  return type === 'MOVE_TRIGGER' ? 650 : 900;
+}
 
 function EditorStageBackIcon() {
   return (
@@ -254,10 +284,36 @@ const postFxEffectOptions: Array<{ value: PostFxEffectType; label: string }> = [
   { value: 'tint', label: 'Tint Wash' },
 ];
 
-const postFxActivationModeOptions: Array<{ value: PostFxActivationMode; label: string }> = [
-  { value: 'touch', label: 'Touch Trigger' },
-  { value: 'zone', label: 'Zone Trigger' },
+const triggerActivationModeOptions: Array<{ value: TriggerActivationMode; label: string }> = [
+  { value: 'zone', label: 'Cross Line' },
+  { value: 'touch', label: 'Touch Object' },
 ];
+
+const moveTriggerEasingOptions: Array<{ value: MoveTriggerEasing; label: string }> = [
+  { value: 'none', label: 'None' },
+  { value: 'easeIn', label: 'Ease In' },
+  { value: 'easeOut', label: 'Ease Out' },
+  { value: 'easeInOut', label: 'Ease In Out' },
+];
+
+const editorSolidHitboxTypes = new Set<LevelObjectType>([
+  'GROUND_BLOCK',
+  'HALF_GROUND_BLOCK',
+  'PLATFORM_BLOCK',
+  'HALF_PLATFORM_BLOCK',
+]);
+
+const editorOrbHitboxTypes = new Set<LevelObjectType>(['JUMP_ORB', 'BLUE_ORB', 'GRAVITY_ORB']);
+
+const editorPortalHitboxTypes = new Set<LevelObjectType>([
+  'GRAVITY_PORTAL',
+  'SPEED_PORTAL',
+  'SHIP_PORTAL',
+  'BALL_PORTAL',
+  'CUBE_PORTAL',
+  'ARROW_PORTAL',
+  'FINISH_PORTAL',
+]);
 
 const paletteGroups: Array<{ title: string; items: EditorTool[] }> = [
   { title: 'Controls', items: ['select', 'pan'] },
@@ -489,6 +545,108 @@ function getEditorColorInputValue(value: string, fallback: string) {
   return isHexColor(value) ? value : fallback;
 }
 
+function parseEditorHexColor(value: string) {
+  const normalized = value.trim().replace('#', '');
+
+  if (!/^[0-9a-f]{6}$/i.test(normalized)) {
+    return null;
+  }
+
+  return {
+    r: Number.parseInt(normalized.slice(0, 2), 16),
+    g: Number.parseInt(normalized.slice(2, 4), 16),
+    b: Number.parseInt(normalized.slice(4, 6), 16),
+  };
+}
+
+function toEditorHexColor(color: { r: number; g: number; b: number }) {
+  return `#${[color.r, color.g, color.b]
+    .map((channel) => Math.round(clamp(channel, 0, 255)).toString(16).padStart(2, '0'))
+    .join('')}`;
+}
+
+function rgbToHsv(color: { r: number; g: number; b: number }) {
+  const r = color.r / 255;
+  const g = color.g / 255;
+  const b = color.b / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const delta = max - min;
+  let hue = 0;
+
+  if (delta > 0) {
+    if (max === r) {
+      hue = 60 * (((g - b) / delta) % 6);
+    } else if (max === g) {
+      hue = 60 * ((b - r) / delta + 2);
+    } else {
+      hue = 60 * ((r - g) / delta + 4);
+    }
+  }
+
+  return {
+    h: (hue + 360) % 360,
+    s: max === 0 ? 0 : delta / max,
+    v: max,
+  };
+}
+
+function hsvToRgb(color: { h: number; s: number; v: number }) {
+  const hue = ((color.h % 360) + 360) % 360;
+  const saturation = clamp(color.s, 0, 2);
+  const value = clamp(color.v, 0, 2);
+  const chroma = value * saturation;
+  const segment = hue / 60;
+  const x = chroma * (1 - Math.abs((segment % 2) - 1));
+  let r = 0;
+  let g = 0;
+  let b = 0;
+
+  if (segment >= 0 && segment < 1) {
+    r = chroma;
+    g = x;
+  } else if (segment < 2) {
+    r = x;
+    g = chroma;
+  } else if (segment < 3) {
+    g = chroma;
+    b = x;
+  } else if (segment < 4) {
+    g = x;
+    b = chroma;
+  } else if (segment < 5) {
+    r = x;
+    b = chroma;
+  } else {
+    r = chroma;
+    b = x;
+  }
+
+  const match = value - chroma;
+  return {
+    r: Math.round((r + match) * 255),
+    g: Math.round((g + match) * 255),
+    b: Math.round((b + match) * 255),
+  };
+}
+
+function applyHsvToHex(value: string, hsvState: PaintHsvState) {
+  const parsed = parseEditorHexColor(value);
+
+  if (!parsed) {
+    return value;
+  }
+
+  const base = rgbToHsv(parsed);
+  return toEditorHexColor(
+    hsvToRgb({
+      h: base.h + hsvState.hue,
+      s: base.s * hsvState.saturation,
+      v: base.v * hsvState.brightness,
+    }),
+  );
+}
+
 function isDirectMusicSource(value: string) {
   return (
     value.startsWith('http://') ||
@@ -583,6 +741,8 @@ export function LevelEditor({
   const [inlineTestDeathMarker, setInlineTestDeathMarker] = useState<{ x: number; y: number } | null>(null);
   const [inlineTestPathPoints, setInlineTestPathPoints] = useState<Array<{ x: number; y: number }>>([]);
   const [inlineTestStopSignal, setInlineTestStopSignal] = useState(0);
+  const [inlineTestShowTriggersOnPlayMode, setInlineTestShowTriggersOnPlayMode] = useState(false);
+  const [editorShowHitboxes, setEditorShowHitboxes] = useState(false);
   const [isMusicSyncPreviewActive, setIsMusicSyncPreviewActive] = useState(false);
   const [musicSyncPreviewElapsedMs, setMusicSyncPreviewElapsedMs] = useState(0);
   const [isMobileLayout, setIsMobileLayout] = useState(false);
@@ -591,11 +751,19 @@ export function LevelEditor({
   const [isEditorPauseMenuOpen, setIsEditorPauseMenuOpen] = useState(false);
   const [previewRunSeed, setPreviewRunSeed] = useState(0);
   const [isPaintPopupOpen, setIsPaintPopupOpen] = useState(false);
+  const [isTriggerPopupOpen, setIsTriggerPopupOpen] = useState(false);
+  const [isPaintHsvPopupOpen, setIsPaintHsvPopupOpen] = useState(false);
+  const [paintHsvState, setPaintHsvState] = useState<PaintHsvState>({
+    hue: 0,
+    saturation: 1,
+    brightness: 1,
+  });
   const [activePaintGroupId, setActivePaintGroupId] = useState<number | null>(null);
   const [musicUrlInput, setMusicUrlInput] = useState(() => getInitialMusicUrlInput(initialEditorState.levelData.meta.music));
   const [musicLabelInput, setMusicLabelInput] = useState(initialEditorState.levelData.meta.musicLabel ?? '');
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [message, setMessage] = useState<string>(initialEditorState.restoredFromLocal ? 'Local draft restored.' : '');
+  const paintHsvBaseColorsRef = useRef<{ fillColor: string; strokeColor: string } | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stageFrameRef = useRef<HTMLDivElement | null>(null);
@@ -647,6 +815,7 @@ export function LevelEditor({
     setInlineTestDeathMarker(null);
     setInlineTestPathPoints([]);
     setInlineTestStopSignal(0);
+    setInlineTestShowTriggersOnPlayMode(false);
     if (musicSyncFrameRef.current !== null) {
       window.cancelAnimationFrame(musicSyncFrameRef.current);
       musicSyncFrameRef.current = null;
@@ -662,6 +831,10 @@ export function LevelEditor({
     setIsEditorPauseMenuOpen(false);
     setPreviewRunSeed(0);
     setIsPaintPopupOpen(false);
+    setIsTriggerPopupOpen(false);
+    setIsPaintHsvPopupOpen(false);
+    setPaintHsvState({ hue: 0, saturation: 1, brightness: 1 });
+    paintHsvBaseColorsRef.current = null;
     setActivePaintGroupId(null);
     setMusicUrlInput(getInitialMusicUrlInput(nextEditorState.levelData.meta.music));
     setMusicLabelInput(nextEditorState.levelData.meta.musicLabel ?? '');
@@ -816,10 +989,39 @@ export function LevelEditor({
   const selectedPaintGroupTriggerObject =
     selectedTriggerObject && selectedTriggerObject.type !== 'POST_FX_TRIGGER' ? selectedTriggerObject : null;
   const selectedPaintGroupId = getObjectPaintGroupId(paintableSelectedObject);
+  const selectedPaintFillColor = paintableSelectedObject
+    ? getObjectFillColor(paintableSelectedObject, colorGroups)
+    : '#ffffff';
+  const selectedPaintStrokeColor = paintableSelectedObject
+    ? getObjectStrokeColor(paintableSelectedObject, colorGroups)
+    : '#ffffff';
   const normalizedSelectedRotation = normalizeQuarterRotation(selectedObject?.rotation ?? 0);
   const activePaintTool =
     selectedTool !== 'select' && selectedTool !== 'pan' && isPaintableObjectType(selectedTool) ? selectedTool : null;
-  const canOpenPaintPopup = Boolean(paintableSelectedObjects.length > 0 || activePaintTool || colorGroups.length > 0);
+  const canOpenPaintPopup = Boolean(paintableSelectedObjects.length > 0 || activePaintTool);
+  const canOpenSelectedObjectPaintPopup = paintableSelectedObjects.length > 0;
+  const isSelectedObjectPaintPopupOpen = Boolean(isPaintPopupOpen && paintableSelectedObject);
+  const canOpenTriggerPopup = Boolean(selectedTriggerObject);
+  const isEditObjectPopupOpen = Boolean(isSelectedObjectPaintPopupOpen || isTriggerPopupOpen);
+  const nextFreePaintGroupId = useMemo(() => {
+    const occupiedIds = new Set<number>((levelData.meta.colorGroups ?? []).map((group) => group.id));
+
+    for (const object of levelData.objects) {
+      const groupId = getObjectPaintGroupId(object);
+
+      if (groupId) {
+        occupiedIds.add(groupId);
+      }
+    }
+
+    for (let groupId = 1; groupId <= PAINT_GROUP_SLOT_COUNT; groupId += 1) {
+      if (!occupiedIds.has(groupId)) {
+        return groupId;
+      }
+    }
+
+    return null;
+  }, [levelData.meta.colorGroups, levelData.objects]);
   const placementModeLabel = placementMode === 'drag' ? 'Drag' : 'Single';
   const dragPlacementAvailable = canUseDragPlacementTool(selectedTool);
   const activeEditorLayerLabel = `Layer ${activeEditorLayer}`;
@@ -903,10 +1105,24 @@ export function LevelEditor({
   }, [selectedTool]);
 
   useEffect(() => {
-    if (!paintableSelectedObjects.length && !activePaintTool && colorGroups.length === 0) {
+    if (!paintableSelectedObjects.length && !activePaintTool) {
       setIsPaintPopupOpen(false);
     }
-  }, [activePaintTool, colorGroups.length, paintableSelectedObjects.length]);
+  }, [activePaintTool, paintableSelectedObjects.length]);
+
+  useEffect(() => {
+    if (!isPaintPopupOpen || !paintableSelectedObject) {
+      setIsPaintHsvPopupOpen(false);
+      setPaintHsvState({ hue: 0, saturation: 1, brightness: 1 });
+      paintHsvBaseColorsRef.current = null;
+    }
+  }, [isPaintPopupOpen, paintableSelectedObject]);
+
+  useEffect(() => {
+    if (!selectedTriggerObject) {
+      setIsTriggerPopupOpen(false);
+    }
+  }, [selectedTriggerObject]);
 
   useEffect(() => {
     const availableIds = new Set(levelData.objects.map((object) => object.id));
@@ -1390,14 +1606,74 @@ export function LevelEditor({
         fillColor,
         strokeColor,
         alpha: isInactiveEditorLayer ? 0.35 : 1,
+        editorGuideTop: 0,
+        editorGuideBottom: height,
       });
       context.restore();
+
+      if (editorShowHitboxes) {
+        drawEditorObjectHitbox(
+          context,
+          drawableObject,
+          levelData.player.mode,
+          pan.x,
+          pan.y,
+          cell,
+          height,
+          isInactiveEditorLayer ? 0.42 : 1,
+        );
+      }
 
       if (selectedObjectIdSet.has(drawableObject.id)) {
         context.strokeStyle = drawableObject.id === selectedObjectId ? '#ffffff' : 'rgba(130, 246, 255, 0.86)';
         context.lineWidth = drawableObject.id === selectedObjectId ? 2 : 1.5;
         context.strokeRect(x - 2, y - 2, w + 4, h + 4);
       }
+    }
+
+    const spawnMarkerDefinition = levelObjectDefinitions.START_MARKER;
+    const spawnMarkerObject: LevelObject = {
+      id: 'editor-player-spawn-marker',
+      type: 'START_MARKER',
+      x: levelData.player.startX,
+      y: levelData.player.startY,
+      w: spawnMarkerDefinition.defaultSize.w,
+      h: spawnMarkerDefinition.defaultSize.h,
+      rotation: 0,
+      layer: 'decoration',
+      editorLayer: activeEditorLayer,
+      props: {},
+    };
+    const spawnMarkerScreen = worldToScreen(spawnMarkerObject.x, spawnMarkerObject.y, pan.x, pan.y, cell);
+
+    context.save();
+    context.shadowColor = 'rgba(49, 240, 255, 0.28)';
+    context.shadowBlur = Math.max(10, cell * 0.45);
+    drawStageObjectSprite({
+      context,
+      object: spawnMarkerObject,
+      x: spawnMarkerScreen.x,
+      y: spawnMarkerScreen.y,
+      w: spawnMarkerObject.w * cell,
+      h: spawnMarkerObject.h * cell,
+      fillColor: getObjectFillColor(spawnMarkerObject, colorGroups),
+      strokeColor: getObjectStrokeColor(spawnMarkerObject, colorGroups),
+      alpha: 0.96,
+      editorGuideTop: 0,
+      editorGuideBottom: height,
+    });
+    context.restore();
+
+    if (editorShowHitboxes) {
+      drawEditorPlayerHitbox(
+        context,
+        levelData.player.mode,
+        levelData.player.startX,
+        levelData.player.startY,
+        pan.x,
+        pan.y,
+        cell,
+      );
     }
 
     if (isMusicSyncPreviewActive) {
@@ -1578,17 +1854,17 @@ export function LevelEditor({
     const definition = levelObjectDefinitions[type];
     const triggerDefaults: Record<string, unknown> =
       type === 'MOVE_TRIGGER'
-        ? { groupId: 1, moveX: 2, moveY: 0, durationMs: 650 }
+        ? { activationMode: 'zone', groupId: 1, moveX: 2, moveY: 0, durationMs: 650, easing: 'none' }
         : type === 'ALPHA_TRIGGER'
-          ? { groupId: 1, alpha: 0.35 }
+          ? { activationMode: 'zone', groupId: 1, alpha: 0.35 }
           : type === 'TOGGLE_TRIGGER'
-            ? { groupId: 1, enabled: false }
+            ? { activationMode: 'zone', groupId: 1, enabled: false }
             : type === 'PULSE_TRIGGER'
-              ? { groupId: 1, fillColor: '#ffffff', strokeColor: '#ffffff', durationMs: 900 }
+              ? { activationMode: 'zone', groupId: 1, fillColor: '#ffffff', strokeColor: '#ffffff', durationMs: 900 }
               : type === 'POST_FX_TRIGGER'
                 ? {
                     effectType: 'flash',
-                    activationMode: 'touch',
+                    activationMode: 'zone',
                     durationMs: 900,
                     intensity: 0.75,
                     primaryColor: '#ffffff',
@@ -1888,6 +2164,41 @@ export function LevelEditor({
     });
   };
 
+  const updateSelectedTriggerBooleanProp = (key: string, value: boolean) => {
+    if (!selectedTriggerObject) {
+      return;
+    }
+
+    updateSelectedObject((object) => {
+      object.props = {
+        ...object.props,
+        [key]: value,
+      };
+    });
+  };
+
+  const updateSelectedTriggerDurationSeconds = (rawValue: string) => {
+    const numericValue = Number(rawValue);
+
+    if (!Number.isFinite(numericValue)) {
+      return;
+    }
+
+    updateSelectedTriggerNumericProp('durationMs', String(Math.max(0.01, numericValue) * 1000), { min: 1 });
+  };
+
+  const nudgeSelectedTriggerGroupId = (delta: number) => {
+    if (!selectedPaintGroupTriggerObject) {
+      return;
+    }
+
+    const currentGroupId = Number(selectedPaintGroupTriggerObject.props.groupId ?? 1);
+    updateSelectedTriggerNumericProp('groupId', String(currentGroupId + delta), {
+      min: 1,
+      max: PAINT_GROUP_SLOT_COUNT,
+    });
+  };
+
   const restartPreviewFromMusicOffset = () => {
     launchMusicSyncPreview(true);
   };
@@ -1956,7 +2267,10 @@ export function LevelEditor({
     event.target.value = '';
   };
 
-  const updateSelectedObjectPaint = (field: 'fillColor' | 'strokeColor', value: string) => {
+  const updateSelectedObjectPaintColors = (
+    nextColors: Partial<Pick<LevelColorGroup, 'fillColor' | 'strokeColor'>>,
+    options?: { pushHistory?: boolean },
+  ) => {
     if (!selectedObjectId) {
       return;
     }
@@ -1978,8 +2292,8 @@ export function LevelEditor({
         const nextGroups = currentGroups.filter((group) => group.id !== linkedGroupId);
         nextGroups.push({
           id: linkedGroupId,
-          fillColor: field === 'fillColor' ? value : existingGroup?.fillColor ?? fallbackFillColor,
-          strokeColor: field === 'strokeColor' ? value : existingGroup?.strokeColor ?? fallbackStrokeColor,
+          fillColor: nextColors.fillColor ?? existingGroup?.fillColor ?? fallbackFillColor,
+          strokeColor: nextColors.strokeColor ?? existingGroup?.strokeColor ?? fallbackStrokeColor,
         });
         nextGroups.sort((left, right) => left.id - right.id);
         draft.meta.colorGroups = nextGroups;
@@ -1988,30 +2302,29 @@ export function LevelEditor({
 
       object.props = {
         ...object.props,
-        [field]: value,
+        ...(nextColors.fillColor ? { fillColor: nextColors.fillColor } : {}),
+        ...(nextColors.strokeColor ? { strokeColor: nextColors.strokeColor } : {}),
       };
-    });
+    }, options);
   };
 
-  const resetSelectedObjectPaint = () => {
-    if (!paintableSelectedObjects.length) {
+  const updateSelectedObjectPaint = (
+    field: 'fillColor' | 'strokeColor',
+    value: string,
+    options?: { pushHistory?: boolean },
+  ) => {
+    updateSelectedObjectPaintColors({ [field]: value }, options);
+  };
+
+  const resetSelectedObjectPaintToDefault = () => {
+    if (!paintableSelectedObject) {
       return;
     }
 
-    updateLevelData((draft) => {
-      const selectedIdsSet = new Set(paintableSelectedObjects.map((object) => object.id));
-
-      for (const object of draft.objects) {
-        if (!selectedIdsSet.has(object.id) || !isPaintableObjectType(object.type)) {
-          continue;
-        }
-
-        const nextProps = { ...object.props };
-        delete nextProps.paintGroupId;
-        delete nextProps.fillColor;
-        delete nextProps.strokeColor;
-        object.props = nextProps;
-      }
+    const definition = levelObjectDefinitions[paintableSelectedObject.type];
+    updateSelectedObjectPaintColors({
+      fillColor: definition.color,
+      strokeColor: definition.strokeColor,
     });
   };
 
@@ -2023,17 +2336,16 @@ export function LevelEditor({
     updateLevelData((draft) => {
       const selectedIdsSet = new Set(paintableSelectedObjects.map((object) => object.id));
       const currentGroups = draft.meta.colorGroups ?? [];
-      const anchorObject = paintableSelectedObjects[0];
-      const fillColor = getObjectFillColor(anchorObject, currentGroups);
-      const strokeColor = getObjectStrokeColor(anchorObject, currentGroups);
-      const nextGroups = currentGroups.filter((group) => group.id !== groupId);
-      nextGroups.push({
-        id: groupId,
-        fillColor,
-        strokeColor,
-      });
-      nextGroups.sort((left, right) => left.id - right.id);
-      draft.meta.colorGroups = nextGroups;
+      const existingGroup = currentGroups.find((group) => group.id === groupId);
+
+      if (!existingGroup) {
+        const anchorObject = paintableSelectedObjects[0];
+        const fillColor = getObjectFillColor(anchorObject, currentGroups);
+        const strokeColor = getObjectStrokeColor(anchorObject, currentGroups);
+        const nextGroups = [...currentGroups, { id: groupId, fillColor, strokeColor }];
+        nextGroups.sort((left, right) => left.id - right.id);
+        draft.meta.colorGroups = nextGroups;
+      }
 
       for (const object of draft.objects) {
         if (!selectedIdsSet.has(object.id) || !isPaintableObjectType(object.type)) {
@@ -2077,6 +2389,116 @@ export function LevelEditor({
     });
   };
 
+  const assignSelectedObjectToNextFreePaintGroup = () => {
+    if (!paintableSelectedObjects.length) {
+      return;
+    }
+
+    if (!nextFreePaintGroupId) {
+      setMessage('No free color groups are available right now.');
+      return;
+    }
+
+    assignSelectedObjectToPaintGroup(nextFreePaintGroupId);
+  };
+
+  const toggleEditObjectPopup = () => {
+    setEditorWorkspaceMode('edit');
+    setSelectedTool('select');
+
+    if (selectedTriggerObject) {
+      setIsPaintPopupOpen(false);
+      setIsPaintHsvPopupOpen(false);
+      setIsTriggerPopupOpen((current) => !current);
+      return;
+    }
+
+    if (!canOpenSelectedObjectPaintPopup) {
+      return;
+    }
+
+    setIsTriggerPopupOpen(false);
+    setIsPaintPopupOpen((current) => (current && paintableSelectedObject ? false : true));
+  };
+
+  const openSelectedObjectPaintHsv = () => {
+    if (!paintableSelectedObject) {
+      return;
+    }
+
+    paintHsvBaseColorsRef.current = {
+      fillColor: selectedPaintFillColor,
+      strokeColor: selectedPaintStrokeColor,
+    };
+    setPaintHsvState({
+      hue: 0,
+      saturation: 1,
+      brightness: 1,
+    });
+    setIsPaintHsvPopupOpen(true);
+  };
+
+  const resetSelectedObjectPaintHsv = () => {
+    const baseColors = paintHsvBaseColorsRef.current;
+
+    if (!baseColors) {
+      return;
+    }
+
+    setPaintHsvState({
+      hue: 0,
+      saturation: 1,
+      brightness: 1,
+    });
+    updateSelectedObjectPaintColors(
+      {
+        fillColor: baseColors.fillColor,
+        strokeColor: baseColors.strokeColor,
+      },
+      { pushHistory: false },
+    );
+  };
+
+  const applySelectedObjectPaintHsv = (nextState: PaintHsvState) => {
+    const baseColors = paintHsvBaseColorsRef.current;
+
+    if (!baseColors) {
+      return;
+    }
+
+    updateSelectedObjectPaintColors(
+      {
+        fillColor: applyHsvToHex(baseColors.fillColor, nextState),
+        strokeColor: applyHsvToHex(baseColors.strokeColor, nextState),
+      },
+      { pushHistory: false },
+    );
+  };
+
+  const handleSelectedObjectPaintHsvChange = (patch: Partial<PaintHsvState>) => {
+    setPaintHsvState((current) => {
+      const nextState = {
+        ...current,
+        ...patch,
+      };
+      applySelectedObjectPaintHsv(nextState);
+      return nextState;
+    });
+  };
+
+  const confirmSelectedObjectPaintHsv = () => {
+    const hasAdjustment =
+      Math.abs(paintHsvState.hue) > 0.001 ||
+      Math.abs(paintHsvState.saturation - 1) > 0.001 ||
+      Math.abs(paintHsvState.brightness - 1) > 0.001;
+
+    if (hasAdjustment) {
+      commitLevelData(structuredClone(liveLevelDataRef.current));
+    }
+
+    setIsPaintHsvPopupOpen(false);
+  };
+
   const beginTouchGesture = () => {
     const touchPoints = [...touchPointsRef.current.values()];
 
@@ -2100,6 +2522,12 @@ export function LevelEditor({
     const canvas = canvasRef.current;
 
     if (!canvas) {
+      return;
+    }
+
+    if (isSelectedObjectPaintPopupOpen || isPaintHsvPopupOpen || isTriggerPopupOpen) {
+      event.preventDefault();
+      event.stopPropagation();
       return;
     }
 
@@ -2519,6 +2947,7 @@ export function LevelEditor({
     setShowPreview(false);
     setShowDesktopSetup(false);
     setIsPaintPopupOpen(false);
+    setIsTriggerPopupOpen(false);
     setIsInlineTestMode(true);
     setInlineTestDeathMarker(null);
     setInlineTestPathPoints([]);
@@ -2935,6 +3364,14 @@ export function LevelEditor({
 
           {isInlineTestMode ? (
             <div className="editor-inline-test-shell" role="dialog" aria-modal="true" aria-label="Editor test play">
+              <label className="editor-inline-test-toggle">
+                <input
+                  type="checkbox"
+                  checked={inlineTestShowTriggersOnPlayMode}
+                  onChange={(event) => setInlineTestShowTriggersOnPlayMode(event.target.checked)}
+                />
+                <span>Show triggers on play mode</span>
+              </label>
               <button
                 type="button"
                 className="editor-inline-test-stop"
@@ -2950,6 +3387,9 @@ export function LevelEditor({
                 runId={`editor-inline-test-${inlineTestRunSeed}`}
                 attemptNumber={1}
                 previewStartPosEnabled
+                previewStartPosInheritPortalState={false}
+                showTriggersInPlayMode={inlineTestShowTriggersOnPlayMode}
+                showHitboxes={editorShowHitboxes}
                 stopSignal={inlineTestStopSignal}
                 showRunPath
                 fullscreen
@@ -3162,11 +3602,9 @@ export function LevelEditor({
                 </button>
                 <button
                   type="button"
-                  className={cn('editor-stage-action-button', editorWorkspaceMode === 'edit' ? 'is-active' : '')}
-                  onClick={() => {
-                    setEditorWorkspaceMode('edit');
-                    setSelectedTool('select');
-                  }}
+                  className={cn('editor-stage-action-button', isEditObjectPopupOpen ? 'is-active' : '')}
+                  onClick={toggleEditObjectPopup}
+                  disabled={!canOpenSelectedObjectPaintPopup && !canOpenTriggerPopup}
                 >
                   Edit Object
                 </button>
@@ -3213,147 +3651,607 @@ export function LevelEditor({
             </div>
           )}
 
-          {isPaintPopupOpen && paintableSelectedObject ? (
-            <div className="editor-canvas-overlay editor-canvas-overlay--paint">
-              <div className="editor-canvas-popup editor-canvas-paint-popup">
-                <div className="editor-canvas-popup-header">
-                  <div>
-                    <p className="font-display text-[10px] tracking-[0.18em] text-[#ffd44a]">Paint & Groups</p>
-                    <h4 className="font-display text-xl text-white">
-                      {paintableSelectedObject
-                        ? selectedDefinition?.label ?? paintableSelectedObject.type
-                        : activePaintTool
-                          ? levelObjectDefinitions[activePaintTool].label
-                          : 'Placement Paint'}
-                    </h4>
+          {isTriggerPopupOpen && selectedTriggerObject ? (
+            <div className="editor-canvas-overlay editor-canvas-overlay--paint editor-canvas-overlay--paint-editor">
+              <div className="editor-object-color-dialog editor-trigger-dialog">
+                <div className="editor-object-color-shell editor-trigger-shell">
+                  <div className="editor-trigger-header">
+                    <div className="editor-trigger-info-pill" aria-hidden="true">
+                      i
+                    </div>
+                    <div className="editor-trigger-header-copy">
+                      <h4 className="font-display text-[2.2rem] text-[#ffd44a]">
+                        {getTriggerSetupTitle(selectedTriggerObject.type)}
+                      </h4>
+                      <div className="editor-trigger-header-meta">
+                        <Badge tone="accent">{selectedDefinition?.label ?? selectedTriggerObject.type}</Badge>
+                        <Badge tone="default">
+                          {selectedPaintGroupTriggerObject
+                            ? `Group ${Number(selectedPaintGroupTriggerObject.props.groupId ?? 1)}`
+                            : 'Scene FX'}
+                        </Badge>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      className="editor-canvas-popup-close editor-object-color-close"
+                      onClick={() => setIsTriggerPopupOpen(false)}
+                    >
+                      Close
+                    </button>
                   </div>
+
+                  <div className="editor-trigger-grid">
+                    {selectedPaintGroupTriggerObject ? (
+                      <div className="editor-trigger-field editor-trigger-field--wide">
+                        <span className="editor-trigger-field-label">Group ID</span>
+                        <div className="editor-trigger-stepper">
+                          <button type="button" className="editor-trigger-stepper-button" onClick={() => nudgeSelectedTriggerGroupId(-1)}>
+                            {'<'}
+                          </button>
+                          <input
+                            className="editor-trigger-input editor-trigger-input--stepper"
+                            type="number"
+                            min="1"
+                            max={String(PAINT_GROUP_SLOT_COUNT)}
+                            value={Number(selectedPaintGroupTriggerObject.props.groupId ?? 1)}
+                            onChange={(event) =>
+                              updateSelectedTriggerNumericProp('groupId', event.target.value, {
+                                min: 1,
+                                max: PAINT_GROUP_SLOT_COUNT,
+                              })
+                            }
+                          />
+                          <button type="button" className="editor-trigger-stepper-button" onClick={() => nudgeSelectedTriggerGroupId(1)}>
+                            {'>'}
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {selectedTriggerObject.type === 'MOVE_TRIGGER' ? (
+                      <>
+                        <div className="editor-trigger-field">
+                          <span className="editor-trigger-field-label">Move X</span>
+                          <input
+                            className="editor-trigger-input"
+                            type="number"
+                            step="0.5"
+                            value={Number(selectedTriggerObject.props.moveX ?? 2)}
+                            onChange={(event) => updateSelectedTriggerNumericProp('moveX', event.target.value)}
+                          />
+                        </div>
+                        <div className="editor-trigger-field">
+                          <span className="editor-trigger-field-label">Move Y</span>
+                          <input
+                            className="editor-trigger-input"
+                            type="number"
+                            step="0.5"
+                            value={Number(selectedTriggerObject.props.moveY ?? 0)}
+                            onChange={(event) => updateSelectedTriggerNumericProp('moveY', event.target.value)}
+                          />
+                        </div>
+                        <div className="editor-trigger-field editor-trigger-field--wide">
+                          <span className="editor-trigger-field-label">Move Time</span>
+                          <input
+                            className="editor-trigger-input"
+                            type="number"
+                            min="0.01"
+                            step="0.05"
+                            value={Number((Number(selectedTriggerObject.props.durationMs ?? getDefaultTriggerDurationMs(selectedTriggerObject.type)) / 1000).toFixed(2))}
+                            onChange={(event) => updateSelectedTriggerDurationSeconds(event.target.value)}
+                          />
+                        </div>
+                        <div className="editor-trigger-field editor-trigger-field--wide">
+                          <span className="editor-trigger-field-label">Easing</span>
+                          <select
+                            className="editor-trigger-select"
+                            value={String(selectedTriggerObject.props.easing ?? 'none')}
+                            onChange={(event) =>
+                              updateSelectedTriggerStringProp('easing', event.target.value as MoveTriggerEasing)
+                            }
+                          >
+                            {moveTriggerEasingOptions.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </>
+                    ) : null}
+
+                    {selectedTriggerObject.type === 'ALPHA_TRIGGER' ? (
+                      <>
+                        <div className="editor-trigger-field editor-trigger-field--wide">
+                          <span className="editor-trigger-field-label">Fade Time</span>
+                          <input
+                            className="editor-trigger-input"
+                            type="number"
+                            min="0.01"
+                            step="0.05"
+                            value={Number((Number(selectedTriggerObject.props.durationMs ?? getDefaultTriggerDurationMs(selectedTriggerObject.type)) / 1000).toFixed(2))}
+                            onChange={(event) => updateSelectedTriggerDurationSeconds(event.target.value)}
+                          />
+                        </div>
+                        <div className="editor-trigger-field editor-trigger-field--wide">
+                          <span className="editor-trigger-field-label">
+                            Opacity: {Number(selectedTriggerObject.props.alpha ?? 0.35).toFixed(2)}
+                          </span>
+                          <input
+                            className="editor-trigger-range editor-trigger-range--alpha"
+                            type="range"
+                            min="0"
+                            max="1"
+                            step="0.05"
+                            value={Number(selectedTriggerObject.props.alpha ?? 0.35)}
+                            onChange={(event) => updateSelectedTriggerNumericProp('alpha', event.target.value, { min: 0, max: 1 })}
+                          />
+                        </div>
+                      </>
+                    ) : null}
+
+                    {selectedTriggerObject.type === 'TOGGLE_TRIGGER' ? (
+                      <div className="editor-trigger-field editor-trigger-field--wide">
+                        <span className="editor-trigger-field-label">Activate Group</span>
+                        <div className="editor-trigger-toggle-row">
+                          <button
+                            type="button"
+                            className={cn('editor-trigger-choice-button', selectedTriggerObject.props.enabled ? 'is-active' : '')}
+                            onClick={() => updateSelectedTriggerBooleanProp('enabled', true)}
+                          >
+                            On
+                          </button>
+                          <button
+                            type="button"
+                            className={cn('editor-trigger-choice-button', !selectedTriggerObject.props.enabled ? 'is-active' : '')}
+                            onClick={() => updateSelectedTriggerBooleanProp('enabled', false)}
+                          >
+                            Off
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {selectedTriggerObject.type === 'PULSE_TRIGGER' ? (
+                      <>
+                        <div className="editor-trigger-field editor-trigger-field--wide">
+                          <span className="editor-trigger-field-label">Pulse Color</span>
+                          <div className="editor-trigger-color-row">
+                            <label className="editor-trigger-color-swatch">
+                              <span>Fill</span>
+                              <span
+                                className="editor-trigger-color-preview"
+                                style={{
+                                  backgroundColor:
+                                    typeof selectedTriggerObject.props.fillColor === 'string'
+                                      ? selectedTriggerObject.props.fillColor
+                                      : '#ffffff',
+                                }}
+                              />
+                              <input
+                                type="color"
+                                value={getEditorColorInputValue(
+                                  typeof selectedTriggerObject.props.fillColor === 'string'
+                                    ? selectedTriggerObject.props.fillColor
+                                    : '#ffffff',
+                                  '#ffffff',
+                                )}
+                                onChange={(event) => updateSelectedTriggerStringProp('fillColor', event.target.value)}
+                              />
+                            </label>
+                            <label className="editor-trigger-color-swatch">
+                              <span>Stroke</span>
+                              <span
+                                className="editor-trigger-color-preview"
+                                style={{
+                                  backgroundColor:
+                                    typeof selectedTriggerObject.props.strokeColor === 'string'
+                                      ? selectedTriggerObject.props.strokeColor
+                                      : '#ffffff',
+                                }}
+                              />
+                              <input
+                                type="color"
+                                value={getEditorColorInputValue(
+                                  typeof selectedTriggerObject.props.strokeColor === 'string'
+                                    ? selectedTriggerObject.props.strokeColor
+                                    : '#ffffff',
+                                  '#ffffff',
+                                )}
+                                onChange={(event) => updateSelectedTriggerStringProp('strokeColor', event.target.value)}
+                              />
+                            </label>
+                          </div>
+                        </div>
+                        <div className="editor-trigger-field editor-trigger-field--wide">
+                          <span className="editor-trigger-field-label">Pulse Time</span>
+                          <input
+                            className="editor-trigger-input"
+                            type="number"
+                            min="0.01"
+                            step="0.05"
+                            value={Number((Number(selectedTriggerObject.props.durationMs ?? getDefaultTriggerDurationMs(selectedTriggerObject.type)) / 1000).toFixed(2))}
+                            onChange={(event) => updateSelectedTriggerDurationSeconds(event.target.value)}
+                          />
+                        </div>
+                      </>
+                    ) : null}
+
+                    {selectedTriggerObject.type === 'POST_FX_TRIGGER' ? (
+                      <>
+                        <div className="editor-trigger-field">
+                          <span className="editor-trigger-field-label">Effect</span>
+                          <select
+                            className="editor-trigger-select"
+                            value={String(selectedTriggerObject.props.effectType ?? 'flash')}
+                            onChange={(event) => updateSelectedTriggerStringProp('effectType', event.target.value as PostFxEffectType)}
+                          >
+                            {postFxEffectOptions.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="editor-trigger-field">
+                          <span className="editor-trigger-field-label">Strength</span>
+                          <input
+                            className="editor-trigger-input"
+                            type="number"
+                            step="0.05"
+                            min="0"
+                            max="1.5"
+                            value={Number(selectedTriggerObject.props.intensity ?? 0.75)}
+                            onChange={(event) => updateSelectedTriggerNumericProp('intensity', event.target.value, { min: 0, max: 1.5 })}
+                          />
+                        </div>
+                        <div className="editor-trigger-field editor-trigger-field--wide">
+                          <span className="editor-trigger-field-label">Effect Time</span>
+                          <input
+                            className="editor-trigger-input"
+                            type="number"
+                            min="0.01"
+                            step="0.05"
+                            value={Number((Number(selectedTriggerObject.props.durationMs ?? getDefaultTriggerDurationMs(selectedTriggerObject.type)) / 1000).toFixed(2))}
+                            onChange={(event) => updateSelectedTriggerDurationSeconds(event.target.value)}
+                          />
+                        </div>
+                        <div className="editor-trigger-field editor-trigger-field--wide">
+                          <span className="editor-trigger-field-label">Primary Color</span>
+                          <label className="editor-trigger-color-swatch editor-trigger-color-swatch--wide">
+                            <span
+                              className="editor-trigger-color-preview"
+                              style={{
+                                backgroundColor:
+                                  typeof selectedTriggerObject.props.primaryColor === 'string'
+                                    ? selectedTriggerObject.props.primaryColor
+                                    : '#ffffff',
+                              }}
+                            />
+                            <input
+                              type="color"
+                              value={getEditorColorInputValue(
+                                typeof selectedTriggerObject.props.primaryColor === 'string'
+                                  ? selectedTriggerObject.props.primaryColor
+                                  : '#ffffff',
+                                '#ffffff',
+                              )}
+                              onChange={(event) => updateSelectedTriggerStringProp('primaryColor', event.target.value)}
+                            />
+                          </label>
+                        </div>
+                        <div className="editor-trigger-field editor-trigger-field--wide">
+                          <span className="editor-trigger-field-label">Secondary Color</span>
+                          <label className="editor-trigger-color-swatch editor-trigger-color-swatch--wide">
+                            <span
+                              className="editor-trigger-color-preview"
+                              style={{
+                                backgroundColor:
+                                  typeof selectedTriggerObject.props.secondaryColor === 'string'
+                                    ? selectedTriggerObject.props.secondaryColor
+                                    : '#7c3aed',
+                              }}
+                            />
+                            <input
+                              type="color"
+                              value={getEditorColorInputValue(
+                                typeof selectedTriggerObject.props.secondaryColor === 'string'
+                                  ? selectedTriggerObject.props.secondaryColor
+                                  : '#7c3aed',
+                                '#7c3aed',
+                              )}
+                              onChange={(event) => updateSelectedTriggerStringProp('secondaryColor', event.target.value)}
+                            />
+                          </label>
+                        </div>
+
+                        {selectedTriggerObject.props.effectType === 'blur' ? (
+                          <div className="editor-trigger-field">
+                            <span className="editor-trigger-field-label">Blur Amount</span>
+                            <input
+                              className="editor-trigger-input"
+                              type="number"
+                              min="0"
+                              step="0.5"
+                              value={Number(selectedTriggerObject.props.blurAmount ?? 8)}
+                              onChange={(event) => updateSelectedTriggerNumericProp('blurAmount', event.target.value, { min: 0, max: 24 })}
+                            />
+                          </div>
+                        ) : null}
+
+                        {selectedTriggerObject.props.effectType === 'scanlines' ? (
+                          <div className="editor-trigger-field">
+                            <span className="editor-trigger-field-label">Line Density</span>
+                            <input
+                              className="editor-trigger-input"
+                              type="number"
+                              min="0.1"
+                              max="1"
+                              step="0.05"
+                              value={Number(selectedTriggerObject.props.scanlineDensity ?? 0.45)}
+                              onChange={(event) =>
+                                updateSelectedTriggerNumericProp('scanlineDensity', event.target.value, {
+                                  min: 0.1,
+                                  max: 1,
+                                })
+                              }
+                            />
+                          </div>
+                        ) : null}
+
+                        {selectedTriggerObject.props.effectType === 'shake' ? (
+                          <div className="editor-trigger-field">
+                            <span className="editor-trigger-field-label">Shake Power</span>
+                            <input
+                              className="editor-trigger-input"
+                              type="number"
+                              min="0"
+                              max="2"
+                              step="0.05"
+                              value={Number(selectedTriggerObject.props.shakePower ?? 0.85)}
+                              onChange={(event) => updateSelectedTriggerNumericProp('shakePower', event.target.value, { min: 0, max: 2 })}
+                            />
+                          </div>
+                        ) : null}
+                      </>
+                    ) : null}
+                  </div>
+
+                  <div className="editor-trigger-footer">
+                    <div className="editor-trigger-check-grid">
+                      <button
+                        type="button"
+                        className={cn(
+                          'editor-trigger-check-button',
+                          String(selectedTriggerObject.props.activationMode ?? 'zone') === 'touch' ? 'is-active' : '',
+                        )}
+                        onClick={() =>
+                          updateSelectedTriggerStringProp(
+                            'activationMode',
+                            String(selectedTriggerObject.props.activationMode ?? 'zone') === 'touch' ? 'zone' : 'touch',
+                          )
+                        }
+                      >
+                        <span className="editor-trigger-check-box" />
+                        <span>Touch Trigger</span>
+                      </button>
+                    </div>
+
+                    <div className="editor-object-color-confirm-row editor-trigger-confirm-row">
+                      <button
+                        type="button"
+                        className="editor-object-color-action editor-object-color-action--confirm"
+                        onClick={() => setIsTriggerPopupOpen(false)}
+                      >
+                        OK
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : isPaintPopupOpen && paintableSelectedObject ? (
+            <div className="editor-canvas-overlay editor-canvas-overlay--paint editor-canvas-overlay--paint-editor">
+              <div className="editor-object-color-dialog">
+                <div className="editor-object-color-topbar">
+                  <button type="button" className="editor-object-color-chip editor-object-color-chip--active">
+                    Base
+                  </button>
+                  <button type="button" className="editor-object-color-hsv-trigger" onClick={openSelectedObjectPaintHsv}>
+                    HSV
+                  </button>
                   <button
                     type="button"
-                    className="editor-canvas-popup-close"
+                    className="editor-canvas-popup-close editor-object-color-close"
                     onClick={() => setIsPaintPopupOpen(false)}
                   >
                     Close
                   </button>
                 </div>
 
-                {paintableSelectedObject ? (
-                  <div className="editor-color-controls">
-                    <div className="editor-color-control">
-                      <span className="editor-color-control-label">Fill</span>
-                      <div className="editor-color-control-body">
-                        <input
-                          type="color"
-                          aria-label="Selected object fill color"
-                          className="editor-color-picker"
-                          value={getEditorColorInputValue(
-                            getObjectFillColor(paintableSelectedObject, colorGroups),
-                            levelObjectDefinitions[paintableSelectedObject.type].color,
-                          )}
-                          onChange={(event) => updateSelectedObjectPaint('fillColor', event.target.value)}
-                        />
-                        <span className="editor-color-value">
-                          {getObjectFillColor(paintableSelectedObject, colorGroups)}
-                        </span>
-                      </div>
+                <div className="editor-object-color-shell">
+                  <div className="editor-object-color-header">
+                    <div>
+                      <p className="font-display text-[10px] tracking-[0.18em] text-[#ffe18a]">Edit Object</p>
+                      <h4 className="font-display text-[2rem] text-[#ffd44a]">Base Color</h4>
                     </div>
-
-                    <div className="editor-color-control">
-                      <span className="editor-color-control-label">Stroke</span>
-                      <div className="editor-color-control-body">
-                        <input
-                          type="color"
-                          aria-label="Selected object stroke color"
-                          className="editor-color-picker"
-                          value={getEditorColorInputValue(
-                            getObjectStrokeColor(paintableSelectedObject, colorGroups),
-                            levelObjectDefinitions[paintableSelectedObject.type].strokeColor,
-                          )}
-                          onChange={(event) => updateSelectedObjectPaint('strokeColor', event.target.value)}
-                        />
-                        <span className="editor-color-value">
-                          {getObjectStrokeColor(paintableSelectedObject, colorGroups)}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="editor-paint-inline-actions">
-                      <Button variant="ghost" onClick={resetSelectedObjectPaint}>
-                        Reset Colors
-                      </Button>
-                      {selectedPaintGroupId ? (
-                        <Button variant="ghost" onClick={detachSelectedObjectFromPaintGroup}>
-                          Detach Group
-                        </Button>
-                      ) : null}
+                    <div className="editor-object-color-meta">
+                      <Badge tone="accent">{selectedDefinition?.label ?? paintableSelectedObject.type}</Badge>
+                      <Badge tone="default">
+                        {selectedPaintGroupId ? `Group ${selectedPaintGroupId}` : 'Direct Color'}
+                      </Badge>
                     </div>
                   </div>
-                ) : (
-                  <div className="editor-note-box px-4 py-3 text-sm text-white/72">
-                    Select a block, spike, or saw if you want to save its colors into a group.
-                  </div>
-                )}
 
-                <div className="editor-paint-groups">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="editor-color-control-label">Color Groups</span>
-                    <Badge tone="accent">
-                      {activePaintGroupId ? `Placing: Group ${activePaintGroupId}` : 'Placing: Direct'}
-                    </Badge>
+                  <div className="editor-object-color-subcopy">
+                    {selectedPaintGroupId
+                      ? 'Changing OBJ color updates every object that uses this group.'
+                      : 'Pick a group first if you want multiple objects to share the same color.'}
                   </div>
 
-                  <div className="editor-paint-group-grid">
+                  <div className="editor-object-color-group-grid">
                     {Array.from({ length: PAINT_GROUP_SLOT_COUNT }, (_, index) => {
                       const groupId = index + 1;
                       const group = getColorGroupById(colorGroups, groupId);
-                      const isActiveGroup = activePaintGroupId === groupId;
-                      const isLinkedGroup = selectedPaintGroupId === groupId;
+                      const isCurrentGroup = selectedPaintGroupId === groupId;
 
                       return (
                         <button
                           key={groupId}
                           type="button"
-                          className={cn(
-                            'editor-paint-group-button',
-                            isActiveGroup ? 'is-active' : '',
-                            isLinkedGroup ? 'is-linked' : '',
-                          )}
-                          onClick={() => {
-                            if (paintableSelectedObject) {
-                              assignSelectedObjectToPaintGroup(groupId);
-                              return;
-                            }
-
-                            if (group) {
-                              setActivePaintGroupId(groupId);
-                            }
-                          }}
-                          disabled={!paintableSelectedObject && !group}
+                          className={cn('editor-object-color-group-button', isCurrentGroup ? 'is-active' : '')}
+                          onClick={() => assignSelectedObjectToPaintGroup(groupId)}
                         >
-                          <span className="editor-paint-group-title">Group {groupId}</span>
-                          <span className="editor-paint-group-swatches">
+                          <span className="editor-object-color-group-number">{groupId}</span>
+                          <span className="editor-object-color-group-preview">
                             <span
-                              className="editor-paint-group-swatch"
-                              style={{ backgroundColor: group?.fillColor ?? 'rgba(255,255,255,0.12)' }}
+                              className="editor-object-color-group-swatch"
+                              style={{ backgroundColor: group?.fillColor ?? 'rgba(255,255,255,0.14)' }}
                             />
-                            <span
-                              className="editor-paint-group-swatch"
-                              style={{ backgroundColor: group?.strokeColor ?? 'rgba(255,255,255,0.28)' }}
-                            />
-                          </span>
-                          <span className="editor-paint-group-status">
-                            {isLinkedGroup ? 'Linked' : isActiveGroup ? 'Active' : group ? 'Saved' : 'Empty'}
                           </span>
                         </button>
                       );
                     })}
                   </div>
 
-                  <div className="editor-paint-inline-actions">
-                    <Button variant="ghost" onClick={() => setActivePaintGroupId(null)}>
-                      Place Direct
-                    </Button>
+                  <div className="editor-object-color-footer">
+                    <div className="editor-object-color-actions">
+                      <button
+                        type="button"
+                        className="editor-object-color-action editor-object-color-action--ghost"
+                        onClick={assignSelectedObjectToNextFreePaintGroup}
+                        disabled={!nextFreePaintGroupId}
+                      >
+                        Next Free
+                      </button>
+                      <button
+                        type="button"
+                        className="editor-object-color-action editor-object-color-action--ghost"
+                        onClick={resetSelectedObjectPaintToDefault}
+                      >
+                        Default
+                      </button>
+                      {selectedPaintGroupId ? (
+                        <button
+                          type="button"
+                          className="editor-object-color-action editor-object-color-action--ghost"
+                          onClick={detachSelectedObjectFromPaintGroup}
+                        >
+                          Detach
+                        </button>
+                      ) : null}
+                    </div>
+
+                    <div className="editor-object-color-confirm-row">
+                      <button
+                        type="button"
+                        className="editor-object-color-action editor-object-color-action--confirm"
+                        onClick={() => setIsPaintPopupOpen(false)}
+                      >
+                        OK
+                      </button>
+
+                      <label className="editor-object-color-swatch-control">
+                        <span className="editor-object-color-swatch-label">OBJ</span>
+                        <span
+                          className="editor-object-color-swatch-preview"
+                          style={{ backgroundColor: selectedPaintFillColor }}
+                        />
+                        <input
+                          type="color"
+                          aria-label="Selected object color"
+                          value={getEditorColorInputValue(
+                            selectedPaintFillColor,
+                            levelObjectDefinitions[paintableSelectedObject.type].color,
+                          )}
+                          onChange={(event) => updateSelectedObjectPaint('fillColor', event.target.value)}
+                        />
+                      </label>
+                    </div>
                   </div>
                 </div>
+
+                {isPaintHsvPopupOpen ? (
+                  <div className="editor-object-hsv-overlay">
+                    <div className="editor-object-hsv-dialog">
+                      <div className="editor-object-hsv-header">
+                        <h5 className="font-display text-[2rem] text-[#ffd44a]">Base HSV</h5>
+                        <button
+                          type="button"
+                          className="editor-object-hsv-trash"
+                          onClick={resetSelectedObjectPaintHsv}
+                          title="Reset HSV"
+                        >
+                          Reset
+                        </button>
+                      </div>
+
+                      <div className="editor-object-hsv-panel">
+                        <label className="editor-object-hsv-row">
+                          <div className="editor-object-hsv-copy">
+                            <span>Hue</span>
+                            <strong>{Math.round(paintHsvState.hue)}</strong>
+                          </div>
+                          <input
+                            type="range"
+                            min="0"
+                            max="360"
+                            step="1"
+                            value={paintHsvState.hue}
+                            onChange={(event) =>
+                              handleSelectedObjectPaintHsvChange({ hue: Number(event.target.value) })
+                            }
+                          />
+                        </label>
+
+                        <label className="editor-object-hsv-row">
+                          <div className="editor-object-hsv-copy">
+                            <span>Saturation</span>
+                            <strong>{paintHsvState.saturation.toFixed(2)}</strong>
+                          </div>
+                          <input
+                            type="range"
+                            min="0"
+                            max="2"
+                            step="0.01"
+                            value={paintHsvState.saturation}
+                            onChange={(event) =>
+                              handleSelectedObjectPaintHsvChange({ saturation: Number(event.target.value) })
+                            }
+                          />
+                        </label>
+
+                        <label className="editor-object-hsv-row">
+                          <div className="editor-object-hsv-copy">
+                            <span>Brightness</span>
+                            <strong>{paintHsvState.brightness.toFixed(2)}</strong>
+                          </div>
+                          <input
+                            type="range"
+                            min="0"
+                            max="2"
+                            step="0.01"
+                            value={paintHsvState.brightness}
+                            onChange={(event) =>
+                              handleSelectedObjectPaintHsvChange({ brightness: Number(event.target.value) })
+                            }
+                          />
+                        </label>
+                      </div>
+
+                      <div className="editor-object-hsv-footer">
+                        <button
+                          type="button"
+                          className="editor-object-color-action editor-object-color-action--confirm"
+                          onClick={confirmSelectedObjectPaintHsv}
+                        >
+                          OK
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </div>
           ) : isPaintPopupOpen ? (
@@ -3826,6 +4724,7 @@ export function LevelEditor({
             attemptNumber={1}
             autoRestartOnFail
             previewStartPosEnabled
+            showHitboxes={editorShowHitboxes}
             fullscreen
             className="editor-mobile-preview-runtime"
             onExitToMenu={() => {
@@ -3923,6 +4822,31 @@ export function LevelEditor({
                 <Badge tone="accent">
                   {activePreviewStartPos ? `Preview starts at ${activePreviewStartPos.x}, ${activePreviewStartPos.y}` : 'Preview uses main start'}
                 </Badge>
+              </div>
+            </div>
+
+            <div className="editor-inline-card space-y-3">
+              <div>
+                <FieldLabel>Preview Helpers</FieldLabel>
+                <p className="mt-1 text-sm text-white/68">
+                  Extra debug overlays for editor test play and the mobile preview.
+                </p>
+              </div>
+              <div className="toggle-row">
+                <label className="toggle-box cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={editorShowHitboxes}
+                    onChange={(event) => setEditorShowHitboxes(event.target.checked)}
+                    style={{ accentColor: '#9eff3d' }}
+                  />
+                  <div>
+                    <p className="editor-color-control-label">Show Hitboxes</p>
+                    <p className="text-sm text-white/68">
+                      Draw the real player and object collision shapes on top of the preview.
+                    </p>
+                  </div>
+                </label>
               </div>
             </div>
 
@@ -4183,6 +5107,22 @@ export function LevelEditor({
                 </div>
 
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  <div>
+                    <FieldLabel>Activation</FieldLabel>
+                    <Select
+                      value={String(selectedTriggerObject.props.activationMode ?? 'zone')}
+                      onChange={(event) =>
+                        updateSelectedTriggerStringProp('activationMode', event.target.value as TriggerActivationMode)
+                      }
+                    >
+                      {triggerActivationModeOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+
                   {selectedPaintGroupTriggerObject ? (
                     <div>
                       <FieldLabel>Target Group</FieldLabel>
@@ -4231,6 +5171,21 @@ export function LevelEditor({
                             updateSelectedTriggerNumericProp('durationMs', event.target.value, { min: 1 })
                           }
                         />
+                      </div>
+                      <div>
+                        <FieldLabel>Easing</FieldLabel>
+                        <Select
+                          value={String(selectedTriggerObject.props.easing ?? 'none')}
+                          onChange={(event) =>
+                            updateSelectedTriggerStringProp('easing', event.target.value as MoveTriggerEasing)
+                          }
+                        >
+                          {moveTriggerEasingOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </Select>
                       </div>
                     </>
                   ) : null}
@@ -4323,21 +5278,6 @@ export function LevelEditor({
 
                   {selectedTriggerObject.type === 'POST_FX_TRIGGER' ? (
                     <>
-                      <div>
-                        <FieldLabel>Activation Mode</FieldLabel>
-                        <Select
-                          value={String(selectedTriggerObject.props.activationMode ?? 'touch')}
-                          onChange={(event) =>
-                            updateSelectedTriggerStringProp('activationMode', event.target.value as PostFxActivationMode)
-                          }
-                        >
-                          {postFxActivationModeOptions.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </Select>
-                      </div>
                       <div>
                         <FieldLabel>Effect</FieldLabel>
                         <Select
@@ -4760,58 +5700,83 @@ function ToolButtonPreview({ tool, active }: { tool: EditorTool; active: boolean
     canvas.style.height = `${height}px`;
     context.setTransform(renderScale, 0, 0, renderScale, 0, 0);
     context.imageSmoothingEnabled = true;
-    context.clearRect(0, 0, width, height);
+    const paintPreview = () => {
+      context.clearRect(0, 0, width, height);
+
+      if (tool === 'select' || tool === 'pan') {
+        context.fillStyle = active ? 'rgba(23, 51, 0, 0.12)' : 'rgba(255,255,255,0.08)';
+        context.fillRect(0, 0, width, height);
+        context.strokeStyle = active ? 'rgba(23, 51, 0, 0.48)' : 'rgba(255,255,255,0.18)';
+        context.lineWidth = 2;
+        context.strokeRect(1, 1, width - 2, height - 2);
+        context.fillStyle = active ? '#173300' : 'rgba(255,255,255,0.9)';
+        context.font = "900 12px 'Arial Black', 'Trebuchet MS', 'Verdana', sans-serif";
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText(tool === 'select' ? 'SEL' : 'PAN', width / 2, height / 2 + 0.5);
+        return;
+      }
+
+      const definition = levelObjectDefinitions[tool];
+      const object: LevelObject = {
+        id: `preview-${tool}`,
+        type: tool,
+        x: 0,
+        y: 0,
+        w: definition.defaultSize.w,
+        h: definition.defaultSize.h,
+        rotation: 0,
+        layer: tool === 'DECORATION_BLOCK' ? 'decoration' : 'gameplay',
+        editorLayer: 1,
+        props: {},
+      };
+
+      const padding = 5;
+      const scale = Math.min(
+        (width - padding * 2) / Math.max(object.w, 0.001),
+        (height - padding * 2) / Math.max(object.h, 0.001),
+      );
+      const drawWidth = object.w * scale;
+      const drawHeight = object.h * scale;
+      const drawX = (width - drawWidth) / 2;
+      const drawY = (height - drawHeight) / 2;
+
+      drawStageObjectSprite({
+        context,
+        object,
+        x: drawX,
+        y: drawY,
+        w: drawWidth,
+        h: drawHeight,
+        fillColor: definition.color,
+        strokeColor: definition.strokeColor,
+        isActive: active,
+        isUsedOrb: false,
+      });
+    };
+
+    paintPreview();
 
     if (tool === 'select' || tool === 'pan') {
-      context.fillStyle = active ? 'rgba(23, 51, 0, 0.12)' : 'rgba(255,255,255,0.08)';
-      context.fillRect(0, 0, width, height);
-      context.strokeStyle = active ? 'rgba(23, 51, 0, 0.48)' : 'rgba(255,255,255,0.18)';
-      context.lineWidth = 2;
-      context.strokeRect(1, 1, width - 2, height - 2);
-      context.fillStyle = active ? '#173300' : 'rgba(255,255,255,0.9)';
-      context.font = "900 12px 'Arial Black', 'Trebuchet MS', 'Verdana', sans-serif";
-      context.textAlign = 'center';
-      context.textBaseline = 'middle';
-      context.fillText(tool === 'select' ? 'SEL' : 'PAN', width / 2, height / 2 + 0.5);
       return;
     }
 
-    const definition = levelObjectDefinitions[tool];
-    const object: LevelObject = {
-      id: `preview-${tool}`,
-      type: tool,
-      x: 0,
-      y: 0,
-      w: definition.defaultSize.w,
-      h: definition.defaultSize.h,
-      rotation: 0,
-      layer: tool === 'DECORATION_BLOCK' ? 'decoration' : 'gameplay',
-      editorLayer: 1,
-      props: {},
+    const sprite = getStageObjectPreviewSpriteImage(tool);
+    if (!sprite || (sprite.complete && sprite.naturalWidth > 0)) {
+      return;
+    }
+
+    const handleSpriteReady = () => {
+      paintPreview();
     };
 
-    const padding = 5;
-    const scale = Math.min(
-      (width - padding * 2) / Math.max(object.w, 0.001),
-      (height - padding * 2) / Math.max(object.h, 0.001),
-    );
-    const drawWidth = object.w * scale;
-    const drawHeight = object.h * scale;
-    const drawX = (width - drawWidth) / 2;
-    const drawY = (height - drawHeight) / 2;
+    sprite.addEventListener('load', handleSpriteReady);
+    sprite.addEventListener('error', handleSpriteReady);
 
-    drawStageObjectSprite({
-      context,
-      object,
-      x: drawX,
-      y: drawY,
-      w: drawWidth,
-      h: drawHeight,
-      fillColor: definition.color,
-      strokeColor: definition.strokeColor,
-      isActive: active,
-      isUsedOrb: false,
-    });
+    return () => {
+      sprite.removeEventListener('load', handleSpriteReady);
+      sprite.removeEventListener('error', handleSpriteReady);
+    };
   }, [tool, active]);
 
   return (
@@ -5028,6 +5993,330 @@ function drawEditorPermanentStageFloor(
   context.moveTo(0, topY);
   context.lineTo(width, topY);
   context.stroke();
+}
+
+function drawEditorObjectHitbox(
+  context: CanvasRenderingContext2D,
+  object: LevelObject,
+  playerMode: LevelData['player']['mode'],
+  panX: number,
+  panY: number,
+  cell: number,
+  viewportHeight: number,
+  alpha = 1,
+) {
+  if (object.type === 'DASH_BLOCK' || object.type === 'START_MARKER' || object.type === 'START_POS') {
+    return;
+  }
+
+  if (isTriggerObjectType(object.type)) {
+    const activationMode = getEditorTriggerActivationMode(object.props.activationMode);
+    const playerHitboxLayout = getPlayerHitboxLayout(playerMode);
+
+    if (activationMode === 'zone') {
+      const zoneWidth = Math.max(0.18, object.w * 0.18, playerHitboxLayout.width * 0.22);
+      const zoneCenterX = object.x + object.w / 2;
+      const zonePosition = worldToScreen(zoneCenterX - zoneWidth / 2, 0, panX, panY, cell);
+      drawEditorHitboxRect(
+        context,
+        zonePosition.x,
+        0,
+        zoneWidth * cell,
+        viewportHeight,
+        'rgba(153, 255, 104, 0.08)',
+        'rgba(153, 255, 104, 0.96)',
+        alpha,
+        [8, 6],
+      );
+    } else {
+      const position = worldToScreen(object.x, object.y, panX, panY, cell);
+      drawEditorHitboxRect(
+        context,
+        position.x,
+        position.y,
+        object.w * cell,
+        object.h * cell,
+        'rgba(153, 255, 104, 0.12)',
+        'rgba(153, 255, 104, 0.96)',
+        alpha,
+        [8, 6],
+      );
+    }
+
+    return;
+  }
+
+  if (isSpikeObjectType(object.type)) {
+    const spikeHitbox = getSpikeHitboxRect(object);
+    drawEditorHazardHitboxPolygon(
+      context,
+      [
+        worldToScreen(spikeHitbox.x, spikeHitbox.y, panX, panY, cell),
+        worldToScreen(spikeHitbox.x + spikeHitbox.w, spikeHitbox.y, panX, panY, cell),
+        worldToScreen(spikeHitbox.x + spikeHitbox.w, spikeHitbox.y + spikeHitbox.h, panX, panY, cell),
+        worldToScreen(spikeHitbox.x, spikeHitbox.y + spikeHitbox.h, panX, panY, cell),
+      ],
+      'rgba(255, 56, 56, 0.16)',
+      'rgba(255, 36, 36, 0.98)',
+      alpha,
+    );
+    return;
+  }
+
+  if (object.type === 'ARROW_RAMP_ASC' || object.type === 'ARROW_RAMP_DESC') {
+    drawEditorHitboxPolygon(
+      context,
+      getEditorArrowRampTriangle(object).map((point) => {
+        const screenPoint = worldToScreen(point.x, point.y, panX, panY, cell);
+        return { x: screenPoint.x, y: screenPoint.y };
+      }),
+      'rgba(102, 211, 255, 0.14)',
+      'rgba(116, 226, 255, 0.96)',
+      alpha,
+    );
+    return;
+  }
+
+  if (isSawObjectType(object.type)) {
+    const center = worldToScreen(object.x + object.w / 2, object.y + object.h / 2, panX, panY, cell);
+    const radius = Math.max(0.18, Math.min(object.w, object.h) * getEditorSawHitRadiusFactor(object.type)) * cell;
+    drawEditorHitboxCircle(
+      context,
+      center.x,
+      center.y,
+      radius,
+      'rgba(255, 83, 109, 0.16)',
+      'rgba(255, 95, 124, 0.98)',
+      alpha,
+    );
+    return;
+  }
+
+  if (editorOrbHitboxTypes.has(object.type)) {
+    const center = worldToScreen(object.x + object.w / 2, object.y + object.h / 2, panX, panY, cell);
+    const radius = Math.max(0.18, Math.min(object.w, object.h) * 0.39 + 0.02) * cell;
+    drawEditorHitboxCircle(
+      context,
+      center.x,
+      center.y,
+      radius,
+      'rgba(255, 217, 94, 0.16)',
+      'rgba(255, 228, 126, 0.98)',
+      alpha,
+    );
+    return;
+  }
+
+  const position = worldToScreen(object.x, object.y, panX, panY, cell);
+  const fillColor = editorSolidHitboxTypes.has(object.type)
+    ? 'rgba(102, 211, 255, 0.14)'
+    : editorPortalHitboxTypes.has(object.type)
+      ? 'rgba(191, 129, 255, 0.14)'
+      : object.type === 'JUMP_PAD'
+        ? 'rgba(255, 217, 94, 0.16)'
+        : 'rgba(255, 255, 255, 0.1)';
+  const strokeColor = editorSolidHitboxTypes.has(object.type)
+    ? 'rgba(116, 226, 255, 0.96)'
+    : editorPortalHitboxTypes.has(object.type)
+      ? 'rgba(210, 158, 255, 0.96)'
+      : object.type === 'JUMP_PAD'
+        ? 'rgba(255, 228, 126, 0.98)'
+        : 'rgba(255, 255, 255, 0.92)';
+
+  drawEditorHitboxRect(
+    context,
+    position.x,
+    position.y,
+    object.w * cell,
+    object.h * cell,
+    fillColor,
+    strokeColor,
+    alpha,
+  );
+}
+
+function drawEditorPlayerHitbox(
+  context: CanvasRenderingContext2D,
+  mode: LevelData['player']['mode'],
+  playerX: number,
+  playerY: number,
+  panX: number,
+  panY: number,
+  cell: number,
+) {
+  const layout = getPlayerHitboxLayout(mode);
+  const position = worldToScreen(playerX + layout.offsetX, playerY + layout.offsetY, panX, panY, cell);
+  drawEditorHitboxRect(
+    context,
+    position.x,
+    position.y,
+    layout.width * cell,
+    layout.height * cell,
+    'rgba(38, 255, 225, 0.16)',
+    'rgba(96, 255, 235, 0.98)',
+    1,
+  );
+}
+
+function drawEditorHitboxRect(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  fillColor: string,
+  strokeColor: string,
+  alpha = 1,
+  lineDash?: number[],
+) {
+  context.save();
+  context.globalAlpha *= alpha;
+  if (lineDash?.length) {
+    context.setLineDash(lineDash);
+  }
+  context.fillStyle = fillColor;
+  context.strokeStyle = strokeColor;
+  context.lineWidth = 2.5;
+  context.fillRect(x, y, w, h);
+  context.strokeRect(x, y, w, h);
+  context.restore();
+}
+
+function drawEditorHitboxCircle(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  radius: number,
+  fillColor: string,
+  strokeColor: string,
+  alpha = 1,
+) {
+  context.save();
+  context.globalAlpha *= alpha;
+  context.fillStyle = fillColor;
+  context.strokeStyle = strokeColor;
+  context.lineWidth = 2.5;
+  context.beginPath();
+  context.arc(x, y, radius, 0, Math.PI * 2);
+  context.fill();
+  context.stroke();
+  context.restore();
+}
+
+function drawEditorHitboxPolygon(
+  context: CanvasRenderingContext2D,
+  points: Array<{ x: number; y: number }>,
+  fillColor: string,
+  strokeColor: string,
+  alpha = 1,
+) {
+  if (!points.length) {
+    return;
+  }
+
+  context.save();
+  context.globalAlpha *= alpha;
+  context.fillStyle = fillColor;
+  context.strokeStyle = strokeColor;
+  context.lineWidth = 2.5;
+  context.beginPath();
+  context.moveTo(points[0].x, points[0].y);
+
+  for (let index = 1; index < points.length; index += 1) {
+    context.lineTo(points[index].x, points[index].y);
+  }
+
+  context.closePath();
+  context.fill();
+  context.stroke();
+  context.restore();
+}
+
+function drawEditorHazardHitboxPolygon(
+  context: CanvasRenderingContext2D,
+  points: Array<{ x: number; y: number }>,
+  fillColor: string,
+  strokeColor: string,
+  alpha = 1,
+) {
+  if (!points.length) {
+    return;
+  }
+
+  context.save();
+  context.globalAlpha *= alpha;
+  context.fillStyle = fillColor;
+  context.strokeStyle = strokeColor;
+  context.lineWidth = 3;
+  context.shadowColor = strokeColor;
+  context.shadowBlur = 6;
+  context.beginPath();
+  context.moveTo(points[0].x, points[0].y);
+
+  for (let index = 1; index < points.length; index += 1) {
+    context.lineTo(points[index].x, points[index].y);
+  }
+
+  context.closePath();
+  context.fill();
+  context.stroke();
+  context.restore();
+}
+
+function getEditorTriggerActivationMode(value: unknown): TriggerActivationMode {
+  return value === 'touch' ? 'touch' : 'zone';
+}
+
+function getEditorArrowRampTriangle(object: LevelObject) {
+  const centerX = object.x + object.w / 2;
+  const centerY = object.y + object.h / 2;
+  const normalizedRotation = normalizeQuarterRotation(object.rotation ?? 0);
+  const baseVertices =
+    object.type === 'ARROW_RAMP_ASC'
+      ? [
+          { x: object.x, y: object.y + object.h },
+          { x: object.x + object.w, y: object.y + object.h },
+          { x: object.x + object.w, y: object.y },
+        ]
+      : [
+          { x: object.x, y: object.y },
+          { x: object.x, y: object.y + object.h },
+          { x: object.x + object.w, y: object.y + object.h },
+        ];
+
+  if (normalizedRotation === 0) {
+    return baseVertices;
+  }
+
+  const angle = (normalizedRotation * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+
+  return baseVertices.map((point) => {
+    const offsetX = point.x - centerX;
+    const offsetY = point.y - centerY;
+
+    return {
+      x: centerX + offsetX * cos - offsetY * sin,
+      y: centerY + offsetX * sin + offsetY * cos,
+    };
+  });
+}
+
+function getEditorSawHitRadiusFactor(type: LevelObjectType) {
+  if (type === 'SAW_STAR' || type === 'SAW_STAR_MEDIUM' || type === 'SAW_STAR_LARGE') {
+    return 0.38;
+  }
+
+  if (type === 'SAW_GEAR' || type === 'SAW_GEAR_MEDIUM' || type === 'SAW_GEAR_LARGE') {
+    return 0.4;
+  }
+
+  if (type === 'SAW_GLOW' || type === 'SAW_GLOW_MEDIUM' || type === 'SAW_GLOW_LARGE') {
+    return 0.36;
+  }
+
+  return 0.42;
 }
 
 function clamp(value: number, min: number, max: number) {

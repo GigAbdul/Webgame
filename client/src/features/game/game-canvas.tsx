@@ -5,10 +5,12 @@ import {
   computeAutoLevelFinishX,
   getObjectFillColor,
   getObjectPaintGroupId,
+  getSpikeHitboxRect,
   getObjectStrokeColor,
   isLegacyRunAnchorObjectType,
   isSawObjectType,
   isSpikeObjectType,
+  isTriggerObjectType,
   stripLegacyRunAnchorObjects,
 } from './object-definitions';
 import {
@@ -27,7 +29,10 @@ import {
   BASE_GRAVITY_ACCELERATION,
   BASE_HORIZONTAL_SPEED,
   DEFAULT_JUMP_VELOCITY,
+  DEFAULT_JUMP_ORB_VELOCITY,
+  PLAYER_HITBOX_SIZE,
   PERMANENT_STAGE_FLOOR_Y,
+  getPlayerHitboxLayout,
   normalizeAngle,
   snapCubeRotation,
 } from './player-physics';
@@ -47,6 +52,9 @@ type GameCanvasProps = {
   autoRestartOnFail?: boolean;
   fullscreen?: boolean;
   previewStartPosEnabled?: boolean;
+  previewStartPosInheritPortalState?: boolean;
+  showTriggersInPlayMode?: boolean;
+  showHitboxes?: boolean;
   suppressCompletionOverlay?: boolean;
   stopSignal?: number;
   showRunPath?: boolean;
@@ -98,13 +106,18 @@ type PreviewBootstrap = {
   elapsedMs: number;
 };
 
+type PreviewBootstrapOptions = {
+  inheritPortalState?: boolean;
+};
+
 type PostFxEffectType = 'flash' | 'grayscale' | 'invert' | 'scanlines' | 'blur' | 'shake' | 'tint';
-type PostFxActivationMode = 'touch' | 'zone';
+type TriggerActivationMode = 'touch' | 'zone';
+type MoveTriggerEasing = 'none' | 'easeIn' | 'easeOut' | 'easeInOut';
 
 type ActivePostFxEffect = {
   id: string;
   effectType: PostFxEffectType;
-  activationMode: PostFxActivationMode;
+  activationMode: TriggerActivationMode;
   startedAt: number;
   durationMs: number;
   intensity: number;
@@ -134,8 +147,27 @@ type FinishSequenceState = {
   arcHeight: number;
 };
 
+type PlayerCollisionRect = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  offsetX: number;
+  offsetY: number;
+};
+
 const solidTypes = new Set(['GROUND_BLOCK', 'HALF_GROUND_BLOCK', 'PLATFORM_BLOCK', 'HALF_PLATFORM_BLOCK']);
 const arrowGroundSafeTypes = new Set(['GROUND_BLOCK', 'HALF_GROUND_BLOCK']);
+const orbTypes = new Set(['JUMP_ORB', 'BLUE_ORB', 'GRAVITY_ORB']);
+const portalTypes = new Set([
+  'GRAVITY_PORTAL',
+  'SPEED_PORTAL',
+  'SHIP_PORTAL',
+  'BALL_PORTAL',
+  'CUBE_PORTAL',
+  'ARROW_PORTAL',
+  'FINISH_PORTAL',
+]);
 const JUMP_BUFFER_MS = 130;
 const ORB_PRESS_BUFFER_MS = 130;
 const COYOTE_TIME_MS = 110;
@@ -160,6 +192,7 @@ const FINISH_GATEWAY_HALF_WIDTH_UNITS = 0.42;
 const FINISH_GATEWAY_SCREEN_ANCHOR_RATIO = 0.78;
 const GAMEPLAY_INPUT_CODES = new Set(['Space', 'ArrowUp', 'KeyW']);
 const postFxEffectTypes = new Set<PostFxEffectType>(['flash', 'grayscale', 'invert', 'scanlines', 'blur', 'shake', 'tint']);
+const moveTriggerEasingModes = new Set<MoveTriggerEasing>(['none', 'easeIn', 'easeOut', 'easeInOut']);
 
 export function GameCanvas({
   levelData,
@@ -168,6 +201,9 @@ export function GameCanvas({
   autoRestartOnFail = false,
   fullscreen = false,
   previewStartPosEnabled = false,
+  previewStartPosInheritPortalState = true,
+  showTriggersInPlayMode = false,
+  showHitboxes = false,
   suppressCompletionOverlay = false,
   stopSignal = 0,
   showRunPath = false,
@@ -192,6 +228,8 @@ export function GameCanvas({
   const pauseStartedAtRef = useRef<number | null>(null);
   const pausedDurationMsRef = useRef(0);
   const screenShakeEnabledRef = useRef(true);
+  const showTriggersInPlayModeRef = useRef(showTriggersInPlayMode);
+  const showHitboxesRef = useRef(showHitboxes);
   const handledStopSignalRef = useRef(stopSignal);
   const currentPathRef = useRef<Array<{ x: number; y: number }>>([]);
   const [hud, setHud] = useState({
@@ -230,8 +268,11 @@ export function GameCanvas({
     return null;
   }, [previewStartPosEnabled, sanitizedLevelObjects]);
   const previewBootstrap = useMemo(
-    () => buildPreviewBootstrap(levelData, previewStartPos),
-    [levelData, previewStartPos],
+    () =>
+      buildPreviewBootstrap(levelData, previewStartPos, {
+        inheritPortalState: previewStartPosInheritPortalState,
+      }),
+    [levelData, previewStartPos, previewStartPosInheritPortalState],
   );
   const runtimeMusicOffsetMs = musicOffsetMs + previewBootstrap.elapsedMs;
   const statusLabel =
@@ -308,6 +349,14 @@ export function GameCanvas({
   useEffect(() => {
     screenShakeEnabledRef.current = isScreenShakeEnabled;
   }, [isScreenShakeEnabled]);
+
+  useEffect(() => {
+    showTriggersInPlayModeRef.current = showTriggersInPlayMode;
+  }, [showTriggersInPlayMode]);
+
+  useEffect(() => {
+    showHitboxesRef.current = showHitboxes;
+  }, [showHitboxes]);
 
   useEffect(() => {
     pauseMenuOpenRef.current = false;
@@ -498,8 +547,8 @@ export function GameCanvas({
     const player: PlayerState = {
       x: previewBootstrap.startX,
       y: previewBootstrap.startY,
-      w: 0.82,
-      h: 0.82,
+      w: PLAYER_HITBOX_SIZE,
+      h: PLAYER_HITBOX_SIZE,
       vy: 0,
       rotation: 0,
       grounded: false,
@@ -537,6 +586,7 @@ export function GameCanvas({
         targetY: number;
         startedAt: number;
         durationMs: number;
+        easing: MoveTriggerEasing;
       }
     >();
     let animationFrame = 0;
@@ -1057,10 +1107,6 @@ export function GameCanvas({
           jumpBufferedUntil = Math.max(jumpBufferedUntil, timestamp + JUMP_BUFFER_MS);
         }
 
-        const collisionRangeMinX = player.x - 3;
-        const collisionRangeMaxX = player.x + player.w + (isLowPowerDevice ? 6 : 8);
-        const interactionRangeMinX = player.x - 2;
-        const interactionRangeMaxX = player.x + player.w + (isLowPowerDevice ? 8 : 10);
         let movedRuntimeObjects = false;
 
         for (const [objectId, animation] of moveAnimations) {
@@ -1073,8 +1119,9 @@ export function GameCanvas({
 
           const durationMs = Math.max(1, animation.durationMs);
           const progress = clamp((elapsedMs - animation.startedAt) / durationMs, 0, 1);
-          runtimeObject.x = animation.startX + (animation.targetX - animation.startX) * progress;
-          runtimeObject.y = animation.startY + (animation.targetY - animation.startY) * progress;
+          const easedProgress = applyMoveTriggerEasing(progress, animation.easing);
+          runtimeObject.x = animation.startX + (animation.targetX - animation.startX) * easedProgress;
+          runtimeObject.y = animation.startY + (animation.targetY - animation.startY) * easedProgress;
           movedRuntimeObjects = true;
 
           if (progress >= 1) {
@@ -1104,6 +1151,7 @@ export function GameCanvas({
         const previousX = player.x;
         const previousY = player.y;
         const gravityDirection = Math.sign(player.gravity || 1);
+        const previousCollisionRect = getPlayerCollisionRect(player, { x: previousX, y: previousY });
 
         player.x += horizontalSpeed * deltaSeconds;
 
@@ -1120,34 +1168,43 @@ export function GameCanvas({
 
         player.y += player.vy * deltaSeconds;
         player.grounded = false;
-        const collisionRangeMinY = Math.min(previousY, player.y) - 2.5;
-        const collisionRangeMaxY = Math.max(previousY + player.h, player.y + player.h) + 2.5;
-        const interactionRangeMinY = collisionRangeMinY - 0.75;
-        const interactionRangeMaxY = collisionRangeMaxY + 0.75;
+        let currentCollisionRect = getPlayerCollisionRect(player);
 
         if (player.mode === 'ship' || player.mode === 'arrow') {
           const flightMinY = SHIP_FLIGHT_CEILING_Y + SHIP_VISUAL_BOUND_PADDING;
-          const flightMaxY = SHIP_FLIGHT_FLOOR_Y - player.h - SHIP_VISUAL_BOUND_PADDING;
+          const flightMaxY = SHIP_FLIGHT_FLOOR_Y - currentCollisionRect.h - SHIP_VISUAL_BOUND_PADDING;
 
-          if (player.y < flightMinY) {
-            player.y = flightMinY;
+          if (currentCollisionRect.y < flightMinY) {
+            setPlayerCollisionTop(player, flightMinY);
             player.vy = Math.max(0, player.vy);
+            currentCollisionRect = getPlayerCollisionRect(player);
           }
 
-          if (player.y > flightMaxY) {
-            player.y = flightMaxY;
+          if (currentCollisionRect.y > flightMaxY) {
+            setPlayerCollisionTop(player, flightMaxY);
             player.vy = Math.min(0, player.vy);
+            currentCollisionRect = getPlayerCollisionRect(player);
           }
         }
 
+        const collisionRangeMinX = Math.min(previousCollisionRect.x, currentCollisionRect.x) - 3;
+        const collisionRangeMaxX = Math.max(previousCollisionRect.x + previousCollisionRect.w, currentCollisionRect.x + currentCollisionRect.w) + (isLowPowerDevice ? 6 : 8);
+        const interactionRangeMinX = Math.min(previousCollisionRect.x, currentCollisionRect.x) - 2;
+        const interactionRangeMaxX = Math.max(previousCollisionRect.x + previousCollisionRect.w, currentCollisionRect.x + currentCollisionRect.w) + (isLowPowerDevice ? 8 : 10);
+        const collisionRangeMinY = Math.min(previousCollisionRect.y, currentCollisionRect.y) - 2.5;
+        const collisionRangeMaxY = Math.max(previousCollisionRect.y + previousCollisionRect.h, currentCollisionRect.y + currentCollisionRect.h) + 2.5;
+        const interactionRangeMinY = collisionRangeMinY - 0.75;
+        const interactionRangeMaxY = collisionRangeMaxY + 0.75;
+
         if (currentStatus === 'running' && player.mode !== 'ship') {
-          const previousBottom = previousY + player.h;
-          const nextBottom = player.y + player.h;
+          const previousBottom = previousCollisionRect.y + previousCollisionRect.h;
+          const nextBottom = currentCollisionRect.y + currentCollisionRect.h;
 
           if (previousBottom <= PERMANENT_STAGE_FLOOR_Y && nextBottom >= PERMANENT_STAGE_FLOOR_Y) {
             if (player.gravity > 0 && player.vy >= 0) {
-              player.y = PERMANENT_STAGE_FLOOR_Y - player.h;
+              setPlayerCollisionBottom(player, PERMANENT_STAGE_FLOOR_Y);
               player.vy = 0;
+              currentCollisionRect = getPlayerCollisionRect(player);
               if (player.mode !== 'arrow') {
                 player.grounded = true;
                 lastGroundedAt = timestamp;
@@ -1176,7 +1233,18 @@ export function GameCanvas({
           }
 
           if (object.type === 'ARROW_RAMP_ASC' || object.type === 'ARROW_RAMP_DESC') {
-            if (!aabbIntersects(player.x, player.y, player.w, player.h, object.x, object.y, object.w, object.h)) {
+            if (
+              !aabbIntersects(
+                currentCollisionRect.x,
+                currentCollisionRect.y,
+                currentCollisionRect.w,
+                currentCollisionRect.h,
+                object.x,
+                object.y,
+                object.w,
+                object.h,
+              )
+            ) {
               continue;
             }
 
@@ -1212,7 +1280,16 @@ export function GameCanvas({
 
           if (
             !solidTypes.has(object.type) ||
-            !aabbIntersects(player.x, player.y, player.w, player.h, object.x, object.y, object.w, object.h)
+            !aabbIntersects(
+              currentCollisionRect.x,
+              currentCollisionRect.y,
+              currentCollisionRect.w,
+              currentCollisionRect.h,
+              object.x,
+              object.y,
+              object.w,
+              object.h,
+            )
           ) {
             continue;
           }
@@ -1220,17 +1297,18 @@ export function GameCanvas({
           let resolvedSafely = false;
 
           if (player.mode === 'arrow') {
-            const previousBottom = previousY + player.h;
-            const nextBottom = player.y + player.h;
-            const previousTop = previousY;
-            const nextTop = player.y;
+            const previousBottom = previousCollisionRect.y + previousCollisionRect.h;
+            const nextBottom = currentCollisionRect.y + currentCollisionRect.h;
+            const previousTop = previousCollisionRect.y;
+            const nextTop = currentCollisionRect.y;
             const ceiling = object.y + object.h;
             const isDashProtected = isArrowProtectedByDashBlock(object, collisionRangeMinX, collisionRangeMaxX);
             const isGroundSafeObject = arrowGroundSafeTypes.has(object.type);
 
             if (isGroundSafeObject && player.gravity > 0 && previousBottom <= object.y && nextBottom >= object.y && player.vy >= 0) {
-              player.y = object.y - player.h;
+              setPlayerCollisionBottom(player, object.y);
               player.vy = 0;
+              currentCollisionRect = getPlayerCollisionRect(player);
               resolvedSafely = true;
             }
 
@@ -1242,20 +1320,23 @@ export function GameCanvas({
               nextTop <= ceiling &&
               player.vy <= 0
             ) {
-              player.y = ceiling;
+              setPlayerCollisionTop(player, ceiling);
               player.vy = 0;
+              currentCollisionRect = getPlayerCollisionRect(player);
               resolvedSafely = true;
             }
 
             if (isDashProtected && previousBottom <= object.y && nextBottom >= object.y && player.vy >= 0) {
-              player.y = object.y - player.h;
+              setPlayerCollisionBottom(player, object.y);
               player.vy = 0;
+              currentCollisionRect = getPlayerCollisionRect(player);
               resolvedSafely = true;
             }
 
             if (isDashProtected && !resolvedSafely && previousTop >= ceiling && nextTop <= ceiling && player.vy <= 0) {
-              player.y = ceiling;
+              setPlayerCollisionTop(player, ceiling);
               player.vy = 0;
+              currentCollisionRect = getPlayerCollisionRect(player);
               resolvedSafely = true;
             }
 
@@ -1268,44 +1349,48 @@ export function GameCanvas({
           }
 
           if (player.mode === 'ship') {
-            const previousBottom = previousY + player.h;
-            const nextBottom = player.y + player.h;
-            const previousTop = previousY;
-            const nextTop = player.y;
+            const previousBottom = previousCollisionRect.y + previousCollisionRect.h;
+            const nextBottom = currentCollisionRect.y + currentCollisionRect.h;
+            const previousTop = previousCollisionRect.y;
+            const nextTop = currentCollisionRect.y;
             const ceiling = object.y + object.h;
 
             if (previousBottom <= object.y && nextBottom >= object.y && player.vy >= 0) {
-              player.y = object.y - player.h;
+              setPlayerCollisionBottom(player, object.y);
               player.vy = 0;
+              currentCollisionRect = getPlayerCollisionRect(player);
               resolvedSafely = true;
             }
 
             if (!resolvedSafely && previousTop >= ceiling && nextTop <= ceiling && player.vy <= 0) {
-              player.y = ceiling;
+              setPlayerCollisionTop(player, ceiling);
               player.vy = 0;
+              currentCollisionRect = getPlayerCollisionRect(player);
               resolvedSafely = true;
             }
           }
 
           if (!resolvedSafely && player.gravity > 0) {
-            const previousBottom = previousY + player.h;
-            const nextBottom = player.y + player.h;
+            const previousBottom = previousCollisionRect.y + previousCollisionRect.h;
+            const nextBottom = currentCollisionRect.y + currentCollisionRect.h;
 
             if (previousBottom <= object.y && nextBottom >= object.y && player.vy >= 0) {
-              player.y = object.y - player.h;
+              setPlayerCollisionBottom(player, object.y);
               player.vy = 0;
+              currentCollisionRect = getPlayerCollisionRect(player);
               player.grounded = true;
               lastGroundedAt = timestamp;
               resolvedSafely = true;
             }
           } else if (!resolvedSafely) {
-            const previousTop = previousY;
-            const nextTop = player.y;
+            const previousTop = previousCollisionRect.y;
+            const nextTop = currentCollisionRect.y;
             const ceiling = object.y + object.h;
 
             if (previousTop >= ceiling && nextTop <= ceiling && player.vy <= 0) {
-              player.y = ceiling;
+              setPlayerCollisionTop(player, ceiling);
               player.vy = 0;
+              currentCollisionRect = getPlayerCollisionRect(player);
               player.grounded = true;
               lastGroundedAt = timestamp;
               resolvedSafely = true;
@@ -1360,7 +1445,7 @@ export function GameCanvas({
             } else if (orb.type === 'GRAVITY_ORB') {
               applyGreenOrbLaunch();
             } else {
-              launchPlayer(jumpVelocity * 1.18);
+              launchPlayer(-DEFAULT_JUMP_ORB_VELOCITY * Math.sign(player.gravity || 1));
             }
             jumpBufferedUntil = 0;
             orbBufferedUntil = 0;
@@ -1385,16 +1470,24 @@ export function GameCanvas({
             break;
           }
 
-          const triggerTouched =
-            object.type === 'POST_FX_TRIGGER'
-              ? postFxTriggerIntersectsPlayer(player, object)
-              : aabbIntersects(player.x, player.y, player.w, player.h, object.x, object.y, object.w, object.h);
+          const triggerTouched = isTriggerObjectType(object.type)
+            ? triggerIntersectsPlayer(player, object, levelBounds.maxY)
+            : aabbIntersects(
+                currentCollisionRect.x,
+                currentCollisionRect.y,
+                currentCollisionRect.w,
+                currentCollisionRect.h,
+                object.x,
+                object.y,
+                object.w,
+                object.h,
+              );
 
           if (!activeTriggers.has(object.id) && triggerTouched) {
             activeTriggers.add(object.id);
 
             if (object.type === 'JUMP_PAD' && (player.mode === 'cube' || player.mode === 'ball')) {
-              const boost = Number(object.props.boost ?? 16);
+              const boost = Number(object.props.boost ?? 24);
               registerJump();
               launchPlayer(-boost * Math.sign(player.gravity || 1));
               bumpCamera(5, 0.14);
@@ -1412,12 +1505,14 @@ export function GameCanvas({
             if (object.type === 'SHIP_PORTAL') {
               player.mode = 'ship';
               player.grounded = false;
+              const shipLayout = getPlayerHitboxLayout('ship');
               player.y = clamp(
                 player.y,
-                SHIP_FLIGHT_CEILING_Y + SHIP_VISUAL_BOUND_PADDING,
-                SHIP_FLIGHT_FLOOR_Y - player.h - SHIP_VISUAL_BOUND_PADDING,
+                SHIP_FLIGHT_CEILING_Y + SHIP_VISUAL_BOUND_PADDING - shipLayout.offsetY,
+                SHIP_FLIGHT_FLOOR_Y - shipLayout.height - SHIP_VISUAL_BOUND_PADDING - shipLayout.offsetY,
               );
               player.vy = clamp(player.vy, -SHIP_MAX_VERTICAL_SPEED, SHIP_MAX_VERTICAL_SPEED);
+              currentCollisionRect = getPlayerCollisionRect(player);
             }
 
             if (object.type === 'BALL_PORTAL') {
@@ -1458,6 +1553,7 @@ export function GameCanvas({
                   const moveX = Number(object.props.moveX ?? 2);
                   const moveY = Number(object.props.moveY ?? 0);
                   const durationMs = Math.max(1, Number(object.props.durationMs ?? 650));
+                  const easing = getMoveTriggerEasing(object.props.easing);
 
                   for (const target of targetObjects) {
                     moveAnimations.set(target.id, {
@@ -1467,6 +1563,7 @@ export function GameCanvas({
                       targetY: target.y + moveY,
                       startedAt: elapsedMs,
                       durationMs,
+                      easing,
                     });
                   }
                 }
@@ -1517,7 +1614,7 @@ export function GameCanvas({
               activePostFxEffects.push({
                 id: object.id,
                 effectType: getPostFxEffectType(object.props.effectType),
-                activationMode: getPostFxActivationMode(object.props.activationMode),
+                activationMode: getTriggerActivationMode(object.props.activationMode),
                 startedAt: elapsedMs,
                 durationMs: Math.max(1, Number(object.props.durationMs ?? 900)),
                 intensity: clamp(Number(object.props.intensity ?? 0.75), 0, 1.5),
@@ -1531,18 +1628,18 @@ export function GameCanvas({
           }
         }
 
-        const remainingToAutoFinish = autoFinishX - (player.x + player.w);
+        const remainingToAutoFinish = autoFinishX - (currentCollisionRect.x + currentCollisionRect.w);
         if (currentStatus === 'running' && player.gravity < 0 && remainingToAutoFinish <= EARLY_FINISH_PULL_DISTANCE_UNITS) {
           beginFinishSequence(elapsedMs);
         }
 
-        if (currentStatus === 'running' && player.x + player.w >= autoFinishX) {
+        if (currentStatus === 'running' && currentCollisionRect.x + currentCollisionRect.w >= autoFinishX) {
           beginFinishSequence(elapsedMs);
         }
 
         if (currentStatus === 'running') {
           if (player.mode === 'ship') {
-            if (player.x > levelBounds.maxX + 8) {
+            if (currentCollisionRect.x > levelBounds.maxX + 8) {
               markFailed(elapsedMs);
             }
           } else if (player.y > levelBounds.maxY + 3 || player.y < -3 || player.x > levelBounds.maxX + 8) {
@@ -1628,8 +1725,8 @@ export function GameCanvas({
           point.size *= 0.988;
         }
 
-        const previousRight = previousX + player.w;
-        const nextRight = player.x + player.w;
+        const previousRight = previousCollisionRect.x + previousCollisionRect.w;
+        const nextRight = currentCollisionRect.x + currentCollisionRect.w;
         if (previousRight <= levelBounds.maxX && nextRight > levelBounds.maxX + 4) {
           markFailed(elapsedMs);
         }
@@ -1758,6 +1855,11 @@ export function GameCanvas({
       const drawRangeMinY = -verticalOffset / cell - 2;
       const drawRangeMaxY = (height - verticalOffset) / cell + 2;
       const drawObjectsInRange = getRuntimeObjectsInViewport(drawRangeMinX, drawRangeMaxX, drawRangeMinY, drawRangeMaxY);
+      const hitboxObjects = showHitboxesRef.current
+        ? drawObjectsInRange.filter(
+            (object) => !isRuntimeObjectDisabled(object) && objectIntersectsHorizontalRange(object, drawRangeMinX, drawRangeMaxX),
+          )
+        : null;
 
       for (const object of drawObjectsInRange) {
         if (isRuntimeObjectDisabled(object) || !objectIntersectsHorizontalRange(object, drawRangeMinX, drawRangeMaxX)) {
@@ -1787,6 +1889,11 @@ export function GameCanvas({
           activeTriggers.has(object.id),
           usedOrbs.has(object.id),
           runtimeVisuals,
+          {
+            showTriggersInPlayMode: showTriggersInPlayModeRef.current,
+            triggerGuideTop: -shakeOffsetY,
+            triggerGuideBottom: height - shakeOffsetY,
+          },
         );
       }
 
@@ -1804,6 +1911,9 @@ export function GameCanvas({
         alpha: playerConsumedByFinishGateway ? 0 : finishSequence ? 1 - finishGatewayProgress * 0.82 : 1,
         scale: playerConsumedByFinishGateway ? 0.66 : finishSequence ? 1 - finishGatewayProgress * 0.34 : 1,
       });
+      if (hitboxObjects) {
+        drawRuntimeHitboxes(context, hitboxObjects, player, cell, verticalOffset, levelBounds.maxY);
+      }
       context.restore();
 
       const shouldDrawStatusOverlay =
@@ -2077,6 +2187,35 @@ function HudStat({
   );
 }
 
+function getPlayerCollisionRect(
+  player: Pick<PlayerState, 'x' | 'y' | 'mode'>,
+  overrides?: Partial<Pick<PlayerState, 'x' | 'y' | 'mode'>>,
+): PlayerCollisionRect {
+  const nextMode = overrides?.mode ?? player.mode;
+  const layout = getPlayerHitboxLayout(nextMode);
+  const x = overrides?.x ?? player.x;
+  const y = overrides?.y ?? player.y;
+
+  return {
+    x: x + layout.offsetX,
+    y: y + layout.offsetY,
+    w: layout.width,
+    h: layout.height,
+    offsetX: layout.offsetX,
+    offsetY: layout.offsetY,
+  };
+}
+
+function setPlayerCollisionTop(player: PlayerState, top: number) {
+  const layout = getPlayerHitboxLayout(player.mode);
+  player.y = top - layout.offsetY;
+}
+
+function setPlayerCollisionBottom(player: PlayerState, bottom: number) {
+  const layout = getPlayerHitboxLayout(player.mode);
+  player.y = bottom - layout.offsetY - layout.height;
+}
+
 function drawObject(
   context: CanvasRenderingContext2D,
   object: LevelData['objects'][number],
@@ -2091,8 +2230,17 @@ function drawObject(
     strokeColor: string;
     alpha: number;
   },
+  options?: {
+    showTriggersInPlayMode?: boolean;
+    triggerGuideTop?: number;
+    triggerGuideBottom?: number;
+  },
 ) {
-  if (object.type === 'DASH_BLOCK') {
+  if (object.type === 'DASH_BLOCK' || object.type === 'START_MARKER' || object.type === 'START_POS') {
+    return;
+  }
+
+  if (isTriggerObjectType(object.type) && !options?.showTriggersInPlayMode) {
     return;
   }
 
@@ -2115,6 +2263,8 @@ function drawObject(
     isUsedOrb,
     alpha: visualOverride?.alpha ?? 1,
     animationTimeMs: elapsedMs,
+    editorGuideTop: isTriggerObjectType(object.type) ? options?.triggerGuideTop : undefined,
+    editorGuideBottom: isTriggerObjectType(object.type) ? options?.triggerGuideBottom : undefined,
   });
 }
 
@@ -2333,6 +2483,255 @@ function drawPlayer(
   context.restore();
 }
 
+function drawRuntimeHitboxes(
+  context: CanvasRenderingContext2D,
+  objects: LevelObject[],
+  player: PlayerState,
+  cell: number,
+  verticalOffset: number,
+  levelMaxY: number,
+) {
+  context.save();
+  context.lineWidth = 2.5;
+  context.lineJoin = 'round';
+  context.lineCap = 'round';
+  const playerCollisionRect = getPlayerCollisionRect(player);
+
+  drawHitboxRect(
+    context,
+    playerCollisionRect.x * cell,
+    verticalOffset + playerCollisionRect.y * cell,
+    playerCollisionRect.w * cell,
+    playerCollisionRect.h * cell,
+    'rgba(38, 255, 225, 0.16)',
+    'rgba(96, 255, 235, 0.98)',
+  );
+
+  for (const object of objects) {
+    if (object.type === 'DASH_BLOCK' || object.type === 'START_MARKER' || object.type === 'START_POS') {
+      continue;
+    }
+
+    if (isTriggerObjectType(object.type)) {
+      const activationMode = getTriggerActivationMode(object.props.activationMode);
+
+      if (activationMode === 'zone') {
+        const zoneWidth = Math.max(0.18, object.w * 0.18, playerCollisionRect.w * 0.22);
+        const zoneCenterX = object.x + object.w / 2;
+        const zoneTop = Math.min(-6, SHIP_FLIGHT_CEILING_Y - 2, object.y - 32);
+        const zoneBottom = Math.max(levelMaxY + 6, SHIP_FLIGHT_FLOOR_Y + 2, object.y + object.h + 32);
+
+        drawHitboxRect(
+          context,
+          (zoneCenterX - zoneWidth / 2) * cell,
+          verticalOffset + zoneTop * cell,
+          zoneWidth * cell,
+          Math.max(1, zoneBottom - zoneTop) * cell,
+          'rgba(153, 255, 104, 0.08)',
+          'rgba(153, 255, 104, 0.96)',
+          [8, 6],
+        );
+      } else {
+        drawHitboxRect(
+          context,
+          object.x * cell,
+          verticalOffset + object.y * cell,
+          object.w * cell,
+          object.h * cell,
+          'rgba(153, 255, 104, 0.12)',
+          'rgba(153, 255, 104, 0.96)',
+          [8, 6],
+        );
+      }
+
+      continue;
+    }
+
+    if (isSpikeObjectType(object.type)) {
+      const spikeHitbox = getSpikeHitboxRect(object);
+      drawHazardHitboxPolygon(
+        context,
+        [
+          { x: spikeHitbox.x * cell, y: verticalOffset + spikeHitbox.y * cell },
+          { x: (spikeHitbox.x + spikeHitbox.w) * cell, y: verticalOffset + spikeHitbox.y * cell },
+          { x: (spikeHitbox.x + spikeHitbox.w) * cell, y: verticalOffset + (spikeHitbox.y + spikeHitbox.h) * cell },
+          { x: spikeHitbox.x * cell, y: verticalOffset + (spikeHitbox.y + spikeHitbox.h) * cell },
+        ],
+        'rgba(255, 56, 56, 0.16)',
+        'rgba(255, 36, 36, 0.98)',
+      );
+      continue;
+    }
+
+    if (object.type === 'ARROW_RAMP_ASC' || object.type === 'ARROW_RAMP_DESC') {
+      drawHitboxPolygon(
+        context,
+        getArrowRampTriangle(object).map((point) => ({
+          x: point.x * cell,
+          y: verticalOffset + point.y * cell,
+        })),
+        'rgba(102, 211, 255, 0.14)',
+        'rgba(116, 226, 255, 0.96)',
+      );
+      continue;
+    }
+
+    if (isSawObjectType(object.type)) {
+      const centerX = (object.x + object.w / 2) * cell;
+      const centerY = verticalOffset + (object.y + object.h / 2) * cell;
+      const radius = Math.max(0.18, Math.min(object.w, object.h) * getSawHitRadiusFactor(object.type)) * cell;
+      drawHitboxCircle(
+        context,
+        centerX,
+        centerY,
+        radius,
+        'rgba(255, 83, 109, 0.16)',
+        'rgba(255, 95, 124, 0.98)',
+      );
+      continue;
+    }
+
+    if (orbTypes.has(object.type)) {
+      const centerX = (object.x + object.w / 2) * cell;
+      const centerY = verticalOffset + (object.y + object.h / 2) * cell;
+      const radius = Math.max(0.18, Math.min(object.w, object.h) * 0.39 + 0.02) * cell;
+      drawHitboxCircle(
+        context,
+        centerX,
+        centerY,
+        radius,
+        'rgba(255, 217, 94, 0.16)',
+        'rgba(255, 228, 126, 0.98)',
+      );
+      continue;
+    }
+
+    const isPortal = portalTypes.has(object.type);
+    const isPad = object.type === 'JUMP_PAD';
+    const isSolid = solidTypes.has(object.type);
+    const fillColor = isSolid
+      ? 'rgba(102, 211, 255, 0.14)'
+      : isPortal
+        ? 'rgba(191, 129, 255, 0.14)'
+        : isPad
+          ? 'rgba(255, 217, 94, 0.16)'
+          : 'rgba(255, 255, 255, 0.1)';
+    const strokeColor = isSolid
+      ? 'rgba(116, 226, 255, 0.96)'
+      : isPortal
+        ? 'rgba(210, 158, 255, 0.96)'
+        : isPad
+          ? 'rgba(255, 228, 126, 0.98)'
+          : 'rgba(255, 255, 255, 0.92)';
+
+    drawHitboxRect(
+      context,
+      object.x * cell,
+      verticalOffset + object.y * cell,
+      object.w * cell,
+      object.h * cell,
+      fillColor,
+      strokeColor,
+    );
+  }
+
+  context.restore();
+}
+
+function drawHitboxRect(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  fillColor: string,
+  strokeColor: string,
+  lineDash?: number[],
+) {
+  context.save();
+  if (lineDash?.length) {
+    context.setLineDash(lineDash);
+  }
+  context.fillStyle = fillColor;
+  context.strokeStyle = strokeColor;
+  context.fillRect(x, y, w, h);
+  context.strokeRect(x, y, w, h);
+  context.restore();
+}
+
+function drawHitboxCircle(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  radius: number,
+  fillColor: string,
+  strokeColor: string,
+) {
+  context.save();
+  context.fillStyle = fillColor;
+  context.strokeStyle = strokeColor;
+  context.beginPath();
+  context.arc(x, y, radius, 0, Math.PI * 2);
+  context.fill();
+  context.stroke();
+  context.restore();
+}
+
+function drawHitboxPolygon(
+  context: CanvasRenderingContext2D,
+  points: Array<{ x: number; y: number }>,
+  fillColor: string,
+  strokeColor: string,
+) {
+  if (!points.length) {
+    return;
+  }
+
+  context.save();
+  context.fillStyle = fillColor;
+  context.strokeStyle = strokeColor;
+  context.beginPath();
+  context.moveTo(points[0].x, points[0].y);
+
+  for (let index = 1; index < points.length; index += 1) {
+    context.lineTo(points[index].x, points[index].y);
+  }
+
+  context.closePath();
+  context.fill();
+  context.stroke();
+  context.restore();
+}
+
+function drawHazardHitboxPolygon(
+  context: CanvasRenderingContext2D,
+  points: Array<{ x: number; y: number }>,
+  fillColor: string,
+  strokeColor: string,
+) {
+  if (!points.length) {
+    return;
+  }
+
+  context.save();
+  context.fillStyle = fillColor;
+  context.strokeStyle = strokeColor;
+  context.lineWidth = 3;
+  context.shadowColor = strokeColor;
+  context.shadowBlur = 6;
+  context.beginPath();
+  context.moveTo(points[0].x, points[0].y);
+
+  for (let index = 1; index < points.length; index += 1) {
+    context.lineTo(points[index].x, points[index].y);
+  }
+
+  context.closePath();
+  context.fill();
+  context.stroke();
+  context.restore();
+}
+
 function drawShipBounds(
   context: CanvasRenderingContext2D,
   cameraX: number,
@@ -2542,32 +2941,68 @@ function getPostFxEffectType(value: unknown): PostFxEffectType {
     : 'flash';
 }
 
-function getPostFxActivationMode(value: unknown): PostFxActivationMode {
-  return value === 'zone' ? 'zone' : 'touch';
+function getTriggerActivationMode(value: unknown): TriggerActivationMode {
+  return value === 'touch' ? 'touch' : 'zone';
+}
+
+function getMoveTriggerEasing(value: unknown): MoveTriggerEasing {
+  return typeof value === 'string' && moveTriggerEasingModes.has(value as MoveTriggerEasing)
+    ? (value as MoveTriggerEasing)
+    : 'none';
+}
+
+function applyMoveTriggerEasing(progress: number, easing: MoveTriggerEasing) {
+  const clampedProgress = clamp(progress, 0, 1);
+
+  switch (easing) {
+    case 'easeIn':
+      return clampedProgress * clampedProgress;
+    case 'easeOut':
+      return 1 - (1 - clampedProgress) * (1 - clampedProgress);
+    case 'easeInOut':
+      return clampedProgress < 0.5
+        ? 2 * clampedProgress * clampedProgress
+        : 1 - Math.pow(-2 * clampedProgress + 2, 2) / 2;
+    case 'none':
+    default:
+      return clampedProgress;
+  }
 }
 
 function getRuntimeFxColor(value: unknown, fallback: string) {
   return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value.trim()) ? value.trim() : fallback;
 }
 
-function postFxTriggerIntersectsPlayer(player: PlayerState, object: LevelData['objects'][number]) {
-  const activationMode = getPostFxActivationMode(object.props.activationMode);
+function triggerIntersectsPlayer(player: PlayerState, object: LevelData['objects'][number], levelMaxY: number) {
+  const activationMode = getTriggerActivationMode(object.props.activationMode);
+  const playerCollisionRect = getPlayerCollisionRect(player);
 
   if (activationMode === 'zone') {
-    return aabbIntersects(player.x, player.y, player.w, player.h, object.x, object.y, object.w, object.h);
+    const zoneWidth = Math.max(0.18, object.w * 0.18, playerCollisionRect.w * 0.22);
+    const zoneCenterX = object.x + object.w / 2;
+    const zoneTop = Math.min(-6, SHIP_FLIGHT_CEILING_Y - 2, object.y - 32);
+    const zoneBottom = Math.max(levelMaxY + 6, SHIP_FLIGHT_FLOOR_Y + 2, object.y + object.h + 32);
+    return aabbIntersects(
+      playerCollisionRect.x,
+      playerCollisionRect.y,
+      playerCollisionRect.w,
+      playerCollisionRect.h,
+      zoneCenterX - zoneWidth / 2,
+      zoneTop,
+      zoneWidth,
+      Math.max(1, zoneBottom - zoneTop),
+    );
   }
 
-  const insetX = object.w * 0.22;
-  const insetY = object.h * 0.22;
   return aabbIntersects(
-    player.x,
-    player.y,
-    player.w,
-    player.h,
-    object.x + insetX,
-    object.y + insetY,
-    Math.max(0.16, object.w - insetX * 2),
-    Math.max(0.16, object.h - insetY * 2),
+    playerCollisionRect.x,
+    playerCollisionRect.y,
+    playerCollisionRect.w,
+    playerCollisionRect.h,
+    object.x,
+    object.y,
+    object.w,
+    object.h,
   );
 }
 
@@ -2667,12 +3102,21 @@ function aabbIntersects(
 }
 
 function jumpOrbIntersectsPlayer(player: PlayerState, object: LevelData['objects'][number]) {
+  const playerCollisionRect = getPlayerCollisionRect(player);
   const orbCenterX = object.x + object.w / 2;
   const orbCenterY = object.y + object.h / 2;
   const orbRadius = Math.max(0.18, Math.min(object.w, object.h) * 0.39 + 0.02);
-  const playerInset = Math.min(player.w, player.h) * 0.08;
-  const nearestX = clamp(orbCenterX, player.x + playerInset, player.x + player.w - playerInset);
-  const nearestY = clamp(orbCenterY, player.y + playerInset, player.y + player.h - playerInset);
+  const playerInset = Math.min(playerCollisionRect.w, playerCollisionRect.h) * 0.08;
+  const nearestX = clamp(
+    orbCenterX,
+    playerCollisionRect.x + playerInset,
+    playerCollisionRect.x + playerCollisionRect.w - playerInset,
+  );
+  const nearestY = clamp(
+    orbCenterY,
+    playerCollisionRect.y + playerInset,
+    playerCollisionRect.y + playerCollisionRect.h - playerInset,
+  );
   const deltaX = orbCenterX - nearestX;
   const deltaY = orbCenterY - nearestY;
 
@@ -2680,44 +3124,27 @@ function jumpOrbIntersectsPlayer(player: PlayerState, object: LevelData['objects
 }
 
 function spikeIntersects(player: PlayerState, object: LevelData['objects'][number]) {
-  return triangleIntersectsAabb(player.x, player.y, player.w, player.h, getSpikeTriangle(object));
-}
-
-function getSpikeTriangle(object: LevelData['objects'][number]) {
-  const normalizedRotation = normalizeQuarterRotationDegrees(object.rotation ?? 0);
-  const centerX = object.x + object.w / 2;
-  const centerY = object.y + object.h / 2;
-  const baseVertices = [
-    { x: object.x, y: object.y + object.h },
-    { x: object.x + object.w / 2, y: object.y },
-    { x: object.x + object.w, y: object.y + object.h },
-  ];
-
-  if (normalizedRotation === 0) {
-    return baseVertices;
-  }
-
-  const angle = (normalizedRotation * Math.PI) / 180;
-  const cos = Math.cos(angle);
-  const sin = Math.sin(angle);
-
-  return baseVertices.map((point) => {
-    const offsetX = point.x - centerX;
-    const offsetY = point.y - centerY;
-
-    return {
-      x: centerX + offsetX * cos - offsetY * sin,
-      y: centerY + offsetX * sin + offsetY * cos,
-    };
-  });
+  const playerCollisionRect = getPlayerCollisionRect(player);
+  const spikeHitbox = getSpikeHitboxRect(object);
+  return aabbIntersects(
+    playerCollisionRect.x,
+    playerCollisionRect.y,
+    playerCollisionRect.w,
+    playerCollisionRect.h,
+    spikeHitbox.x,
+    spikeHitbox.y,
+    spikeHitbox.w,
+    spikeHitbox.h,
+  );
 }
 
 function sawIntersects(player: PlayerState, object: LevelData['objects'][number]) {
+  const playerCollisionRect = getPlayerCollisionRect(player);
   const centerX = object.x + object.w / 2;
   const centerY = object.y + object.h / 2;
   const radius = Math.max(0.18, Math.min(object.w, object.h) * getSawHitRadiusFactor(object.type));
-  const nearestX = clamp(centerX, player.x, player.x + player.w);
-  const nearestY = clamp(centerY, player.y, player.y + player.h);
+  const nearestX = clamp(centerX, playerCollisionRect.x, playerCollisionRect.x + playerCollisionRect.w);
+  const nearestY = clamp(centerY, playerCollisionRect.y, playerCollisionRect.y + playerCollisionRect.h);
   const deltaX = centerX - nearestX;
   const deltaY = centerY - nearestY;
 
@@ -3256,6 +3683,7 @@ export function buildPreviewBootstrap(
     x: number;
     y: number;
   } | null,
+  options?: PreviewBootstrapOptions,
 ): PreviewBootstrap {
   const bootstrap: PreviewBootstrap = {
     startX: previewStartPos?.x ?? FIXED_LEVEL_START_X,
@@ -3267,6 +3695,10 @@ export function buildPreviewBootstrap(
   };
 
   if (!previewStartPos || previewStartPos.x <= FIXED_LEVEL_START_X) {
+    return bootstrap;
+  }
+
+  if (options?.inheritPortalState === false) {
     return bootstrap;
   }
 

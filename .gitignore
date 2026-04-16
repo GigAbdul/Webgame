@@ -12,7 +12,6 @@ server/uploads
 .vite
 .eslintcache
 chatgpt-upload
-client/src/**/*.js
 *.tsbuildinfo
 client/*.js
 client/*.d.ts
