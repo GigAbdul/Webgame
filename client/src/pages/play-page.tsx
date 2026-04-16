@@ -6,6 +6,20 @@ import { apiRequest, ApiClientError } from '../services/api';
 import { useAuthStore } from '../store/auth-store';
 import type { Level } from '../types/models';
 
+type CompletionOverlayState = {
+  attemptNumber: number;
+  completionTimeMs: number;
+  rewardText: string;
+  summaryText: string;
+};
+
+function formatCompletionTime(completionTimeMs: number) {
+  const totalSeconds = Math.max(0, Math.floor(completionTimeMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
 export function PlayPage() {
   const { slugOrId = '' } = useParams();
   const navigate = useNavigate();
@@ -17,6 +31,7 @@ export function PlayPage() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionSyncFailed, setSessionSyncFailed] = useState(false);
   const [resultMessage, setResultMessage] = useState<string>('');
+  const [completionOverlay, setCompletionOverlay] = useState<CompletionOverlayState | null>(null);
 
   const levelQuery = useQuery({
     queryKey: ['play-level', slugOrId],
@@ -73,17 +88,31 @@ export function PlayPage() {
         }),
       }),
     onSuccess: (payload) => {
-      setResultMessage(
-        payload.alreadyRewarded
-          ? `Stage cleared. Reward was already claimed earlier. Total stars: ${payload.user.totalStars}.`
-          : `Official clear confirmed. +${payload.starsAwarded} stars, total ${payload.user.totalStars}.`,
+      setCompletionOverlay((current) =>
+        current
+          ? {
+              ...current,
+              rewardText: payload.alreadyRewarded ? 'Reward Claimed' : `+${payload.starsAwarded} Stars`,
+              summaryText: payload.alreadyRewarded
+                ? `Reward was already claimed earlier. Total stars: ${payload.user.totalStars}.`
+                : `Official clear synced. Total stars: ${payload.user.totalStars}.`,
+            }
+          : current,
       );
       void queryClient.invalidateQueries({ queryKey: ['leaderboard'] });
       void queryClient.invalidateQueries({ queryKey: ['leaderboard-me'] });
       void queryClient.invalidateQueries({ queryKey: ['profile'] });
     },
     onError: () => {
-      setResultMessage('Run cleared locally, but reward sync failed. Retry after signing in again if needed.');
+      setCompletionOverlay((current) =>
+        current
+          ? {
+              ...current,
+              rewardText: '+0 Stars',
+              summaryText: 'Run cleared locally, but reward sync failed. Retry after signing in again if needed.',
+            }
+          : current,
+      );
     },
   });
 
@@ -94,6 +123,7 @@ export function PlayPage() {
     setActiveSessionId(null);
     setSessionSyncFailed(false);
     setResultMessage('');
+    setCompletionOverlay(null);
   }, [isAuthenticated, slugOrId]);
 
   useEffect(() => {
@@ -112,6 +142,7 @@ export function PlayPage() {
 
   const restartRun = () => {
     setResultMessage('');
+    setCompletionOverlay(null);
     setActiveSessionId(null);
     setSessionSyncFailed(false);
     setAttemptNumber((current) => current + 1);
@@ -121,7 +152,15 @@ export function PlayPage() {
   if (levelQuery.isLoading) {
     return (
       <div className="play-screen play-screen--fullscreen">
-        <div className="play-screen-state">Loading level...</div>
+        <div className="play-screen-state">
+          <div className="play-screen-loading-card">
+            <p className="play-screen-loading-kicker">Loading</p>
+            <p>Loading level...</p>
+            <div className="loading-bar">
+              <div className="loading-bar-fill loading-bar-fill--indeterminate" />
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
@@ -138,7 +177,7 @@ export function PlayPage() {
 
   return (
     <div className="play-screen play-screen--fullscreen">
-      {resultMessage ? <div className="play-screen-toast">{resultMessage}</div> : null}
+      {resultMessage && !completionOverlay ? <div className="play-screen-toast">{resultMessage}</div> : null}
       {guestPlayable || activeSessionId ? (
         <GameCanvas
           key={activeSessionId ? `${activeSessionId}-${attemptNumber}` : `guest-${runId}-${attemptNumber}`}
@@ -146,6 +185,7 @@ export function PlayPage() {
           runId={activeSessionId ?? `guest-${runId}`}
           attemptNumber={attemptNumber}
           fullscreen
+          suppressCompletionOverlay
           onFail={({ progressPercent }) => {
             if (activeSessionId) {
               failSessionMutation.mutate({
@@ -156,6 +196,15 @@ export function PlayPage() {
             restartRun();
           }}
           onComplete={({ progressPercent, completionTimeMs }) => {
+            setCompletionOverlay({
+              attemptNumber,
+              completionTimeMs,
+              rewardText: activeSessionId ? `+${level.starsReward} Stars` : 'Guest Clear',
+              summaryText: activeSessionId
+                ? 'Syncing official clear reward...'
+                : 'Sign in if you want stars and leaderboard placement.',
+            });
+
             if (activeSessionId) {
               completeSessionMutation.mutate({
                 sessionId: activeSessionId,
@@ -164,8 +213,6 @@ export function PlayPage() {
               });
               return;
             }
-
-            setResultMessage('Guest clear confirmed. Sign in if you want stars and leaderboard placement.');
           }}
           onExitToMenu={({ progressPercent }) => {
             if (activeSessionId) {
@@ -179,8 +226,67 @@ export function PlayPage() {
           }}
         />
       ) : (
-        <div className="play-screen-state">Preparing tracked gameplay session...</div>
+        <div className="play-screen-state">
+          <div className="play-screen-loading-card">
+            <p className="play-screen-loading-kicker">Preparing</p>
+            <p>Preparing tracked gameplay session...</p>
+            <div className="loading-bar">
+              <div className="loading-bar-fill loading-bar-fill--indeterminate" />
+            </div>
+          </div>
+        </div>
       )}
+
+      {completionOverlay ? (
+        <div className="play-complete-overlay" role="dialog" aria-modal="true" aria-label="Level complete">
+          <div className="play-complete-chain play-complete-chain--left" aria-hidden="true" />
+          <div className="play-complete-chain play-complete-chain--right" aria-hidden="true" />
+
+          <section className="play-complete-panel">
+            <p className="play-complete-kicker">Stage Clear</p>
+            <h2 className="play-complete-title">Level Complete!</h2>
+            <p className="play-complete-level">{level.title}</p>
+
+            <div className="play-complete-stats">
+              <div className="play-complete-stat">
+                <span>Attempts</span>
+                <strong>{completionOverlay.attemptNumber}</strong>
+              </div>
+              <div className="play-complete-stat">
+                <span>Time</span>
+                <strong>{formatCompletionTime(completionOverlay.completionTimeMs)}</strong>
+              </div>
+              <div className="play-complete-stat">
+                <span>Reward</span>
+                <strong>{completionOverlay.rewardText}</strong>
+              </div>
+            </div>
+
+            <p className="play-complete-summary">{completionOverlay.summaryText}</p>
+
+            <div className="play-complete-actions">
+              <button
+                type="button"
+                className="play-complete-action"
+                onClick={restartRun}
+                aria-label="Restart level"
+                title="Restart level"
+              >
+                <span aria-hidden="true">↻</span>
+              </button>
+              <button
+                type="button"
+                className="play-complete-action play-complete-action--menu"
+                onClick={() => navigate('/levels')}
+                aria-label="Return to levels"
+                title="Return to levels"
+              >
+                <span aria-hidden="true">≡</span>
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }

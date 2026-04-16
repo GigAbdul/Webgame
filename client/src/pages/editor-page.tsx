@@ -56,7 +56,19 @@ export function EditorPage() {
   }, []);
 
   if (id && levelQuery.isLoading) {
-    return <p className="text-white/70">Loading level editor...</p>;
+    return (
+      <div className="editor-page-shell">
+        <div className="editor-page-loading-screen">
+          <div className="play-screen-loading-card">
+            <p className="play-screen-loading-kicker">Loading</p>
+            <p>Loading level editor...</p>
+            <div className="loading-bar" aria-hidden="true">
+              <div className="loading-bar-fill loading-bar-fill--indeterminate" />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   const level = levelQuery.data?.level ?? null;

@@ -35,6 +35,7 @@ type GameCanvasProps = {
   autoRestartOnFail?: boolean;
   fullscreen?: boolean;
   previewStartPosEnabled?: boolean;
+  suppressCompletionOverlay?: boolean;
   stopSignal?: number;
   showRunPath?: boolean;
   className?: string;
@@ -85,9 +86,9 @@ const structuralHazardTypes = new Set(['ARROW_RAMP_ASC', 'ARROW_RAMP_DESC']);
 const JUMP_BUFFER_MS = 130;
 const COYOTE_TIME_MS = 110;
 const AUTO_RESTART_DELAY_MS = 850;
-export const BASE_HORIZONTAL_SPEED = 6.15;
+export const BASE_HORIZONTAL_SPEED = 7.55;
 const BASE_GRAVITY_ACCELERATION = 55;
-const DEFAULT_JUMP_VELOCITY = 15.5;
+const DEFAULT_JUMP_VELOCITY = 15.65;
 const BALL_FLIP_VELOCITY = DEFAULT_JUMP_VELOCITY * 0.92;
 const GRAVITY_ORB_LAUNCH_VELOCITY = DEFAULT_JUMP_VELOCITY * 0.76;
 const GRAVITY_ORB_MIN_VELOCITY = DEFAULT_JUMP_VELOCITY * 0.48;
@@ -106,6 +107,7 @@ export function GameCanvas({
   autoRestartOnFail = false,
   fullscreen = false,
   previewStartPosEnabled = false,
+  suppressCompletionOverlay = false,
   stopSignal = 0,
   showRunPath = false,
   className,
@@ -138,6 +140,8 @@ export function GameCanvas({
   const [isPauseSettingsOpen, setIsPauseSettingsOpen] = useState(false);
   const [isHudVisible, setIsHudVisible] = useState(true);
   const [isScreenShakeEnabled, setIsScreenShakeEnabled] = useState(true);
+  const [isMusicLoading, setIsMusicLoading] = useState(false);
+  const [musicLoadProgress, setMusicLoadProgress] = useState<number | null>(null);
   const playerModeLabel = getPlayerModeLabel(levelData.player.mode);
   const resolvedMusic = useMemo(() => resolveLevelMusic(levelData.meta), [levelData.meta]);
   const musicOffsetMs = Math.max(0, Number(levelData.meta.musicOffsetMs ?? 0) || 0);
@@ -168,6 +172,8 @@ export function GameCanvas({
   const runtimeMusicOffsetMs = musicOffsetMs + previewBootstrap.elapsedMs;
   const statusLabel =
     hud.status === 'completed' ? 'Stage Clear' : hud.status === 'failed' ? 'Attempt Lost' : 'In Run';
+  const musicLoadingValueLabel =
+    musicLoadProgress === null ? 'Buffering...' : `${Math.round(musicLoadProgress)}%`;
 
   const closePauseMenu = () => {
     if (!pauseMenuOpenRef.current) {
@@ -251,6 +257,16 @@ export function GameCanvas({
   useEffect(() => {
     const currentAudio = audioRef.current;
     const offsetSeconds = runtimeMusicOffsetMs / 1000;
+    let disposed = false;
+
+    const updateMusicLoading = (loading: boolean, progress: number | null = null) => {
+      if (disposed) {
+        return;
+      }
+
+      setIsMusicLoading(loading);
+      setMusicLoadProgress(progress);
+    };
 
     if (currentAudio) {
       currentAudio.pause();
@@ -259,14 +275,45 @@ export function GameCanvas({
     }
 
     if (!resolvedMusic.src) {
+      updateMusicLoading(false, null);
       return;
     }
+
+    updateMusicLoading(true, 4);
 
     const nextAudio = new Audio(resolvedMusic.src);
     nextAudio.loop = true;
     nextAudio.preload = 'auto';
     nextAudio.volume = readStoredMusicVolume();
     audioRef.current = nextAudio;
+
+    const syncMusicProgress = () => {
+      if (disposed) {
+        return;
+      }
+
+      try {
+        if (!Number.isFinite(nextAudio.duration) || nextAudio.duration <= 0 || nextAudio.buffered.length === 0) {
+          updateMusicLoading(true, null);
+          return;
+        }
+
+        const bufferedEnd = nextAudio.buffered.end(nextAudio.buffered.length - 1);
+        const progressPercent = clamp((bufferedEnd / nextAudio.duration) * 100, 0, 100);
+        updateMusicLoading(progressPercent < 99.5, progressPercent);
+      } catch {
+        updateMusicLoading(true, null);
+      }
+    };
+
+    const markMusicReady = () => {
+      syncMusicProgress();
+      updateMusicLoading(false, 100);
+    };
+
+    const markMusicLoadFailed = () => {
+      updateMusicLoading(false, null);
+    };
 
     const applyMusicOffset = () => {
       if (!audioRef.current || audioRef.current !== nextAudio) {
@@ -284,14 +331,29 @@ export function GameCanvas({
     };
 
     nextAudio.addEventListener('loadedmetadata', applyMusicOffset);
+    nextAudio.addEventListener('loadedmetadata', syncMusicProgress);
+    nextAudio.addEventListener('progress', syncMusicProgress);
+    nextAudio.addEventListener('canplay', markMusicReady);
+    nextAudio.addEventListener('canplaythrough', markMusicReady);
+    nextAudio.addEventListener('error', markMusicLoadFailed);
     if (nextAudio.readyState >= 1) {
       applyMusicOffset();
+      syncMusicProgress();
+    }
+    if (nextAudio.readyState >= 3) {
+      markMusicReady();
     }
 
     void nextAudio.play().catch(() => {});
 
     return () => {
+      disposed = true;
       nextAudio.removeEventListener('loadedmetadata', applyMusicOffset);
+      nextAudio.removeEventListener('loadedmetadata', syncMusicProgress);
+      nextAudio.removeEventListener('progress', syncMusicProgress);
+      nextAudio.removeEventListener('canplay', markMusicReady);
+      nextAudio.removeEventListener('canplaythrough', markMusicReady);
+      nextAudio.removeEventListener('error', markMusicLoadFailed);
       nextAudio.pause();
       nextAudio.src = '';
 
@@ -1440,7 +1502,10 @@ export function GameCanvas({
       drawPlayer(context, player, cell, verticalOffset);
       context.restore();
 
-      if (currentStatus === 'failed' || currentStatus === 'completed') {
+      const shouldDrawStatusOverlay =
+        currentStatus === 'failed' || (currentStatus === 'completed' && !suppressCompletionOverlay);
+
+      if (shouldDrawStatusOverlay) {
         context.fillStyle = 'rgba(3, 8, 20, 0.68)';
         context.fillRect(0, 0, width, height);
         context.fillStyle = '#ffffff';
@@ -1479,13 +1544,34 @@ export function GameCanvas({
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       canvas.removeEventListener('pointerdown', pointerDownListener);
     };
-  }, [autoRestartOnFail, fullscreen, levelBounds.maxX, levelBounds.maxY, levelData, onComplete, onFail, previewBootstrap, previewStartPosEnabled, runId, runtimeMusicOffsetMs, showRunPath]);
+  }, [autoFinishX, autoRestartOnFail, fullscreen, levelBounds.maxX, levelBounds.maxY, levelData, previewBootstrap, previewStartPosEnabled, runId, runtimeMusicOffsetMs, sanitizedLevelObjects, showRunPath, suppressCompletionOverlay]); // eslint-disable-line react-hooks/exhaustive-deps -- onFail/onComplete are mirrored into refs above so the runtime loop does not rebuild on parent re-renders
 
       if (fullscreen) {
     return (
       <div className={cn('arcade-runtime-fullscreen', className)}>
         <div className="arcade-runtime-fullscreen-stage">
           <canvas ref={canvasRef} className="arcade-runtime-canvas arcade-runtime-canvas--fullscreen" />
+          {isMusicLoading ? (
+            <div className="arcade-runtime-loading-overlay">
+              <div className="arcade-runtime-loading-panel">
+                <p className="arcade-runtime-loading-kicker">Soundtrack</p>
+                <p className="arcade-runtime-loading-title">Loading Music...</p>
+                <div className="loading-bar">
+                  <div
+                    className={cn(
+                      'loading-bar-fill',
+                      musicLoadProgress === null ? 'loading-bar-fill--indeterminate' : '',
+                    )}
+                    style={musicLoadProgress !== null ? { width: `${musicLoadProgress}%` } : undefined}
+                  />
+                </div>
+                <div className="loading-bar-meta" aria-live="polite">
+                  <span className="loading-bar-label">Audio Buffer</span>
+                  <strong className="loading-bar-value">{musicLoadingValueLabel}</strong>
+                </div>
+              </div>
+            </div>
+          ) : null}
           {isHudVisible ? (
             <>
               <div className="arcade-runtime-hud arcade-runtime-hud--top-left">
@@ -1617,6 +1703,27 @@ export function GameCanvas({
 
       <div className="arcade-runtime-stage">
         <canvas ref={canvasRef} className="arcade-runtime-canvas" />
+        {isMusicLoading ? (
+          <div className="arcade-runtime-loading-overlay">
+            <div className="arcade-runtime-loading-panel">
+              <p className="arcade-runtime-loading-kicker">Soundtrack</p>
+              <p className="arcade-runtime-loading-title">Loading Music...</p>
+              <div className="loading-bar">
+                <div
+                  className={cn(
+                    'loading-bar-fill',
+                    musicLoadProgress === null ? 'loading-bar-fill--indeterminate' : '',
+                  )}
+                  style={musicLoadProgress !== null ? { width: `${musicLoadProgress}%` } : undefined}
+                />
+              </div>
+              <div className="loading-bar-meta" aria-live="polite">
+                <span className="loading-bar-label">Audio Buffer</span>
+                <strong className="loading-bar-value">{musicLoadingValueLabel}</strong>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
 
       <p className="arcade-runtime-footer text-xs leading-6 text-white/72">
