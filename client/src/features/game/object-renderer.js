@@ -1,6 +1,15 @@
 import { getBlockFamily, getBlockStrokeMask, isBlockObjectType, isSawObjectType, isSpikeObjectType, } from './object-definitions';
 const arrowRampTypes = new Set(['ARROW_RAMP_ASC', 'ARROW_RAMP_DESC']);
+const decorationSpriteTypes = new Set([
+    'DECOR_FLAME',
+    'DECOR_TORCH',
+    'DECOR_CHAIN',
+    'DECOR_CRYSTAL',
+    'DECOR_LANTERN',
+]);
 const spritePortalPathByType = {
+    GRAVITY_FLIP_PORTAL: '/portals/gravity-flip.svg',
+    GRAVITY_RETURN_PORTAL: '/portals/gravity-return.svg',
     SHIP_PORTAL: '/portals/ship.svg',
     BALL_PORTAL: '/portals/ball.svg',
     CUBE_PORTAL: '/portals/cube.svg',
@@ -12,6 +21,9 @@ function isArrowRampType(type) {
 }
 function isSpritePortalType(type) {
     return type in spritePortalPathByType;
+}
+function isDecorationSpriteType(type) {
+    return decorationSpriteTypes.has(type);
 }
 export function drawStageObjectSprite({ context, object, neighborObjects, x, y, w, h, fillColor, strokeColor, isActive = false, isUsedOrb = false, alpha = 1, animationTimeMs = 0, editorGuideTop, editorGuideBottom, }) {
     context.save();
@@ -34,6 +46,11 @@ export function drawStageObjectSprite({ context, object, neighborObjects, x, y, 
         context.restore();
         return;
     }
+    if (isDecorationSpriteType(object.type)) {
+        drawDecorationSprite(context, object.type, x, y, w, h, fillColor, strokeColor, animationTimeMs);
+        context.restore();
+        return;
+    }
     if (object.type === 'JUMP_ORB' || object.type === 'BLUE_ORB' || object.type === 'GRAVITY_ORB') {
         drawJumpOrbSprite(context, x, y, w, h, fillColor, strokeColor, isUsedOrb, animationTimeMs, object.type === 'GRAVITY_ORB' ? 'greenGravity' : object.type === 'BLUE_ORB' ? 'blueGravity' : 'jump');
         context.restore();
@@ -44,7 +61,9 @@ export function drawStageObjectSprite({ context, object, neighborObjects, x, y, 
         context.restore();
         return;
     }
-    if (object.type === 'GRAVITY_PORTAL' ||
+    if (object.type === 'GRAVITY_FLIP_PORTAL' ||
+        object.type === 'GRAVITY_RETURN_PORTAL' ||
+        object.type === 'GRAVITY_PORTAL' ||
         object.type === 'SPEED_PORTAL' ||
         object.type === 'SHIP_PORTAL' ||
         object.type === 'BALL_PORTAL' ||
@@ -397,45 +416,156 @@ function getSawVariant(type) {
         centerDotFill: null,
     };
 }
+function getJumpOrbPalette(fillColor, variant) {
+    if (variant === 'greenGravity') {
+        return {
+            emission: mixColor(fillColor, '#eaf3ff', 0.62),
+            shellHighlight: '#f6fbff',
+            shellMid: mixColor(fillColor, '#eef5ff', 0.34),
+            shellShadow: darkenColor(fillColor, 0.34),
+            lowerShadow: '#183762',
+            rimLight: '#eff6ff',
+            innerRing: 'rgba(214, 232, 255, 0.88)',
+            reflectiveBand: 'rgba(232,244,255,0.28)',
+            highlightBlob: 'rgba(255,255,255,0.78)',
+            sparkle: '#ffffff',
+            symbolStroke: '#17396f',
+            symbolGlow: 'rgba(173,214,255,0.84)',
+            particleTrail: mixColor(fillColor, '#e3efff', 0.44),
+            particleSpark: mixColor(fillColor, '#ffffff', 0.76),
+            particleHalo: 'rgba(196,225,255,0.32)',
+        };
+    }
+    if (variant === 'blueGravity') {
+        return {
+            emission: mixColor(fillColor, '#f2ffe1', 0.58),
+            shellHighlight: '#fbfff4',
+            shellMid: mixColor(fillColor, '#f2ffd8', 0.32),
+            shellShadow: darkenColor(fillColor, 0.32),
+            lowerShadow: '#275d1d',
+            rimLight: '#f6ffea',
+            innerRing: 'rgba(235, 255, 214, 0.88)',
+            reflectiveBand: 'rgba(243,255,225,0.26)',
+            highlightBlob: 'rgba(255,255,255,0.74)',
+            sparkle: '#ffffff',
+            symbolStroke: '#1b5f17',
+            symbolGlow: 'rgba(208,255,166,0.82)',
+            particleTrail: mixColor(fillColor, '#ebffd5', 0.42),
+            particleSpark: mixColor(fillColor, '#fffef4', 0.74),
+            particleHalo: 'rgba(221,255,179,0.3)',
+        };
+    }
+    return {
+        emission: mixColor(fillColor, '#fff2ab', 0.54),
+        shellHighlight: '#fffef5',
+        shellMid: mixColor(fillColor, '#ffe993', 0.28),
+        shellShadow: darkenColor(fillColor, 0.3),
+        lowerShadow: '#7f4d00',
+        rimLight: '#fff7c9',
+        innerRing: 'rgba(255, 244, 183, 0.86)',
+        reflectiveBand: 'rgba(255,245,183,0.26)',
+        highlightBlob: 'rgba(255,255,255,0.72)',
+        sparkle: '#fffef0',
+        symbolStroke: '#825300',
+        symbolGlow: 'rgba(255,223,138,0.84)',
+        particleTrail: mixColor(fillColor, '#ffe88c', 0.32),
+        particleSpark: mixColor(fillColor, '#fff8d4', 0.68),
+        particleHalo: 'rgba(255,223,128,0.28)',
+    };
+}
 function drawJumpOrbSprite(context, x, y, w, h, fillColor, strokeColor, isUsedOrb, animationTimeMs, variant) {
     const centerX = x + w / 2;
     const centerY = y + h / 2;
     const radius = Math.max(8, Math.min(w, h) * 0.42);
-    const pulse = isUsedOrb ? 0.22 : 0.5 + Math.sin(animationTimeMs / 180) * 0.14;
+    const pulse = isUsedOrb ? 0.18 : 0.54 + Math.sin(animationTimeMs / 210) * 0.12;
     const isGravityVariant = variant === 'blueGravity' || variant === 'greenGravity';
-    const innerRingColor = variant === 'greenGravity'
-        ? 'rgba(220,236,255,0.7)'
-        : variant === 'blueGravity'
-            ? 'rgba(230,255,220,0.72)'
-            : 'rgba(255,255,255,0.48)';
-    const highlightColor = variant === 'greenGravity'
-        ? 'rgba(228,240,255,0.34)'
-        : variant === 'blueGravity'
-            ? 'rgba(232,255,222,0.36)'
-            : 'rgba(255,255,255,0.28)';
-    const glow = context.createRadialGradient(centerX, centerY, radius * 0.15, centerX, centerY, radius * 1.15);
-    glow.addColorStop(0, lightenColor(fillColor, 0.26 + pulse * 0.18));
-    glow.addColorStop(0.62, fillColor);
-    glow.addColorStop(1, isUsedOrb ? 'rgba(255,255,255,0.08)' : darkenColor(fillColor, 0.26));
-    context.fillStyle = glow;
+    const palette = getJumpOrbPalette(fillColor, variant);
+    const auraRadius = radius * (isUsedOrb ? 1.28 : 2.02 + pulse * 0.16);
+    const aura = context.createRadialGradient(centerX, centerY, radius * 0.1, centerX, centerY, auraRadius);
+    aura.addColorStop(0, toRgba(palette.emission, isUsedOrb ? 0.18 : 0.42 + pulse * 0.1));
+    aura.addColorStop(0.42, toRgba(palette.emission, isUsedOrb ? 0.1 : 0.2 + pulse * 0.06));
+    aura.addColorStop(1, 'rgba(255,255,255,0)');
+    context.fillStyle = aura;
     context.beginPath();
-    context.arc(centerX, centerY, radius, 0, Math.PI * 2);
+    context.arc(centerX, centerY, auraRadius, 0, Math.PI * 2);
+    context.fill();
+    const sideGlow = context.createRadialGradient(centerX - radius * 0.16, centerY - radius * 0.18, radius * 0.1, centerX - radius * 0.16, centerY - radius * 0.18, radius * 1.5);
+    sideGlow.addColorStop(0, toRgba(palette.shellHighlight, isUsedOrb ? 0.12 : 0.22));
+    sideGlow.addColorStop(0.54, toRgba(palette.emission, isUsedOrb ? 0.06 : 0.12));
+    sideGlow.addColorStop(1, 'rgba(255,255,255,0)');
+    context.fillStyle = sideGlow;
+    context.beginPath();
+    context.arc(centerX - radius * 0.08, centerY - radius * 0.06, radius * 1.34, 0, Math.PI * 2);
     context.fill();
     if (!isUsedOrb) {
         drawJumpOrbParticles(context, centerX, centerY, radius, fillColor, animationTimeMs, variant);
     }
+    const sphereFill = context.createRadialGradient(centerX - radius * 0.24, centerY - radius * 0.28, radius * 0.14, centerX, centerY, radius);
+    sphereFill.addColorStop(0, palette.shellHighlight);
+    sphereFill.addColorStop(0.26, lightenColor(palette.shellMid, 0.08));
+    sphereFill.addColorStop(0.6, fillColor);
+    sphereFill.addColorStop(1, palette.shellShadow);
+    context.fillStyle = sphereFill;
+    context.beginPath();
+    context.arc(centerX, centerY, radius, 0, Math.PI * 2);
+    context.fill();
+    const lowerShadow = context.createRadialGradient(centerX + radius * 0.22, centerY + radius * 0.3, radius * 0.08, centerX + radius * 0.12, centerY + radius * 0.18, radius * 0.92);
+    lowerShadow.addColorStop(0, toRgba(palette.lowerShadow, 0.02));
+    lowerShadow.addColorStop(0.56, toRgba(palette.lowerShadow, isUsedOrb ? 0.12 : 0.22));
+    lowerShadow.addColorStop(1, 'rgba(255,255,255,0)');
+    context.fillStyle = lowerShadow;
+    context.beginPath();
+    context.arc(centerX, centerY, radius * 0.98, 0, Math.PI * 2);
+    context.fill();
+    const reflectiveBand = context.createLinearGradient(centerX, centerY - radius, centerX, centerY + radius);
+    reflectiveBand.addColorStop(0, toRgba(palette.reflectiveBand, isUsedOrb ? 0.12 : 0.52));
+    reflectiveBand.addColorStop(0.38, toRgba(palette.reflectiveBand, isUsedOrb ? 0.06 : 0.16));
+    reflectiveBand.addColorStop(1, 'rgba(255,255,255,0)');
+    context.fillStyle = reflectiveBand;
+    context.beginPath();
+    context.ellipse(centerX - radius * 0.12, centerY - radius * 0.06, radius * 0.66, radius * 0.44, -0.72, 0, Math.PI * 2);
+    context.fill();
     context.strokeStyle = strokeColor;
-    context.lineWidth = 2.5;
+    context.lineWidth = 2.6;
     context.beginPath();
-    context.arc(centerX, centerY, radius - 1.5, 0, Math.PI * 2);
+    context.arc(centerX, centerY, radius - 1.2, 0, Math.PI * 2);
     context.stroke();
-    context.strokeStyle = innerRingColor;
-    context.lineWidth = 1.8;
+    context.strokeStyle = palette.rimLight;
+    context.globalAlpha = isUsedOrb ? 0.24 : 0.34 + pulse * 0.12;
+    context.lineWidth = 1.2;
     context.beginPath();
-    context.arc(centerX, centerY, radius * 0.56, 0, Math.PI * 2);
+    context.arc(centerX - radius * 0.02, centerY - radius * 0.02, radius * 0.88, Math.PI * 1.05, Math.PI * 1.82);
     context.stroke();
+    context.globalAlpha = 1;
+    context.strokeStyle = palette.innerRing;
+    context.lineWidth = 1.9;
+    context.beginPath();
+    context.arc(centerX, centerY, radius * 0.58, 0, Math.PI * 2);
+    context.stroke();
+    const innerCore = context.createRadialGradient(centerX - radius * 0.16, centerY - radius * 0.14, radius * 0.05, centerX, centerY, radius * 0.62);
+    innerCore.addColorStop(0, toRgba(palette.shellHighlight, isUsedOrb ? 0.28 : 0.62));
+    innerCore.addColorStop(0.38, toRgba(lightenColor(fillColor, 0.14), isUsedOrb ? 0.18 : 0.44));
+    innerCore.addColorStop(1, 'rgba(255,255,255,0)');
+    context.fillStyle = innerCore;
+    context.beginPath();
+    context.arc(centerX, centerY, radius * 0.52, 0, Math.PI * 2);
+    context.fill();
     if (isGravityVariant) {
-        context.strokeStyle = variant === 'greenGravity' ? 'rgba(18, 53, 112, 0.88)' : 'rgba(14, 74, 18, 0.88)';
+        context.strokeStyle = palette.symbolGlow;
+        context.lineWidth = Math.max(3.8, radius * 0.18);
+        context.lineCap = 'round';
+        context.beginPath();
+        context.moveTo(centerX - radius * 0.22, centerY - radius * 0.24);
+        context.lineTo(centerX + radius * 0.24, centerY);
+        context.lineTo(centerX - radius * 0.22, centerY + radius * 0.24);
+        context.stroke();
+        if (variant === 'greenGravity') {
+            context.beginPath();
+            context.moveTo(centerX + radius * 0.08, centerY - radius * 0.28);
+            context.lineTo(centerX + radius * 0.08, centerY + radius * 0.28);
+            context.stroke();
+        }
+        context.strokeStyle = palette.symbolStroke;
         context.lineWidth = Math.max(2.2, radius * 0.12);
         context.beginPath();
         context.moveTo(centerX - radius * 0.22, centerY - radius * 0.24);
@@ -449,47 +579,82 @@ function drawJumpOrbSprite(context, x, y, w, h, fillColor, strokeColor, isUsedOr
             context.stroke();
         }
     }
-    context.fillStyle = isUsedOrb ? 'rgba(255,255,255,0.18)' : highlightColor;
+    context.fillStyle = isUsedOrb ? 'rgba(255,255,255,0.14)' : palette.highlightBlob;
     context.beginPath();
-    context.arc(centerX - radius * 0.18, centerY - radius * 0.18, radius * 0.22, 0, Math.PI * 2);
+    context.ellipse(centerX - radius * 0.2, centerY - radius * 0.24, radius * 0.26, radius * 0.2, -0.55, 0, Math.PI * 2);
     context.fill();
+    context.fillStyle = toRgba(palette.sparkle, isUsedOrb ? 0.16 : 0.9);
+    context.beginPath();
+    context.arc(centerX - radius * 0.36, centerY - radius * 0.34, radius * 0.07, 0, Math.PI * 2);
+    context.fill();
+    if (!isUsedOrb) {
+        context.strokeStyle = toRgba(palette.rimLight, 0.18 + pulse * 0.08);
+        context.lineWidth = 1.1;
+        context.beginPath();
+        context.arc(centerX, centerY, radius * (1.08 + pulse * 0.04), Math.PI * 0.18, Math.PI * 1.42);
+        context.stroke();
+    }
 }
 function drawJumpOrbParticles(context, centerX, centerY, radius, fillColor, animationTimeMs, variant) {
-    const particleCount = 6;
+    const particleCount = 9;
     const time = animationTimeMs / 1000;
-    const trailColor = variant === 'greenGravity'
-        ? mixColor(fillColor, '#dbeaff', 0.34)
-        : variant === 'blueGravity'
-            ? mixColor(fillColor, '#e7ffd8', 0.34)
-            : mixColor(fillColor, '#ffe88c', 0.26);
-    const sparkColor = variant === 'greenGravity'
-        ? mixColor(fillColor, '#eff6ff', 0.7)
-        : variant === 'blueGravity'
-            ? mixColor(fillColor, '#ffffff', 0.72)
-            : mixColor(fillColor, '#fff6b7', 0.55);
+    const palette = getJumpOrbPalette(fillColor, variant);
     context.save();
     context.lineCap = 'round';
+    context.lineJoin = 'round';
+    const orbitHalo = context.createRadialGradient(centerX, centerY, radius * 0.96, centerX, centerY, radius * 1.72);
+    orbitHalo.addColorStop(0, 'rgba(255,255,255,0)');
+    orbitHalo.addColorStop(0.62, toRgba(palette.particleHalo, 0.2));
+    orbitHalo.addColorStop(1, 'rgba(255,255,255,0)');
+    context.fillStyle = orbitHalo;
+    context.beginPath();
+    context.arc(centerX, centerY, radius * 1.72, 0, Math.PI * 2);
+    context.fill();
     for (let index = 0; index < particleCount; index += 1) {
-        const progress = ((time * 0.9 + index * 0.17) % 1 + 1) % 1;
-        const angle = time * 2.7 + (index / particleCount) * Math.PI * 2;
-        const startDistance = radius * (0.88 + progress * 0.18);
-        const endDistance = radius * (1.18 + progress * 0.62);
+        const progress = ((time * (0.68 + (index % 3) * 0.14) + index * 0.13) % 1 + 1) % 1;
+        const angle = time * (1.6 + (index % 4) * 0.18) + (index / particleCount) * Math.PI * 2;
+        const startDistance = radius * (0.96 + progress * 0.12);
+        const endDistance = radius * (1.34 + progress * 0.58);
         const startX = centerX + Math.cos(angle) * startDistance;
         const startY = centerY + Math.sin(angle) * startDistance;
         const endX = centerX + Math.cos(angle) * endDistance;
         const endY = centerY + Math.sin(angle) * endDistance;
-        const alpha = 0.12 + (1 - progress) * 0.42;
-        context.strokeStyle = toRgba(trailColor, alpha);
-        context.lineWidth = Math.max(1.4, radius * (0.08 + (1 - progress) * 0.05));
+        const tangentX = -Math.sin(angle);
+        const tangentY = Math.cos(angle);
+        const trailTailX = startX - tangentX * radius * (0.18 + (1 - progress) * 0.22);
+        const trailTailY = startY - tangentY * radius * (0.18 + (1 - progress) * 0.22);
+        const alpha = 0.14 + (1 - progress) * 0.4;
+        context.strokeStyle = toRgba(palette.particleTrail, alpha);
+        context.lineWidth = Math.max(1.2, radius * (0.06 + (1 - progress) * 0.05));
+        context.beginPath();
+        context.moveTo(trailTailX, trailTailY);
+        context.quadraticCurveTo(startX, startY, endX, endY);
+        context.stroke();
+        context.strokeStyle = toRgba(palette.particleHalo, 0.1 + (1 - progress) * 0.16);
+        context.lineWidth = Math.max(0.8, radius * 0.038);
         context.beginPath();
         context.moveTo(startX, startY);
         context.lineTo(endX, endY);
         context.stroke();
-        context.fillStyle = sparkColor;
-        context.globalAlpha = 0.24 + (1 - progress) * 0.48;
+        context.fillStyle = palette.particleSpark;
+        context.globalAlpha = 0.28 + (1 - progress) * 0.44;
         context.beginPath();
-        context.arc(endX, endY, Math.max(1.6, radius * (0.09 + (1 - progress) * 0.05)), 0, Math.PI * 2);
+        context.arc(endX, endY, Math.max(1.5, radius * (0.075 + (1 - progress) * 0.045)), 0, Math.PI * 2);
         context.fill();
+        context.fillStyle = toRgba(palette.emission, 0.34 + (1 - progress) * 0.24);
+        context.beginPath();
+        context.arc(endX, endY, Math.max(2.6, radius * (0.12 + (1 - progress) * 0.04)), 0, Math.PI * 2);
+        context.fill();
+    }
+    context.globalAlpha = 1;
+    for (let index = 0; index < 3; index += 1) {
+        const arcRotation = time * (0.9 + index * 0.14) + index * Math.PI * 0.72;
+        const arcRadius = radius * (1.18 + index * 0.08);
+        context.strokeStyle = toRgba(palette.particleHalo, 0.1 + index * 0.04);
+        context.lineWidth = Math.max(0.9, radius * 0.035);
+        context.beginPath();
+        context.arc(centerX, centerY, arcRadius, arcRotation, arcRotation + Math.PI * (0.34 + index * 0.04));
+        context.stroke();
     }
     context.restore();
 }
@@ -650,14 +815,28 @@ function drawPortalSpriteImage(context, image, x, y, w, h, isActive, rotationDeg
     context.restore();
 }
 function drawSpritePortalPlaceholder(context, type, x, y, w, h, isActive) {
-    const portalCode = type === 'SHIP_PORTAL' ? 'S' : type === 'BALL_PORTAL' ? 'B' : type === 'CUBE_PORTAL' ? 'C' : 'W';
-    const fillColor = type === 'SHIP_PORTAL'
-        ? '#ffb44a'
-        : type === 'BALL_PORTAL'
-            ? '#ffd95e'
-            : type === 'CUBE_PORTAL'
-                ? '#b3ff5e'
-                : '#5ee7ff';
+    const portalCode = type === 'GRAVITY_FLIP_PORTAL'
+        ? 'GF'
+        : type === 'GRAVITY_RETURN_PORTAL'
+            ? 'GR'
+            : type === 'SHIP_PORTAL'
+                ? 'S'
+                : type === 'BALL_PORTAL'
+                    ? 'B'
+                    : type === 'CUBE_PORTAL'
+                        ? 'C'
+                        : 'W';
+    const fillColor = type === 'GRAVITY_FLIP_PORTAL'
+        ? '#eeff00'
+        : type === 'GRAVITY_RETURN_PORTAL'
+            ? '#51ffe7'
+            : type === 'SHIP_PORTAL'
+                ? '#ffb44a'
+                : type === 'BALL_PORTAL'
+                    ? '#ffd95e'
+                    : type === 'CUBE_PORTAL'
+                        ? '#b3ff5e'
+                        : '#5ee7ff';
     const outerGradient = context.createLinearGradient(x, y, x, y + h);
     outerGradient.addColorStop(0, 'rgba(15, 23, 54, 0.92)');
     outerGradient.addColorStop(1, 'rgba(7, 12, 30, 0.98)');
@@ -1006,6 +1185,244 @@ function drawCompactTriggerPreviewGlyph(context, type, centerX, centerY, radius)
     }
     context.stroke();
     context.restore();
+}
+function drawDecorationSprite(context, type, x, y, w, h, fillColor, strokeColor, animationTimeMs) {
+    switch (type) {
+        case 'DECOR_FLAME':
+            drawFlameDecoration(context, x, y, w, h, fillColor, strokeColor, animationTimeMs);
+            return;
+        case 'DECOR_TORCH':
+            drawTorchDecoration(context, x, y, w, h, fillColor, strokeColor, animationTimeMs);
+            return;
+        case 'DECOR_CHAIN':
+            drawChainDecoration(context, x, y, w, h, fillColor, strokeColor);
+            return;
+        case 'DECOR_CRYSTAL':
+            drawCrystalDecoration(context, x, y, w, h, fillColor, strokeColor);
+            return;
+        case 'DECOR_LANTERN':
+            drawLanternDecoration(context, x, y, w, h, fillColor, strokeColor, animationTimeMs);
+            return;
+    }
+}
+function drawFlameDecoration(context, x, y, w, h, fillColor, strokeColor, animationTimeMs) {
+    const centerX = x + w / 2;
+    const baseY = y + h * 0.84;
+    const flicker = 1 + Math.sin(animationTimeMs / 150) * 0.05 + Math.sin(animationTimeMs / 72) * 0.03;
+    const sway = Math.sin(animationTimeMs / 210) * w * 0.035;
+    const glow = context.createRadialGradient(centerX, baseY - h * 0.12, w * 0.06, centerX, baseY - h * 0.12, Math.max(w, h) * 0.58);
+    glow.addColorStop(0, toRgba(lightenColor(fillColor, 0.2), 0.46));
+    glow.addColorStop(0.46, toRgba(fillColor, 0.24));
+    glow.addColorStop(1, toRgba(fillColor, 0));
+    context.fillStyle = glow;
+    context.beginPath();
+    context.ellipse(centerX, baseY - h * 0.06, w * 0.48, h * 0.38, 0, 0, Math.PI * 2);
+    context.fill();
+    const logFill = context.createLinearGradient(x, baseY - h * 0.02, x + w, baseY + h * 0.08);
+    logFill.addColorStop(0, '#6f4022');
+    logFill.addColorStop(1, '#2e170d');
+    context.fillStyle = logFill;
+    roundedRectPath(context, x + w * 0.18, baseY - h * 0.02, w * 0.3, h * 0.11, Math.min(w, h) * 0.08);
+    context.fill();
+    roundedRectPath(context, x + w * 0.5, baseY - h * 0.04, w * 0.26, h * 0.1, Math.min(w, h) * 0.08);
+    context.fill();
+    const outerGradient = context.createLinearGradient(centerX, y + h * 0.12, centerX, baseY);
+    outerGradient.addColorStop(0, lightenColor(fillColor, 0.5));
+    outerGradient.addColorStop(0.36, fillColor);
+    outerGradient.addColorStop(1, darkenColor(fillColor, 0.32));
+    drawFlameShape(context, centerX, baseY, w * 0.44, h * 0.6 * flicker, sway);
+    context.fillStyle = outerGradient;
+    context.fill();
+    context.strokeStyle = toRgba(strokeColor, 0.86);
+    context.lineWidth = Math.max(1.2, Math.min(w, h) * 0.06);
+    context.stroke();
+    const innerGradient = context.createLinearGradient(centerX, y + h * 0.22, centerX, baseY);
+    innerGradient.addColorStop(0, '#fff4bf');
+    innerGradient.addColorStop(0.55, lightenColor(fillColor, 0.32));
+    innerGradient.addColorStop(1, '#ff9c4d');
+    drawFlameShape(context, centerX + sway * 0.4, baseY - h * 0.02, w * 0.22, h * 0.34 * flicker, -sway * 0.35);
+    context.fillStyle = innerGradient;
+    context.fill();
+    context.fillStyle = toRgba('#fff8d9', 0.85);
+    context.beginPath();
+    context.arc(x + w * 0.38, y + h * 0.38, Math.max(1.2, w * 0.035), 0, Math.PI * 2);
+    context.arc(x + w * 0.63, y + h * 0.3, Math.max(1.4, w * 0.042), 0, Math.PI * 2);
+    context.fill();
+}
+function drawTorchDecoration(context, x, y, w, h, fillColor, strokeColor, animationTimeMs) {
+    const centerX = x + w / 2;
+    const handleX = centerX - w * 0.08;
+    const handleY = y + h * 0.34;
+    const handleW = w * 0.16;
+    const handleH = h * 0.52;
+    const handleGradient = context.createLinearGradient(handleX, handleY, handleX, handleY + handleH);
+    handleGradient.addColorStop(0, '#855535');
+    handleGradient.addColorStop(1, '#422312');
+    roundedRectPath(context, handleX, handleY, handleW, handleH, Math.min(w, h) * 0.08);
+    context.fillStyle = handleGradient;
+    context.fill();
+    const bracketY = y + h * 0.28;
+    roundedRectPath(context, centerX - w * 0.16, bracketY, w * 0.32, h * 0.1, Math.min(w, h) * 0.08);
+    context.fillStyle = darkenColor(strokeColor, 0.14);
+    context.fill();
+    context.strokeStyle = lightenColor(strokeColor, 0.2);
+    context.lineWidth = Math.max(1.2, Math.min(w, h) * 0.05);
+    context.stroke();
+    const glow = context.createRadialGradient(centerX, y + h * 0.22, w * 0.04, centerX, y + h * 0.22, Math.max(w, h) * 0.42);
+    glow.addColorStop(0, toRgba(lightenColor(fillColor, 0.18), 0.48));
+    glow.addColorStop(0.5, toRgba(fillColor, 0.22));
+    glow.addColorStop(1, toRgba(fillColor, 0));
+    context.fillStyle = glow;
+    context.beginPath();
+    context.ellipse(centerX, y + h * 0.24, w * 0.34, h * 0.28, 0, 0, Math.PI * 2);
+    context.fill();
+    const flicker = 1 + Math.sin(animationTimeMs / 160) * 0.05;
+    const sway = Math.sin(animationTimeMs / 230) * w * 0.025;
+    const outerGradient = context.createLinearGradient(centerX, y + h * 0.02, centerX, y + h * 0.34);
+    outerGradient.addColorStop(0, '#fff7cc');
+    outerGradient.addColorStop(0.46, fillColor);
+    outerGradient.addColorStop(1, '#d14e1f');
+    drawFlameShape(context, centerX, y + h * 0.32, w * 0.22, h * 0.27 * flicker, sway);
+    context.fillStyle = outerGradient;
+    context.fill();
+    context.strokeStyle = toRgba(strokeColor, 0.8);
+    context.lineWidth = Math.max(1, Math.min(w, h) * 0.045);
+    context.stroke();
+    const innerGradient = context.createLinearGradient(centerX, y + h * 0.06, centerX, y + h * 0.3);
+    innerGradient.addColorStop(0, '#fffdf4');
+    innerGradient.addColorStop(1, '#ffb968');
+    drawFlameShape(context, centerX + sway * 0.35, y + h * 0.3, w * 0.11, h * 0.16 * flicker, -sway * 0.22);
+    context.fillStyle = innerGradient;
+    context.fill();
+}
+function drawChainDecoration(context, x, y, w, h, fillColor, strokeColor) {
+    const capH = Math.max(3, h * 0.07);
+    roundedRectPath(context, x + w * 0.08, y, w * 0.84, capH, Math.min(w, h) * 0.08);
+    context.fillStyle = darkenColor(fillColor, 0.42);
+    context.fill();
+    const centerX = x + w / 2;
+    const chainTop = y + capH + h * 0.02;
+    const linkCount = Math.max(3, Math.round(h / Math.max(w * 1.1, 12)));
+    const step = (h - capH - h * 0.06) / linkCount;
+    const linkRadiusX = Math.max(2, w * 0.22);
+    const linkRadiusY = Math.max(4, step * 0.28);
+    context.lineWidth = Math.max(1.3, Math.min(w, h) * 0.06);
+    context.strokeStyle = strokeColor;
+    for (let index = 0; index < linkCount; index += 1) {
+        const centerY = chainTop + step * (index + 0.5);
+        const rotation = index % 2 === 0 ? 0 : Math.PI / 2;
+        context.beginPath();
+        context.ellipse(centerX, centerY, linkRadiusX, linkRadiusY, rotation, 0, Math.PI * 2);
+        context.fillStyle = toRgba(fillColor, 0.18 + (index % 2) * 0.05);
+        context.fill();
+        context.stroke();
+    }
+}
+function drawCrystalDecoration(context, x, y, w, h, fillColor, strokeColor) {
+    const centerX = x + w / 2;
+    const baseY = y + h * 0.88;
+    const glow = context.createRadialGradient(centerX, y + h * 0.56, w * 0.06, centerX, y + h * 0.56, Math.max(w, h) * 0.52);
+    glow.addColorStop(0, toRgba(lightenColor(fillColor, 0.2), 0.34));
+    glow.addColorStop(0.58, toRgba(fillColor, 0.12));
+    glow.addColorStop(1, toRgba(fillColor, 0));
+    context.fillStyle = glow;
+    context.beginPath();
+    context.ellipse(centerX, y + h * 0.6, w * 0.42, h * 0.34, 0, 0, Math.PI * 2);
+    context.fill();
+    context.beginPath();
+    context.moveTo(centerX, y + h * 0.08);
+    context.lineTo(x + w * 0.68, y + h * 0.34);
+    context.lineTo(x + w * 0.58, baseY);
+    context.lineTo(x + w * 0.42, baseY);
+    context.lineTo(x + w * 0.32, y + h * 0.34);
+    context.closePath();
+    const mainGradient = context.createLinearGradient(centerX, y + h * 0.08, centerX, baseY);
+    mainGradient.addColorStop(0, lightenColor(fillColor, 0.52));
+    mainGradient.addColorStop(0.38, fillColor);
+    mainGradient.addColorStop(1, darkenColor(fillColor, 0.24));
+    context.fillStyle = mainGradient;
+    context.fill();
+    context.strokeStyle = strokeColor;
+    context.lineWidth = Math.max(1.2, Math.min(w, h) * 0.05);
+    context.stroke();
+    context.beginPath();
+    context.moveTo(x + w * 0.22, y + h * 0.42);
+    context.lineTo(x + w * 0.34, y + h * 0.24);
+    context.lineTo(x + w * 0.42, baseY);
+    context.lineTo(x + w * 0.24, y + h * 0.8);
+    context.closePath();
+    context.fillStyle = toRgba(lightenColor(fillColor, 0.24), 0.85);
+    context.fill();
+    context.stroke();
+    context.beginPath();
+    context.moveTo(x + w * 0.78, y + h * 0.42);
+    context.lineTo(x + w * 0.66, y + h * 0.24);
+    context.lineTo(x + w * 0.58, baseY);
+    context.lineTo(x + w * 0.76, y + h * 0.8);
+    context.closePath();
+    context.fillStyle = toRgba(darkenColor(fillColor, 0.08), 0.88);
+    context.fill();
+    context.stroke();
+    context.strokeStyle = toRgba('#ffffff', 0.52);
+    context.lineWidth = Math.max(1, Math.min(w, h) * 0.03);
+    context.beginPath();
+    context.moveTo(centerX, y + h * 0.14);
+    context.lineTo(centerX, baseY);
+    context.moveTo(x + w * 0.36, y + h * 0.34);
+    context.lineTo(centerX, y + h * 0.18);
+    context.lineTo(x + w * 0.64, y + h * 0.34);
+    context.stroke();
+}
+function drawLanternDecoration(context, x, y, w, h, fillColor, strokeColor, animationTimeMs) {
+    const centerX = x + w / 2;
+    const frameX = x + w * 0.24;
+    const frameY = y + h * 0.28;
+    const frameW = w * 0.52;
+    const frameH = h * 0.5;
+    const flicker = 0.84 + Math.sin(animationTimeMs / 170) * 0.06 + Math.sin(animationTimeMs / 95) * 0.04;
+    context.strokeStyle = strokeColor;
+    context.lineWidth = Math.max(1.2, Math.min(w, h) * 0.05);
+    context.beginPath();
+    context.moveTo(centerX, y + h * 0.04);
+    context.lineTo(centerX, frameY);
+    context.stroke();
+    context.beginPath();
+    context.arc(centerX, y + h * 0.11, w * 0.12, Math.PI, 0);
+    context.stroke();
+    roundedRectPath(context, frameX, frameY, frameW, frameH, Math.min(w, h) * 0.14);
+    context.fillStyle = darkenColor(strokeColor, 0.16);
+    context.fill();
+    context.stroke();
+    const innerGlow = context.createRadialGradient(centerX, frameY + frameH * 0.52, w * 0.05, centerX, frameY + frameH * 0.52, Math.max(frameW, frameH) * 0.56);
+    innerGlow.addColorStop(0, toRgba('#fff8d8', 0.78 * flicker));
+    innerGlow.addColorStop(0.38, toRgba(lightenColor(fillColor, 0.22), 0.56 * flicker));
+    innerGlow.addColorStop(1, toRgba(fillColor, 0.08));
+    roundedRectPath(context, frameX + frameW * 0.14, frameY + frameH * 0.12, frameW * 0.72, frameH * 0.72, Math.min(w, h) * 0.1);
+    context.fillStyle = innerGlow;
+    context.fill();
+    context.beginPath();
+    context.moveTo(centerX, frameY + frameH * 0.08);
+    context.lineTo(centerX, frameY + frameH * 0.92);
+    context.moveTo(frameX + frameW * 0.12, frameY + frameH * 0.52);
+    context.lineTo(frameX + frameW * 0.88, frameY + frameH * 0.52);
+    context.stroke();
+    roundedRectPath(context, frameX + frameW * 0.1, frameY - h * 0.06, frameW * 0.8, h * 0.08, Math.min(w, h) * 0.08);
+    context.fillStyle = lightenColor(strokeColor, 0.08);
+    context.fill();
+    context.beginPath();
+    context.moveTo(centerX, frameY + frameH);
+    context.lineTo(centerX - w * 0.08, y + h * 0.92);
+    context.lineTo(centerX + w * 0.08, y + h * 0.92);
+    context.closePath();
+    context.fillStyle = strokeColor;
+    context.fill();
+}
+function drawFlameShape(context, centerX, baseY, width, height, sway = 0) {
+    context.beginPath();
+    context.moveTo(centerX, baseY);
+    context.bezierCurveTo(centerX - width * 0.62, baseY - height * 0.18, centerX - width * 0.58 + sway, baseY - height * 0.72, centerX + sway * 0.24, baseY - height);
+    context.bezierCurveTo(centerX + width * 0.18 + sway, baseY - height * 0.68, centerX + width * 0.58, baseY - height * 0.22, centerX, baseY);
+    context.closePath();
 }
 function roundedRectPath(context, x, y, width, height, radius) {
     const safeRadius = Math.max(0, Math.min(radius, width / 2, height / 2));

@@ -38,6 +38,8 @@ export const levelObjectTypes = [
   'JUMP_ORB',
   'BLUE_ORB',
   'GRAVITY_ORB',
+  'GRAVITY_FLIP_PORTAL',
+  'GRAVITY_RETURN_PORTAL',
   'GRAVITY_PORTAL',
   'SPEED_PORTAL',
   'SHIP_PORTAL',
@@ -51,6 +53,11 @@ export const levelObjectTypes = [
   'PULSE_TRIGGER',
   'POST_FX_TRIGGER',
   'DECORATION_BLOCK',
+  'DECOR_FLAME',
+  'DECOR_TORCH',
+  'DECOR_CHAIN',
+  'DECOR_CRYSTAL',
+  'DECOR_LANTERN',
   'START_MARKER',
   'START_POS',
 ] as const;
@@ -396,6 +403,20 @@ export const levelObjectDefinitions: Record<
     lethal: false,
     effect: 'gravityOrb',
   },
+  GRAVITY_FLIP_PORTAL: {
+    label: 'Gravity Flip Portal',
+    defaultSize: { w: 1, h: 2 },
+    collides: false,
+    lethal: false,
+    effect: 'gravity',
+  },
+  GRAVITY_RETURN_PORTAL: {
+    label: 'Gravity Return Portal',
+    defaultSize: { w: 1, h: 2 },
+    collides: false,
+    lethal: false,
+    effect: 'gravity',
+  },
   GRAVITY_PORTAL: {
     label: 'Gravity Portal',
     defaultSize: { w: 1, h: 2 },
@@ -487,6 +508,41 @@ export const levelObjectDefinitions: Record<
     lethal: false,
     effect: null,
   },
+  DECOR_FLAME: {
+    label: 'Flame',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: null,
+  },
+  DECOR_TORCH: {
+    label: 'Torch',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: null,
+  },
+  DECOR_CHAIN: {
+    label: 'Chain',
+    defaultSize: { w: 0.4, h: 2 },
+    collides: false,
+    lethal: false,
+    effect: null,
+  },
+  DECOR_CRYSTAL: {
+    label: 'Crystal',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: null,
+  },
+  DECOR_LANTERN: {
+    label: 'Lantern',
+    defaultSize: { w: 1, h: 1.2 },
+    collides: false,
+    lethal: false,
+    effect: null,
+  },
   START_MARKER: {
     label: 'Start',
     defaultSize: { w: 1, h: 1 },
@@ -502,6 +558,17 @@ export const levelObjectDefinitions: Record<
     effect: null,
   },
 };
+
+const decorationObjectTypes = new Set<LevelObjectType>([
+  'DECORATION_BLOCK',
+  'DECOR_FLAME',
+  'DECOR_TORCH',
+  'DECOR_CHAIN',
+  'DECOR_CRYSTAL',
+  'DECOR_LANTERN',
+  'START_MARKER',
+  'START_POS',
+]);
 
 function makeObject(
   id: string,
@@ -520,7 +587,7 @@ function makeObject(
     w,
     h,
     rotation: 0,
-    layer: type === 'DECORATION_BLOCK' ? 'decoration' : 'gameplay',
+    layer: decorationObjectTypes.has(type) ? 'decoration' : 'gameplay',
     editorLayer: 1,
     props,
   } as const;
@@ -580,7 +647,7 @@ export function createSampleLevelDataOne(): LevelData {
       makeObject('orb-1', 'JUMP_ORB', 19, 5),
       makeObject('pad-1', 'JUMP_PAD', 24, 9, 1, 0.5, { boost: 16 }),
       makeObject('portal-speed', 'SPEED_PORTAL', 28, 8, 1, 2, { multiplier: 1.4 }),
-      makeObject('portal-gravity', 'GRAVITY_PORTAL', 33, 8, 1, 2, { gravity: -1 }),
+      makeObject('portal-gravity', 'GRAVITY_FLIP_PORTAL', 33, 8, 1, 2),
       makeObject('platform-2', 'PLATFORM_BLOCK', 36, 2, 5, 1),
       makeObject('spike-3', 'SPIKE', 41, 1),
     ],
@@ -617,7 +684,7 @@ export function createSampleLevelDataTwo(): LevelData {
       makeObject('platform-1', 'PLATFORM_BLOCK', 16, 6, 3, 1),
       makeObject('orb-1', 'JUMP_ORB', 18, 4),
       makeObject('platform-2', 'PLATFORM_BLOCK', 24, 4, 4, 1),
-      makeObject('gravity', 'GRAVITY_PORTAL', 29, 5, 1, 2, { gravity: -1 }),
+      makeObject('gravity', 'GRAVITY_FLIP_PORTAL', 29, 5, 1, 2),
       makeObject('platform-3', 'PLATFORM_BLOCK', 31, 1, 3, 1),
       makeObject('speed', 'SPEED_PORTAL', 36, 2, 1, 2, { multiplier: 1.6 }),
       makeObject('pad-1', 'JUMP_PAD', 42, 9, 1, 0.5, { boost: 18 }),

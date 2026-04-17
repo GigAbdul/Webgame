@@ -11,6 +11,8 @@ import { cn } from '../../utils/cn';
 export { BASE_HORIZONTAL_SPEED } from './player-physics';
 const orbTypes = new Set(['JUMP_ORB', 'BLUE_ORB', 'GRAVITY_ORB']);
 const portalTypes = new Set([
+    'GRAVITY_FLIP_PORTAL',
+    'GRAVITY_RETURN_PORTAL',
     'GRAVITY_PORTAL',
     'SPEED_PORTAL',
     'SHIP_PORTAL',
@@ -34,6 +36,7 @@ const BALL_INSTANT_FLIP_TOUCH_TOLERANCE = 0.12;
 const BLOCK_SUPPORT_BAND_THICKNESS_UNITS = 0.12;
 const GRAVITY_PORTAL_SURFACE_RELEASE_UNITS = 0.08;
 const GRAVITY_PORTAL_MIN_EXIT_SPEED = 1.2;
+const BALL_GRAVITY_PORTAL_FLIP_LOCKOUT_MS = 120;
 const RUNTIME_BUCKET_WIDTH_UNITS = 8;
 const DESKTOP_MAX_PATH_POINTS = 6000;
 const LOW_POWER_MAX_PATH_POINTS = 2400;
@@ -365,6 +368,7 @@ export function GameCanvas({ levelData, attemptNumber = 1, runId = 0, autoRestar
         let restartTimeout = 0;
         let jumpCount = 0;
         let ballFlipQueuedUntilRelease = false;
+        let ballGravityPortalFlipLockedUntil = 0;
         const syncInputHeldState = () => {
             inputHeldRef.current = keyboardInputHeldRef.current || activePointerIdsRef.current.size > 0;
             if (!inputHeldRef.current) {
@@ -470,6 +474,7 @@ export function GameCanvas({ levelData, attemptNumber = 1, runId = 0, autoRestar
             lastGroundedAt = 0;
             airborneStartedAtMs = null;
             invertedGravityFlippedAtMs = null;
+            ballGravityPortalFlipLockedUntil = 0;
             player.x = previewBootstrap.startX;
             player.y = previewBootstrap.startY;
             player.vy = 0;
@@ -624,6 +629,9 @@ export function GameCanvas({ levelData, attemptNumber = 1, runId = 0, autoRestar
         };
         const tryImmediateBallFlip = (timestamp = performance.now()) => {
             if (currentStatus !== 'running' || player.mode !== 'ball') {
+                return false;
+            }
+            if (timestamp < ballGravityPortalFlipLockedUntil) {
                 return false;
             }
             const canSurfaceFlip = player.grounded || timestamp - lastGroundedAt <= COYOTE_TIME_MS || isBallTouchingSurfaceNow();
@@ -1149,15 +1157,25 @@ export function GameCanvas({ levelData, attemptNumber = 1, runId = 0, autoRestar
                             launchPlayer(-boost * Math.sign(player.gravity || 1));
                             bumpCamera(5, 0.14);
                         }
-                        if (object.type === 'GRAVITY_PORTAL') {
+                        if (object.type === 'GRAVITY_FLIP_PORTAL' ||
+                            object.type === 'GRAVITY_RETURN_PORTAL' ||
+                            object.type === 'GRAVITY_PORTAL') {
                             const previousGravity = player.gravity === 0 ? 1 : player.gravity;
-                            const nextGravity = Number(object.props.gravity ?? -player.gravity) || -player.gravity;
+                            const nextGravity = object.type === 'GRAVITY_FLIP_PORTAL'
+                                ? -player.gravity
+                                : object.type === 'GRAVITY_RETURN_PORTAL'
+                                    ? 1
+                                    : Number(object.props.gravity ?? -player.gravity) || -player.gravity;
                             trackAutoFinishGravityFlip(previousGravity, nextGravity);
                             player.gravity = nextGravity;
                             player.grounded = false;
                             if (player.mode === 'cube' || player.mode === 'ball') {
                                 releasePlayerFromGravityPortalSurface(nextGravity);
                                 syncCurrentCollisionRects();
+                            }
+                            if (player.mode === 'ball') {
+                                ballGravityPortalFlipLockedUntil = timestamp + BALL_GRAVITY_PORTAL_FLIP_LOCKOUT_MS;
+                                ballFlipQueuedUntilRelease = false;
                             }
                         }
                         if (object.type === 'SPEED_PORTAL') {
@@ -1278,7 +1296,8 @@ export function GameCanvas({ levelData, attemptNumber = 1, runId = 0, autoRestar
                 const invertedAirborneDurationMs = airborneStartedAtMs !== null && invertedGravityFlippedAtMs !== null
                     ? elapsedMs - Math.max(airborneStartedAtMs, invertedGravityFlippedAtMs)
                     : 0;
-                const canAutoFinishFromInvertedFlight = player.gravity < 0 &&
+                const canAutoFinishFromInvertedFlight = player.mode !== 'ship' &&
+                    player.gravity < 0 &&
                     airborneStartedAtMs !== null &&
                     invertedGravityFlippedAtMs !== null &&
                     invertedAirborneDurationMs >= AUTO_FINISH_INVERTED_AIRBORNE_DELAY_MS;
@@ -1288,9 +1307,7 @@ export function GameCanvas({ levelData, attemptNumber = 1, runId = 0, autoRestar
                     remainingToAutoFinish <= EARLY_FINISH_PULL_DISTANCE_UNITS) {
                     beginFinishSequence(elapsedMs);
                 }
-                if (currentStatus === 'running' &&
-                    canAutoFinishFromInvertedFlight &&
-                    currentCollisionRect.x + currentCollisionRect.w >= autoFinishX) {
+                if (currentStatus === 'running' && currentCollisionRect.x + currentCollisionRect.w >= autoFinishX) {
                     beginFinishSequence(elapsedMs);
                 }
                 if (currentStatus === 'running') {
@@ -1365,7 +1382,9 @@ export function GameCanvas({ levelData, attemptNumber = 1, runId = 0, autoRestar
                     x: playerCenterX,
                     y: playerCenterY,
                     alpha: currentStatus === 'running' ? 0.26 : 0.14,
-                    size: 0.82,
+                    size: getPlayerTrailSize(player.mode),
+                    mode: player.mode,
+                    rotation: player.rotation,
                 });
                 if (trail.length > (isMobilePreviewPerformanceMode ? 3 : isLowPowerDevice ? 6 : 12)) {
                     trail.shift();
@@ -1402,7 +1421,9 @@ export function GameCanvas({ levelData, attemptNumber = 1, runId = 0, autoRestar
                     x: centerX,
                     y: centerY,
                     alpha: 0.2 * (1 - finishProgress * 0.45),
-                    size: 0.82 - finishProgress * 0.18,
+                    size: Math.max(0.42, getPlayerTrailSize(player.mode) - finishProgress * 0.18),
+                    mode: player.mode,
+                    rotation: player.rotation,
                 });
                 if (trail.length > (isMobilePreviewPerformanceMode ? 4 : isLowPowerDevice ? 8 : 14)) {
                     trail.shift();
@@ -1497,12 +1518,7 @@ export function GameCanvas({ levelData, attemptNumber = 1, runId = 0, autoRestar
                 });
             }
             for (const point of trail) {
-                if (point.alpha <= 0.02) {
-                    continue;
-                }
-                const size = point.size * cell;
-                context.fillStyle = `rgba(202,255,69,${point.alpha})`;
-                context.fillRect(point.x * cell - size / 2, verticalOffset + point.y * cell - size / 2, size, size);
+                drawPlayerTrailPoint(context, point, cell, verticalOffset);
             }
             drawPlayer(context, player, cell, verticalOffset, {
                 alpha: playerConsumedByFinishGateway ? 0 : finishSequence ? 1 - finishGatewayProgress * 0.82 : 1,
@@ -1629,6 +1645,32 @@ function drawObject(context, object, neighborObjects, cell, verticalOffset, elap
         editorGuideTop: isTriggerObjectType(object.type) ? options?.triggerGuideTop : undefined,
         editorGuideBottom: isTriggerObjectType(object.type) ? options?.triggerGuideBottom : undefined,
     });
+}
+function getPlayerTrailGlowColor(mode) {
+    switch (mode) {
+        case 'ship':
+            return '#7dfdff';
+        case 'arrow':
+            return '#ff78f8';
+        case 'ball':
+            return '#ffd95e';
+        case 'cube':
+        default:
+            return '#caff45';
+    }
+}
+function getPlayerTrailSize(mode) {
+    switch (mode) {
+        case 'ship':
+            return 0.92;
+        case 'arrow':
+            return 0.88;
+        case 'ball':
+            return 0.78;
+        case 'cube':
+        default:
+            return 0.82;
+    }
 }
 function drawPlayer(context, player, cell, verticalOffset, visual = {}) {
     const playerX = player.x * cell;
@@ -1805,6 +1847,45 @@ function drawPlayer(context, player, cell, verticalOffset, visual = {}) {
     context.fillRect(-sizeW * 0.18, -sizeH * 0.18, sizeW * 0.12, sizeH * 0.12);
     context.fillRect(sizeW * 0.06, -sizeH * 0.18, sizeW * 0.12, sizeH * 0.12);
     context.fillRect(-sizeW * 0.18, sizeH * 0.12, sizeW * 0.36, sizeH * 0.08);
+    context.restore();
+}
+function drawPlayerTrailPoint(context, point, cell, verticalOffset) {
+    if (point.alpha <= 0.02) {
+        return;
+    }
+    const glowColor = getPlayerTrailGlowColor(point.mode);
+    const worldX = point.x * cell;
+    const worldY = verticalOffset + point.y * cell;
+    const size = point.size * cell;
+    const glowRadius = point.mode === 'ship' ? size * 1.2 : point.mode === 'arrow' ? size * 1.1 : point.mode === 'ball' ? size : size * 0.94;
+    const trailPlayer = {
+        x: point.x - PLAYER_HITBOX_SIZE / 2,
+        y: point.y - PLAYER_HITBOX_SIZE / 2,
+        w: PLAYER_HITBOX_SIZE,
+        h: PLAYER_HITBOX_SIZE,
+        vy: 0,
+        rotation: point.rotation,
+        grounded: false,
+        gravity: 1,
+        speedMultiplier: 1,
+        mode: point.mode,
+    };
+    context.save();
+    context.globalCompositeOperation = 'lighter';
+    const glow = context.createRadialGradient(worldX, worldY, size * 0.12, worldX, worldY, glowRadius);
+    glow.addColorStop(0, hexToRgba(glowColor, point.alpha * 0.62));
+    glow.addColorStop(0.4, hexToRgba(glowColor, point.alpha * 0.28));
+    glow.addColorStop(1, hexToRgba(glowColor, 0));
+    context.fillStyle = glow;
+    context.beginPath();
+    context.arc(worldX, worldY, glowRadius, 0, Math.PI * 2);
+    context.fill();
+    context.shadowColor = hexToRgba(glowColor, clamp(point.alpha * 1.5, 0, 0.95));
+    context.shadowBlur = Math.max(10, size * 0.95);
+    drawPlayer(context, trailPlayer, cell, verticalOffset, {
+        alpha: point.alpha * 0.72,
+        scale: point.size / PLAYER_HITBOX_SIZE,
+    });
     context.restore();
 }
 function drawRuntimeHitboxes(context, objects, player, cell, verticalOffset, levelMaxY) {
@@ -2662,6 +2743,8 @@ export function buildPreviewBootstrap(levelData, previewStartPos, options) {
             return false;
         }
         return (object.type === 'SPEED_PORTAL' ||
+            object.type === 'GRAVITY_FLIP_PORTAL' ||
+            object.type === 'GRAVITY_RETURN_PORTAL' ||
             object.type === 'GRAVITY_PORTAL' ||
             object.type === 'SHIP_PORTAL' ||
             object.type === 'BALL_PORTAL' ||
@@ -2684,6 +2767,12 @@ export function buildPreviewBootstrap(levelData, previewStartPos, options) {
                 currentSpeedMultiplier = nextMultiplier;
                 bootstrap.speedMultiplier = nextMultiplier;
             }
+        }
+        if (portal.type === 'GRAVITY_FLIP_PORTAL') {
+            bootstrap.gravity = -(bootstrap.gravity === 0 ? 1 : bootstrap.gravity);
+        }
+        if (portal.type === 'GRAVITY_RETURN_PORTAL') {
+            bootstrap.gravity = 1;
         }
         if (portal.type === 'GRAVITY_PORTAL') {
             const nextGravity = Number(portal.props.gravity ?? bootstrap.gravity);

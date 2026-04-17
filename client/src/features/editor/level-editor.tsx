@@ -16,6 +16,7 @@ import {
   getSpikeHitboxRect,
   getObjectStrokeColor,
   hasBlockSupport,
+  isDecorationObjectType,
   isCollidableBlockType,
   isPaintableObjectType,
   isPassThroughBlockType,
@@ -303,6 +304,8 @@ const moveTriggerEasingOptions: Array<{ value: MoveTriggerEasing; label: string 
 const editorOrbHitboxTypes = new Set<LevelObjectType>(['JUMP_ORB', 'BLUE_ORB', 'GRAVITY_ORB']);
 
 const editorPortalHitboxTypes = new Set<LevelObjectType>([
+  'GRAVITY_FLIP_PORTAL',
+  'GRAVITY_RETURN_PORTAL',
   'GRAVITY_PORTAL',
   'SPEED_PORTAL',
   'SHIP_PORTAL',
@@ -333,8 +336,11 @@ const paletteGroups: Array<{ title: string; items: EditorTool[] }> = [
       'HALF_PLATFORM_BLOCK',
       'ARROW_RAMP_ASC',
       'ARROW_RAMP_DESC',
-      'DECORATION_BLOCK',
     ],
+  },
+  {
+    title: 'Decor',
+    items: ['DECORATION_BLOCK', 'DECOR_FLAME', 'DECOR_TORCH', 'DECOR_CHAIN', 'DECOR_CRYSTAL', 'DECOR_LANTERN'],
   },
   { title: 'Helpers', items: ['DASH_BLOCK'] },
   {
@@ -361,7 +367,7 @@ const paletteGroups: Array<{ title: string; items: EditorTool[] }> = [
   { title: 'Boosts', items: ['JUMP_PAD', 'JUMP_ORB', 'BLUE_ORB', 'GRAVITY_ORB'] },
   {
     title: 'Portals',
-    items: ['GRAVITY_PORTAL', 'SPEED_PORTAL', 'SHIP_PORTAL', 'BALL_PORTAL', 'CUBE_PORTAL', 'ARROW_PORTAL'],
+    items: ['GRAVITY_FLIP_PORTAL', 'GRAVITY_RETURN_PORTAL', 'SPEED_PORTAL', 'SHIP_PORTAL', 'BALL_PORTAL', 'CUBE_PORTAL', 'ARROW_PORTAL'],
   },
   { title: 'Triggers', items: ['MOVE_TRIGGER', 'ALPHA_TRIGGER', 'TOGGLE_TRIGGER', 'PULSE_TRIGGER', 'POST_FX_TRIGGER'] },
   { title: 'Preview', items: ['START_POS'] },
@@ -409,7 +415,9 @@ const toolDescriptions: Record<EditorTool, string> = {
   JUMP_ORB: 'Mid-air extra jump',
   BLUE_ORB: 'Flips gravity without giving a jump boost',
   GRAVITY_ORB: 'Flips gravity, then launches the player in the new direction',
-  GRAVITY_PORTAL: 'Flips gravity',
+  GRAVITY_FLIP_PORTAL: 'Flips gravity relative to the current direction',
+  GRAVITY_RETURN_PORTAL: 'Returns gravity to the normal downward direction',
+  GRAVITY_PORTAL: 'Legacy gravity portal with manual direction',
   SPEED_PORTAL: 'Changes run speed',
   SHIP_PORTAL: 'Switches into ship mode',
   BALL_PORTAL: 'Switches into ball mode',
@@ -422,6 +430,11 @@ const toolDescriptions: Record<EditorTool, string> = {
   PULSE_TRIGGER: 'Pulses a group color for a short burst',
   POST_FX_TRIGGER: 'Applies fullscreen post-processing effects during the run',
   DECORATION_BLOCK: 'Visual block only',
+  DECOR_FLAME: 'Animated ambient fire without gameplay collision',
+  DECOR_TORCH: 'Wall torch with a small flame',
+  DECOR_CHAIN: 'Hanging chain for ceilings and industrial sections',
+  DECOR_CRYSTAL: 'Glowing crystal cluster',
+  DECOR_LANTERN: 'Hanging lantern with warm light',
   START_MARKER: 'Legacy spawn point',
   START_POS: 'Preview checkpoint for editor testing',
 };
@@ -511,6 +524,8 @@ function getDesktopPalettePreviewTool(groupTitle: string): EditorTool {
   switch (groupTitle) {
     case 'Blocks':
       return 'GROUND_BLOCK';
+    case 'Decor':
+      return 'DECOR_FLAME';
     case 'Helpers':
       return 'DASH_BLOCK';
     case 'Obstacles':
@@ -518,7 +533,7 @@ function getDesktopPalettePreviewTool(groupTitle: string): EditorTool {
     case 'Boosts':
       return 'JUMP_PAD';
     case 'Portals':
-      return 'GRAVITY_PORTAL';
+      return 'GRAVITY_FLIP_PORTAL';
     case 'Triggers':
       return 'MOVE_TRIGGER';
     case 'Preview':
@@ -1931,7 +1946,7 @@ export function LevelEditor({
       w: definition.defaultSize.w,
       h: definition.defaultSize.h,
       rotation: 0,
-      layer: type === 'DECORATION_BLOCK' ? 'decoration' : 'gameplay',
+      layer: isDecorationObjectType(type) ? 'decoration' : 'gameplay',
       editorLayer: activeEditorLayer,
       props: {
         ...triggerDefaults,
@@ -5837,7 +5852,7 @@ function ToolButtonPreview({ tool, active }: { tool: EditorTool; active: boolean
         w: definition.defaultSize.w,
         h: definition.defaultSize.h,
         rotation: 0,
-        layer: tool === 'DECORATION_BLOCK' ? 'decoration' : 'gameplay',
+        layer: isDecorationObjectType(tool) ? 'decoration' : 'gameplay',
         editorLayer: 1,
         props: {},
       };

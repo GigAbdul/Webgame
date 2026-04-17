@@ -368,8 +368,26 @@ export const levelObjectDefinitions: Record<
     lethal: false,
     effect: 'gravityOrb',
   },
+  GRAVITY_FLIP_PORTAL: {
+    label: 'Gravity Flip',
+    color: '#eeff00',
+    strokeColor: '#ffffff',
+    defaultSize: { w: 1, h: 2 },
+    collides: false,
+    lethal: false,
+    effect: 'gravity',
+  },
+  GRAVITY_RETURN_PORTAL: {
+    label: 'Gravity Return',
+    color: '#51ffe7',
+    strokeColor: '#ffffff',
+    defaultSize: { w: 1, h: 2 },
+    collides: false,
+    lethal: false,
+    effect: 'gravity',
+  },
   GRAVITY_PORTAL: {
-    label: 'Gravity',
+    label: 'Gravity Legacy',
     color: '#9d8cff',
     strokeColor: '#ffffff',
     defaultSize: { w: 1, h: 2 },
@@ -481,6 +499,51 @@ export const levelObjectDefinitions: Record<
     color: '#31506f',
     strokeColor: '#0f1b31',
     defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: null,
+  },
+  DECOR_FLAME: {
+    label: 'Flame',
+    color: '#ff9248',
+    strokeColor: '#742417',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: null,
+  },
+  DECOR_TORCH: {
+    label: 'Torch',
+    color: '#ffc85f',
+    strokeColor: '#3d2a1a',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: null,
+  },
+  DECOR_CHAIN: {
+    label: 'Chain',
+    color: '#8ca9cf',
+    strokeColor: '#233149',
+    defaultSize: { w: 0.4, h: 2 },
+    collides: false,
+    lethal: false,
+    effect: null,
+  },
+  DECOR_CRYSTAL: {
+    label: 'Crystal',
+    color: '#79efff',
+    strokeColor: '#14365c',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: null,
+  },
+  DECOR_LANTERN: {
+    label: 'Lantern',
+    color: '#ffd76d',
+    strokeColor: '#2a344d',
+    defaultSize: { w: 1, h: 1.2 },
     collides: false,
     lethal: false,
     effect: null,
@@ -651,6 +714,16 @@ export const sawObjectTypes = [
   'SAW_GLOW_MEDIUM',
   'SAW_GLOW_LARGE',
 ] as const satisfies readonly LevelObjectType[];
+export const decorationObjectTypes = [
+  'DECORATION_BLOCK',
+  'DECOR_FLAME',
+  'DECOR_TORCH',
+  'DECOR_CHAIN',
+  'DECOR_CRYSTAL',
+  'DECOR_LANTERN',
+  'START_MARKER',
+  'START_POS',
+] as const satisfies readonly LevelObjectType[];
 const triggerObjectTypes = new Set<LevelObjectType>([
   'MOVE_TRIGGER',
   'ALPHA_TRIGGER',
@@ -658,6 +731,7 @@ const triggerObjectTypes = new Set<LevelObjectType>([
   'PULSE_TRIGGER',
   'POST_FX_TRIGGER',
 ]);
+const decorationObjectTypeSet = new Set<LevelObjectType>(decorationObjectTypes);
 const nonPaintableObjectTypes = new Set<LevelObjectType>([
   ...triggerObjectTypes,
   'START_MARKER',
@@ -680,6 +754,10 @@ export function isSpikeObjectType(type: LevelObjectType): type is (typeof spikeO
 
 export function isSawObjectType(type: LevelObjectType): type is (typeof sawObjectTypes)[number] {
   return sawObjectTypes.includes(type as (typeof sawObjectTypes)[number]);
+}
+
+export function isDecorationObjectType(type: LevelObjectType): type is (typeof decorationObjectTypes)[number] {
+  return decorationObjectTypeSet.has(type);
 }
 
 export function isBlockObjectType(type: LevelObjectType) {
@@ -884,7 +962,7 @@ function makeObject(id: string, type: LevelObjectType, x: number, y: number) {
     w: definition.defaultSize.w,
     h: definition.defaultSize.h,
     rotation: 0,
-    layer: type === 'DECORATION_BLOCK' ? ('decoration' as const) : ('gameplay' as const),
+    layer: isDecorationObjectType(type) ? ('decoration' as const) : ('gameplay' as const),
     editorLayer: 1 as const,
     props: {},
   };

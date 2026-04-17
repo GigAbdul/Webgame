@@ -50,6 +50,8 @@ export type LevelObjectType =
   | 'JUMP_ORB'
   | 'BLUE_ORB'
   | 'GRAVITY_ORB'
+  | 'GRAVITY_FLIP_PORTAL'
+  | 'GRAVITY_RETURN_PORTAL'
   | 'GRAVITY_PORTAL'
   | 'SPEED_PORTAL'
   | 'SHIP_PORTAL'
@@ -63,6 +65,11 @@ export type LevelObjectType =
   | 'PULSE_TRIGGER'
   | 'POST_FX_TRIGGER'
   | 'DECORATION_BLOCK'
+  | 'DECOR_FLAME'
+  | 'DECOR_TORCH'
+  | 'DECOR_CHAIN'
+  | 'DECOR_CRYSTAL'
+  | 'DECOR_LANTERN'
   | 'START_MARKER'
   | 'START_POS';
 
