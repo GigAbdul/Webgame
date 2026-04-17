@@ -183,6 +183,7 @@ const BALL_RAMP_EXIT_CARRY_FACTOR = 0.96;
 const BALL_RAMP_EXIT_CARRY_MAX = DEFAULT_JUMP_VELOCITY * 0.58;
 const BALL_RAMP_EXIT_CARRY_MIN = DEFAULT_JUMP_VELOCITY * 0.34;
 const BALL_RAMP_EDGE_TOLERANCE = 0.14;
+const BALL_INSTANT_FLIP_TOUCH_TOLERANCE = 0.12;
 const BLOCK_SUPPORT_BAND_THICKNESS_UNITS = 0.12;
 const GRAVITY_PORTAL_SURFACE_RELEASE_UNITS = 0.08;
 const GRAVITY_PORTAL_MIN_EXIT_SPEED = 1.2;
@@ -193,6 +194,7 @@ const MOBILE_PREVIEW_MAX_PATH_POINTS = 900;
 const FINISH_SEQUENCE_DURATION_MS = 620;
 const FINISH_SEQUENCE_MAX_DURATION_MS = 1500;
 const FINISH_SEQUENCE_DISTANCE_DURATION_FACTOR_MS = 78;
+const AUTO_FINISH_INVERTED_AIRBORNE_DELAY_MS = 500;
 const EARLY_FINISH_PULL_DISTANCE_UNITS = 15;
 const FINISH_GATEWAY_OFFSET_UNITS = 0.96;
 const FINISH_GATEWAY_HALF_WIDTH_UNITS = 0.42;
@@ -599,9 +601,12 @@ export function GameCanvas({
     let animationFrame = 0;
     let lastTimestamp = 0;
     let startTime = performance.now() - previewBootstrap.elapsedMs;
+    let currentElapsedMs = previewBootstrap.elapsedMs;
     let jumpBufferedUntil = 0;
     let orbBufferedUntil = 0;
     let lastGroundedAt = 0;
+    let airborneStartedAtMs: number | null = null;
+    let invertedGravityFlippedAtMs: number | null = null;
     let currentStatus: 'running' | 'failed' | 'completed' = 'running';
     let finishSequence: FinishSequenceState | null = null;
     let playerConsumedByFinishGateway = false;
@@ -672,6 +677,15 @@ export function GameCanvas({
     const getRuntimeObjectsInViewport = (minX: number, maxX: number, minY: number, maxY: number) =>
       getRuntimeObjectsInRange(minX, maxX).filter((object) => objectIntersectsVerticalRange(object, minY, maxY));
 
+    const getRuntimeInteractionObjects = (minX: number, maxX: number, minY: number, maxY: number) =>
+      getRuntimeObjectsInRange(minX, maxX).filter((object) => {
+        if (objectIntersectsVerticalRange(object, minY, maxY)) {
+          return true;
+        }
+
+        return isTriggerObjectType(object.type) && getTriggerActivationMode(object.props.activationMode) === 'zone';
+      });
+
     const resetRuntimeObjects = () => {
       runtimeObjects = sourceObjects.map((object) => structuredClone(object));
       rebuildRuntimeObjectMaps();
@@ -735,9 +749,12 @@ export function GameCanvas({
 
       startTime = timestamp - previewBootstrap.elapsedMs;
       lastTimestamp = timestamp;
+      currentElapsedMs = previewBootstrap.elapsedMs;
       jumpBufferedUntil = 0;
       orbBufferedUntil = 0;
       lastGroundedAt = 0;
+      airborneStartedAtMs = null;
+      invertedGravityFlippedAtMs = null;
       player.x = previewBootstrap.startX;
       player.y = previewBootstrap.startY;
       player.vy = 0;
@@ -786,6 +803,17 @@ export function GameCanvas({
       jumpCount += 1;
     };
 
+    const trackAutoFinishGravityFlip = (previousGravity: number, nextGravity: number) => {
+      const previousDirection = Math.sign(previousGravity || 1) || 1;
+      const nextDirection = Math.sign(nextGravity || 1) || 1;
+
+      if (previousDirection === nextDirection) {
+        return;
+      }
+
+      invertedGravityFlippedAtMs = nextDirection < 0 ? currentElapsedMs : null;
+    };
+
     const launchPlayer = (velocity: number) => {
       player.vy = velocity;
       player.grounded = false;
@@ -794,7 +822,9 @@ export function GameCanvas({
 
     const applyBlueOrbGravityFlip = () => {
       const previousGravity = player.gravity === 0 ? 1 : player.gravity;
-      player.gravity = -previousGravity;
+      const nextGravity = -previousGravity;
+      trackAutoFinishGravityFlip(previousGravity, nextGravity);
+      player.gravity = nextGravity;
       player.grounded = false;
       lastGroundedAt = -Infinity;
     };
@@ -811,6 +841,7 @@ export function GameCanvas({
           ? GREEN_ORB_MIN_VELOCITY * launchDirection
           : blendedVelocity;
 
+      trackAutoFinishGravityFlip(previousGravity, nextGravity);
       player.gravity = nextGravity;
       launchPlayer(finalVelocity);
     };
@@ -847,16 +878,89 @@ export function GameCanvas({
       return true;
     };
 
-    const tryImmediateBallFlip = () => {
+    const isBallTouchingSurfaceNow = () => {
+      if (player.mode !== 'ball') {
+        return false;
+      }
+
+      const playerCollisionRect = getPlayerCollisionRect(player);
+      const gravityDirection = Math.sign(player.gravity || 1) || 1;
+      const playerLeft = playerCollisionRect.x + 0.02;
+      const playerRight = playerCollisionRect.x + playerCollisionRect.w - 0.02;
+      const playerTop = playerCollisionRect.y;
+      const playerBottom = playerCollisionRect.y + playerCollisionRect.h;
+
+      if (
+        gravityDirection > 0 &&
+        Math.abs(playerBottom - PERMANENT_STAGE_FLOOR_Y) <= BALL_INSTANT_FLIP_TOUCH_TOLERANCE
+      ) {
+        return true;
+      }
+
+      const nearbyObjects = getRuntimeObjectsInRange(playerCollisionRect.x - 0.6, playerCollisionRect.x + playerCollisionRect.w + 0.6);
+
+      for (const object of nearbyObjects) {
+        if (isRuntimeObjectDisabled(object)) {
+          continue;
+        }
+
+        if (object.type === 'ARROW_RAMP_ASC' || object.type === 'ARROW_RAMP_DESC') {
+          const surface = getArrowRampSurface(object);
+
+          if (!surface) {
+            continue;
+          }
+
+          const supportX = getRampSupportX(player, surface);
+          const surfaceY = getRampSurfaceYAtX(surface, supportX);
+
+          if (gravityDirection > 0 && surface.solidBelow && Math.abs(playerBottom - surfaceY) <= BALL_INSTANT_FLIP_TOUCH_TOLERANCE) {
+            return true;
+          }
+
+          if (gravityDirection < 0 && !surface.solidBelow && Math.abs(playerTop - surfaceY) <= BALL_INSTANT_FLIP_TOUCH_TOLERANCE) {
+            return true;
+          }
+
+          continue;
+        }
+
+        const collisionMask = getBlockCollisionMask(object.type);
+
+        if (!collisionMask || !hasBlockSupport(collisionMask) || playerLeft >= object.x + object.w || playerRight <= object.x) {
+          continue;
+        }
+
+        if (gravityDirection > 0 && collisionMask.top && Math.abs(playerBottom - object.y) <= BALL_INSTANT_FLIP_TOUCH_TOLERANCE) {
+          return true;
+        }
+
+        if (
+          gravityDirection < 0 &&
+          collisionMask.bottom &&
+          Math.abs(playerTop - (object.y + object.h)) <= BALL_INSTANT_FLIP_TOUCH_TOLERANCE
+        ) {
+          return true;
+        }
+      }
+
+      return false;
+    };
+
+    const tryImmediateBallFlip = (timestamp = performance.now()) => {
       if (currentStatus !== 'running' || player.mode !== 'ball') {
         return false;
       }
 
-      if (!player.grounded) {
+      const canSurfaceFlip =
+        player.grounded || timestamp - lastGroundedAt <= COYOTE_TIME_MS || isBallTouchingSurfaceNow();
+
+      if (!canSurfaceFlip) {
         return false;
       }
 
       const nextGravity = player.gravity === 0 ? -1 : -player.gravity;
+      trackAutoFinishGravityFlip(player.gravity, nextGravity);
       player.gravity = nextGravity;
       player.vy = 0;
       player.grounded = false;
@@ -902,7 +1006,7 @@ export function GameCanvas({
       }
 
       if (player.mode === 'ball') {
-        tryImmediateBallFlip();
+        tryImmediateBallFlip(timestamp);
       }
     };
 
@@ -1134,6 +1238,7 @@ export function GameCanvas({
         pausedDurationMsRef.current +
         (pauseMenuOpenRef.current && pauseStartedAtRef.current !== null ? timestamp - pauseStartedAtRef.current : 0);
       const elapsedMs = Math.max(1, Math.floor(timestamp - startTime - pausedElapsedMs));
+      currentElapsedMs = elapsedMs;
       const isPaused = pauseMenuOpenRef.current && currentStatus === 'running';
 
       if (currentStatus === 'running' && !isPaused && !finishSequence) {
@@ -1264,7 +1369,7 @@ export function GameCanvas({
         );
         const interactionObjects =
           currentStatus === 'running'
-            ? getRuntimeObjectsInViewport(interactionRangeMinX, interactionRangeMaxX, interactionRangeMinY, interactionRangeMaxY)
+            ? getRuntimeInteractionObjects(interactionRangeMinX, interactionRangeMaxX, interactionRangeMinY, interactionRangeMaxY)
             : [];
 
         for (const object of collisionObjects) {
@@ -1520,7 +1625,9 @@ export function GameCanvas({
             }
 
             if (object.type === 'GRAVITY_PORTAL') {
+              const previousGravity = player.gravity === 0 ? 1 : player.gravity;
               const nextGravity = Number(object.props.gravity ?? -player.gravity) || -player.gravity;
+              trackAutoFinishGravityFlip(previousGravity, nextGravity);
               player.gravity = nextGravity;
               player.grounded = false;
 
@@ -1663,12 +1770,36 @@ export function GameCanvas({
           }
         }
 
+        if (player.grounded) {
+          airborneStartedAtMs = null;
+        } else if (airborneStartedAtMs === null) {
+          airborneStartedAtMs = elapsedMs;
+        }
+
+        const invertedAirborneDurationMs =
+          airborneStartedAtMs !== null && invertedGravityFlippedAtMs !== null
+            ? elapsedMs - Math.max(airborneStartedAtMs, invertedGravityFlippedAtMs)
+            : 0;
+        const canAutoFinishFromInvertedFlight =
+          player.gravity < 0 &&
+          airborneStartedAtMs !== null &&
+          invertedGravityFlippedAtMs !== null &&
+          invertedAirborneDurationMs >= AUTO_FINISH_INVERTED_AIRBORNE_DELAY_MS;
+
         const remainingToAutoFinish = autoFinishX - (currentCollisionRect.x + currentCollisionRect.w);
-        if (currentStatus === 'running' && player.gravity < 0 && remainingToAutoFinish <= EARLY_FINISH_PULL_DISTANCE_UNITS) {
+        if (
+          currentStatus === 'running' &&
+          canAutoFinishFromInvertedFlight &&
+          remainingToAutoFinish <= EARLY_FINISH_PULL_DISTANCE_UNITS
+        ) {
           beginFinishSequence(elapsedMs);
         }
 
-        if (currentStatus === 'running' && currentCollisionRect.x + currentCollisionRect.w >= autoFinishX) {
+        if (
+          currentStatus === 'running' &&
+          canAutoFinishFromInvertedFlight &&
+          currentCollisionRect.x + currentCollisionRect.w >= autoFinishX
+        ) {
           beginFinishSequence(elapsedMs);
         }
 

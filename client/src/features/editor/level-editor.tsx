@@ -1465,14 +1465,21 @@ export function LevelEditor({
         clearSelection();
       }
 
-      if (!showPreview && !isInlineTestMode && selectedObjectIds.length && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+      const moveStep = event.shiftKey ? 0.5 : 1;
+      const moveDeltaByCode: Partial<Record<KeyboardEvent['code'], { x: number; y: number }>> = {
+        ArrowUp: { x: 0, y: -moveStep },
+        ArrowDown: { x: 0, y: moveStep },
+        ArrowLeft: { x: -moveStep, y: 0 },
+        ArrowRight: { x: moveStep, y: 0 },
+        KeyW: { x: 0, y: -moveStep },
+        KeyS: { x: 0, y: moveStep },
+        KeyA: { x: -moveStep, y: 0 },
+        KeyD: { x: moveStep, y: 0 },
+      };
+      const moveDelta = moveDeltaByCode[event.code];
+
+      if (!showPreview && !isInlineTestMode && selectedObjectIds.length && !event.ctrlKey && !event.metaKey && moveDelta) {
         event.preventDefault();
-        const delta = {
-          ArrowUp: { x: 0, y: -1 },
-          ArrowDown: { x: 0, y: 1 },
-          ArrowLeft: { x: -1, y: 0 },
-          ArrowRight: { x: 1, y: 0 },
-        }[event.key]!;
 
         const next = structuredClone(liveLevelDataRef.current);
         const selectedIdsSet = new Set(selectedObjectIds);
@@ -1483,8 +1490,8 @@ export function LevelEditor({
             continue;
           }
 
-          object.x += delta.x;
-          object.y += delta.y;
+          object.x = roundToStep(object.x + moveDelta.x, 0.5);
+          object.y = roundToStep(object.y + moveDelta.y, 0.5);
           movedAny = true;
 
           if (object.type === 'START_MARKER') {
