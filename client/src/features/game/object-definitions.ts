@@ -1,5 +1,12 @@
 import type { LevelColorGroup, LevelData, LevelObject, LevelObjectType } from '../../types/models';
 
+export type BlockSideMask = {
+  top: boolean;
+  bottom: boolean;
+  left: boolean;
+  right: boolean;
+};
+
 export const levelObjectDefinitions: Record<
   LevelObjectType,
   {
@@ -37,12 +44,102 @@ export const levelObjectDefinitions: Record<
     lethal: false,
     effect: null,
   },
+  GROUND_BLOCK_TOP: {
+    label: 'Ground Top',
+    color: '#31f0ff',
+    strokeColor: '#0f1b31',
+    defaultSize: { w: 1, h: 1 },
+    collides: true,
+    lethal: false,
+    effect: null,
+  },
+  GROUND_BLOCK_TOP_BOTTOM: {
+    label: 'Ground Top/Bottom',
+    color: '#31f0ff',
+    strokeColor: '#0f1b31',
+    defaultSize: { w: 1, h: 1 },
+    collides: true,
+    lethal: false,
+    effect: null,
+  },
+  GROUND_BLOCK_TOP_LEFT: {
+    label: 'Ground Top/Left',
+    color: '#31f0ff',
+    strokeColor: '#0f1b31',
+    defaultSize: { w: 1, h: 1 },
+    collides: true,
+    lethal: false,
+    effect: null,
+  },
+  GROUND_BLOCK_TOP_RIGHT: {
+    label: 'Ground Top/Right',
+    color: '#31f0ff',
+    strokeColor: '#0f1b31',
+    defaultSize: { w: 1, h: 1 },
+    collides: true,
+    lethal: false,
+    effect: null,
+  },
+  GROUND_BLOCK_PASS: {
+    label: 'Ground Ghost',
+    color: '#31f0ff',
+    strokeColor: '#0f1b31',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: null,
+  },
   PLATFORM_BLOCK: {
     label: 'Platform',
     color: '#7af0a5',
     strokeColor: '#103428',
     defaultSize: { w: 1, h: 1 },
     collides: true,
+    lethal: false,
+    effect: null,
+  },
+  PLATFORM_BLOCK_TOP: {
+    label: 'Platform Top',
+    color: '#7af0a5',
+    strokeColor: '#103428',
+    defaultSize: { w: 1, h: 1 },
+    collides: true,
+    lethal: false,
+    effect: null,
+  },
+  PLATFORM_BLOCK_TOP_BOTTOM: {
+    label: 'Platform Top/Bottom',
+    color: '#7af0a5',
+    strokeColor: '#103428',
+    defaultSize: { w: 1, h: 1 },
+    collides: true,
+    lethal: false,
+    effect: null,
+  },
+  PLATFORM_BLOCK_TOP_LEFT: {
+    label: 'Platform Top/Left',
+    color: '#7af0a5',
+    strokeColor: '#103428',
+    defaultSize: { w: 1, h: 1 },
+    collides: true,
+    lethal: false,
+    effect: null,
+  },
+  PLATFORM_BLOCK_TOP_RIGHT: {
+    label: 'Platform Top/Right',
+    color: '#7af0a5',
+    strokeColor: '#103428',
+    defaultSize: { w: 1, h: 1 },
+    collides: true,
+    lethal: false,
+    effect: null,
+  },
+  PLATFORM_BLOCK_PASS: {
+    label: 'Platform Ghost',
+    color: '#7af0a5',
+    strokeColor: '#103428',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
     lethal: false,
     effect: null,
   },
@@ -93,7 +190,7 @@ export const levelObjectDefinitions: Record<
   },
   SPIKE: {
     label: 'Spike',
-    color: '#ff5a87',
+    color: '#000000',
     strokeColor: '#ffffff',
     defaultSize: { w: 1, h: 1 },
     collides: false,
@@ -102,7 +199,7 @@ export const levelObjectDefinitions: Record<
   },
   SPIKE_FLAT: {
     label: 'Flat Spike',
-    color: '#ff6d92',
+    color: '#000000',
     strokeColor: '#ffffff',
     defaultSize: { w: 1, h: 0.5 },
     collides: false,
@@ -111,7 +208,7 @@ export const levelObjectDefinitions: Record<
   },
   SPIKE_SMALL: {
     label: 'Small Spike',
-    color: '#ff7398',
+    color: '#000000',
     strokeColor: '#ffffff',
     defaultSize: { w: 0.72, h: 0.72 },
     collides: false,
@@ -120,7 +217,7 @@ export const levelObjectDefinitions: Record<
   },
   SPIKE_TINY: {
     label: 'Tiny Spike',
-    color: '#ff82a3',
+    color: '#000000',
     strokeColor: '#ffffff',
     defaultSize: { w: 0.46, h: 0.46 },
     collides: false,
@@ -408,6 +505,132 @@ export const levelObjectDefinitions: Record<
   },
 };
 
+type BlockProfile = {
+  family: 'ground' | 'platform' | 'decoration';
+  strokeMask: BlockSideMask;
+  collisionMask: BlockSideMask;
+};
+
+const NO_BLOCK_SIDE_MASK: BlockSideMask = {
+  top: false,
+  bottom: false,
+  left: false,
+  right: false,
+};
+
+const FULL_BLOCK_SIDE_MASK: BlockSideMask = {
+  top: true,
+  bottom: true,
+  left: true,
+  right: true,
+};
+
+const TOP_BLOCK_SIDE_MASK: BlockSideMask = {
+  top: true,
+  bottom: false,
+  left: false,
+  right: false,
+};
+
+const TOP_BOTTOM_BLOCK_SIDE_MASK: BlockSideMask = {
+  top: true,
+  bottom: true,
+  left: false,
+  right: false,
+};
+
+const TOP_LEFT_BLOCK_SIDE_MASK: BlockSideMask = {
+  top: true,
+  bottom: false,
+  left: true,
+  right: false,
+};
+
+const TOP_RIGHT_BLOCK_SIDE_MASK: BlockSideMask = {
+  top: true,
+  bottom: false,
+  left: false,
+  right: true,
+};
+
+const blockProfilesByType: Partial<Record<LevelObjectType, BlockProfile>> = {
+  GROUND_BLOCK: {
+    family: 'ground',
+    strokeMask: FULL_BLOCK_SIDE_MASK,
+    collisionMask: FULL_BLOCK_SIDE_MASK,
+  },
+  GROUND_BLOCK_TOP: {
+    family: 'ground',
+    strokeMask: TOP_BLOCK_SIDE_MASK,
+    collisionMask: TOP_BLOCK_SIDE_MASK,
+  },
+  GROUND_BLOCK_TOP_BOTTOM: {
+    family: 'ground',
+    strokeMask: TOP_BOTTOM_BLOCK_SIDE_MASK,
+    collisionMask: TOP_BOTTOM_BLOCK_SIDE_MASK,
+  },
+  GROUND_BLOCK_TOP_LEFT: {
+    family: 'ground',
+    strokeMask: TOP_LEFT_BLOCK_SIDE_MASK,
+    collisionMask: TOP_LEFT_BLOCK_SIDE_MASK,
+  },
+  GROUND_BLOCK_TOP_RIGHT: {
+    family: 'ground',
+    strokeMask: TOP_RIGHT_BLOCK_SIDE_MASK,
+    collisionMask: TOP_RIGHT_BLOCK_SIDE_MASK,
+  },
+  GROUND_BLOCK_PASS: {
+    family: 'ground',
+    strokeMask: NO_BLOCK_SIDE_MASK,
+    collisionMask: NO_BLOCK_SIDE_MASK,
+  },
+  HALF_GROUND_BLOCK: {
+    family: 'ground',
+    strokeMask: FULL_BLOCK_SIDE_MASK,
+    collisionMask: FULL_BLOCK_SIDE_MASK,
+  },
+  PLATFORM_BLOCK: {
+    family: 'platform',
+    strokeMask: FULL_BLOCK_SIDE_MASK,
+    collisionMask: FULL_BLOCK_SIDE_MASK,
+  },
+  PLATFORM_BLOCK_TOP: {
+    family: 'platform',
+    strokeMask: TOP_BLOCK_SIDE_MASK,
+    collisionMask: TOP_BLOCK_SIDE_MASK,
+  },
+  PLATFORM_BLOCK_TOP_BOTTOM: {
+    family: 'platform',
+    strokeMask: TOP_BOTTOM_BLOCK_SIDE_MASK,
+    collisionMask: TOP_BOTTOM_BLOCK_SIDE_MASK,
+  },
+  PLATFORM_BLOCK_TOP_LEFT: {
+    family: 'platform',
+    strokeMask: TOP_LEFT_BLOCK_SIDE_MASK,
+    collisionMask: TOP_LEFT_BLOCK_SIDE_MASK,
+  },
+  PLATFORM_BLOCK_TOP_RIGHT: {
+    family: 'platform',
+    strokeMask: TOP_RIGHT_BLOCK_SIDE_MASK,
+    collisionMask: TOP_RIGHT_BLOCK_SIDE_MASK,
+  },
+  PLATFORM_BLOCK_PASS: {
+    family: 'platform',
+    strokeMask: NO_BLOCK_SIDE_MASK,
+    collisionMask: NO_BLOCK_SIDE_MASK,
+  },
+  HALF_PLATFORM_BLOCK: {
+    family: 'platform',
+    strokeMask: FULL_BLOCK_SIDE_MASK,
+    collisionMask: FULL_BLOCK_SIDE_MASK,
+  },
+  DECORATION_BLOCK: {
+    family: 'decoration',
+    strokeMask: FULL_BLOCK_SIDE_MASK,
+    collisionMask: NO_BLOCK_SIDE_MASK,
+  },
+};
+
 export const objectPaletteOrder = Object.keys(levelObjectDefinitions) as LevelObjectType[];
 export const PAINT_GROUP_SLOT_COUNT = 6;
 export const FIXED_LEVEL_START_X = 2;
@@ -457,6 +680,38 @@ export function isSpikeObjectType(type: LevelObjectType): type is (typeof spikeO
 
 export function isSawObjectType(type: LevelObjectType): type is (typeof sawObjectTypes)[number] {
   return sawObjectTypes.includes(type as (typeof sawObjectTypes)[number]);
+}
+
+export function isBlockObjectType(type: LevelObjectType) {
+  return type in blockProfilesByType;
+}
+
+export function getBlockStrokeMask(type: LevelObjectType): BlockSideMask | null {
+  return blockProfilesByType[type]?.strokeMask ?? null;
+}
+
+export function getBlockCollisionMask(type: LevelObjectType): BlockSideMask | null {
+  return blockProfilesByType[type]?.collisionMask ?? null;
+}
+
+export function getBlockFamily(type: LevelObjectType) {
+  return blockProfilesByType[type]?.family ?? null;
+}
+
+export function hasBlockSupport(mask: BlockSideMask | null | undefined) {
+  return Boolean(mask && (mask.top || mask.bottom || mask.left || mask.right));
+}
+
+export function isCollidableBlockType(type: LevelObjectType) {
+  return hasBlockSupport(getBlockCollisionMask(type));
+}
+
+export function isGroundFamilyBlockType(type: LevelObjectType) {
+  return blockProfilesByType[type]?.family === 'ground';
+}
+
+export function isPassThroughBlockType(type: LevelObjectType) {
+  return blockProfilesByType[type]?.family !== 'decoration' && isBlockObjectType(type) && !hasBlockSupport(getBlockCollisionMask(type));
 }
 
 export function isTriggerObjectType(type: LevelObjectType) {

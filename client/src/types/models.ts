@@ -14,8 +14,18 @@ export type Difficulty =
   | 'EXTREME_DEMON';
 export type LevelObjectType =
   | 'GROUND_BLOCK'
+  | 'GROUND_BLOCK_TOP'
+  | 'GROUND_BLOCK_TOP_BOTTOM'
+  | 'GROUND_BLOCK_TOP_LEFT'
+  | 'GROUND_BLOCK_TOP_RIGHT'
+  | 'GROUND_BLOCK_PASS'
   | 'HALF_GROUND_BLOCK'
   | 'PLATFORM_BLOCK'
+  | 'PLATFORM_BLOCK_TOP'
+  | 'PLATFORM_BLOCK_TOP_BOTTOM'
+  | 'PLATFORM_BLOCK_TOP_LEFT'
+  | 'PLATFORM_BLOCK_TOP_RIGHT'
+  | 'PLATFORM_BLOCK_PASS'
   | 'HALF_PLATFORM_BLOCK'
   | 'ARROW_RAMP_ASC'
   | 'ARROW_RAMP_DESC'
@@ -65,7 +75,7 @@ export type LevelObject = {
   h: number;
   rotation: number;
   layer: 'gameplay' | 'decoration';
-  editorLayer: 1 | 2;
+  editorLayer: number;
   props: Record<string, unknown>;
 };
 

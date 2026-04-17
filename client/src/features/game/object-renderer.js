@@ -1,11 +1,4 @@
-import { isSawObjectType, isSpikeObjectType } from './object-definitions';
-const blockTypes = new Set([
-    'GROUND_BLOCK',
-    'HALF_GROUND_BLOCK',
-    'PLATFORM_BLOCK',
-    'HALF_PLATFORM_BLOCK',
-    'DECORATION_BLOCK',
-]);
+import { getBlockFamily, getBlockStrokeMask, isBlockObjectType, isSawObjectType, isSpikeObjectType, } from './object-definitions';
 const arrowRampTypes = new Set(['ARROW_RAMP_ASC', 'ARROW_RAMP_DESC']);
 const spritePortalPathByType = {
     SHIP_PORTAL: '/portals/ship.svg',
@@ -14,16 +7,13 @@ const spritePortalPathByType = {
     ARROW_PORTAL: '/portals/wave.svg',
 };
 const spritePortalCache = new Map();
-function isBlockType(type) {
-    return blockTypes.has(type);
-}
 function isArrowRampType(type) {
     return arrowRampTypes.has(type);
 }
 function isSpritePortalType(type) {
     return type in spritePortalPathByType;
 }
-export function drawStageObjectSprite({ context, object, x, y, w, h, fillColor, strokeColor, isActive = false, isUsedOrb = false, alpha = 1, animationTimeMs = 0, editorGuideTop, editorGuideBottom, }) {
+export function drawStageObjectSprite({ context, object, neighborObjects, x, y, w, h, fillColor, strokeColor, isActive = false, isUsedOrb = false, alpha = 1, animationTimeMs = 0, editorGuideTop, editorGuideBottom, }) {
     context.save();
     context.globalAlpha = alpha;
     const normalizedRotationDegrees = normalizeQuarterRotationDegrees(object.rotation ?? 0);
@@ -74,8 +64,8 @@ export function drawStageObjectSprite({ context, object, x, y, w, h, fillColor, 
         context.restore();
         return;
     }
-    if (isBlockType(object.type)) {
-        drawBlockSprite(context, x, y, w, h, fillColor, strokeColor, object.type === 'DECORATION_BLOCK');
+    if (isBlockObjectType(object.type)) {
+        drawBlockSprite(context, object, neighborObjects, x, y, w, h, fillColor, strokeColor, object.type === 'DECORATION_BLOCK');
         context.restore();
         return;
     }
@@ -101,50 +91,131 @@ export function drawStageObjectSprite({ context, object, x, y, w, h, fillColor, 
 export function getStageObjectPreviewSpriteImage(type) {
     return isSpritePortalType(type) ? getSpritePortalImage(type) : null;
 }
-function drawBlockSprite(context, x, y, w, h, fillColor, strokeColor, decorationOnly) {
-    const gradient = context.createLinearGradient(x, y, x, y + h);
-    gradient.addColorStop(0, lightenColor(fillColor, decorationOnly ? 0.16 : 0.24));
-    gradient.addColorStop(0.55, fillColor);
-    gradient.addColorStop(1, darkenColor(fillColor, decorationOnly ? 0.22 : 0.32));
-    context.fillStyle = gradient;
-    context.fillRect(x, y, w, h);
-    context.fillStyle = 'rgba(255,255,255,0.16)';
-    context.fillRect(x + 2, y + 2, Math.max(0, w - 4), Math.max(3, h * 0.16));
-    context.fillStyle = decorationOnly ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.1)';
-    context.fillRect(x + w * 0.12, y + h * 0.24, Math.max(4, w * 0.76), Math.max(3, h * 0.08));
-    context.strokeStyle = strokeColor;
-    context.lineWidth = 2;
-    context.strokeRect(x + 1, y + 1, Math.max(0, w - 2), Math.max(0, h - 2));
-    context.strokeStyle = decorationOnly ? 'rgba(0,0,0,0.12)' : 'rgba(0,0,0,0.18)';
-    context.lineWidth = 1.5;
-    context.beginPath();
-    context.moveTo(x + w * 0.24, y + 1);
-    context.lineTo(x + w * 0.24, y + h - 1);
-    context.moveTo(x + w * 0.52, y + 1);
-    context.lineTo(x + w * 0.52, y + h - 1);
-    context.stroke();
+function drawBlockSprite(context, object, neighborObjects, x, y, w, h, fillColor, strokeColor, decorationOnly) {
+    const seamlessNeighborMask = getSeamlessNeighborMask(object, neighborObjects);
+    const fillBleed = decorationOnly ? 0.75 : 1;
+    const fillX = x - (seamlessNeighborMask.left ? fillBleed : 0);
+    const fillY = y - (seamlessNeighborMask.top ? fillBleed : 0);
+    const fillW = w + (seamlessNeighborMask.left ? fillBleed : 0) + (seamlessNeighborMask.right ? fillBleed : 0);
+    const fillH = h + (seamlessNeighborMask.top ? fillBleed : 0) + (seamlessNeighborMask.bottom ? fillBleed : 0);
+    const fillRect = snapRectToDevicePixels(context, fillX, fillY, fillW, fillH);
+    context.fillStyle = fillColor;
+    context.fillRect(fillRect.x, fillRect.y, fillRect.w, fillRect.h);
+    const strokeMask = getMergedBlockStrokeMask(object, seamlessNeighborMask);
+    if (strokeMask && (strokeMask.top || strokeMask.bottom || strokeMask.left || strokeMask.right)) {
+        const strokeRect = snapRectToDevicePixels(context, x, y, Math.max(0, w), Math.max(0, h));
+        context.fillStyle = strokeColor;
+        drawBlockStrokeSides(context, strokeRect.x, strokeRect.y, strokeRect.w, strokeRect.h, strokeMask, seamlessNeighborMask);
+    }
+}
+const BLOCK_NEIGHBOR_EPSILON = 0.001;
+function getMergedBlockStrokeMask(object, seamlessNeighborMask) {
+    const baseMask = getBlockStrokeMask(object.type);
+    if (!baseMask) {
+        return null;
+    }
+    return {
+        top: baseMask.top && !seamlessNeighborMask.top,
+        bottom: baseMask.bottom && !seamlessNeighborMask.bottom,
+        left: baseMask.left && !seamlessNeighborMask.left,
+        right: baseMask.right && !seamlessNeighborMask.right,
+    };
+}
+function getSeamlessNeighborMask(object, neighborObjects) {
+    const family = getBlockFamily(object.type);
+    if (!neighborObjects?.length || !family) {
+        return {
+            top: false,
+            bottom: false,
+            left: false,
+            right: false,
+        };
+    }
+    return {
+        top: hasSeamlessBlockNeighbor(object, family, neighborObjects, 'top'),
+        bottom: hasSeamlessBlockNeighbor(object, family, neighborObjects, 'bottom'),
+        left: hasSeamlessBlockNeighbor(object, family, neighborObjects, 'left'),
+        right: hasSeamlessBlockNeighbor(object, family, neighborObjects, 'right'),
+    };
+}
+function hasSeamlessBlockNeighbor(object, family, neighborObjects, side) {
+    return neighborObjects.some((neighbor) => {
+        if (neighbor.id === object.id || !isBlockObjectType(neighbor.type) || getBlockFamily(neighbor.type) !== family) {
+            return false;
+        }
+        if (side === 'top') {
+            return (nearlyEqual(neighbor.y + neighbor.h, object.y) &&
+                neighbor.x <= object.x + BLOCK_NEIGHBOR_EPSILON &&
+                neighbor.x + neighbor.w >= object.x + object.w - BLOCK_NEIGHBOR_EPSILON);
+        }
+        if (side === 'bottom') {
+            return (nearlyEqual(object.y + object.h, neighbor.y) &&
+                neighbor.x <= object.x + BLOCK_NEIGHBOR_EPSILON &&
+                neighbor.x + neighbor.w >= object.x + object.w - BLOCK_NEIGHBOR_EPSILON);
+        }
+        if (side === 'left') {
+            return (nearlyEqual(neighbor.x + neighbor.w, object.x) &&
+                neighbor.y <= object.y + BLOCK_NEIGHBOR_EPSILON &&
+                neighbor.y + neighbor.h >= object.y + object.h - BLOCK_NEIGHBOR_EPSILON);
+        }
+        return (nearlyEqual(object.x + object.w, neighbor.x) &&
+            neighbor.y <= object.y + BLOCK_NEIGHBOR_EPSILON &&
+            neighbor.y + neighbor.h >= object.y + object.h - BLOCK_NEIGHBOR_EPSILON);
+    });
+}
+function nearlyEqual(a, b) {
+    return Math.abs(a - b) <= BLOCK_NEIGHBOR_EPSILON;
+}
+function snapRectToDevicePixels(context, x, y, w, h) {
+    const transform = context.getTransform();
+    const scaleX = Math.max(1, Math.hypot(transform.a, transform.b));
+    const scaleY = Math.max(1, Math.hypot(transform.c, transform.d));
+    const minX = Math.floor(x * scaleX) / scaleX;
+    const minY = Math.floor(y * scaleY) / scaleY;
+    const maxX = Math.ceil((x + w) * scaleX) / scaleX;
+    const maxY = Math.ceil((y + h) * scaleY) / scaleY;
+    return {
+        x: minX,
+        y: minY,
+        w: Math.max(0, maxX - minX),
+        h: Math.max(0, maxY - minY),
+    };
+}
+function drawBlockStrokeSides(context, x, y, w, h, strokeMask, seamlessNeighborMask) {
+    const thickness = getResponsiveStrokeThickness(w, h);
+    const jointBleed = thickness;
+    const outerBleed = thickness > 1 ? 1 : 0;
+    if (strokeMask.top) {
+        context.fillRect(x - (seamlessNeighborMask.left ? jointBleed : 0), y - outerBleed, w + (seamlessNeighborMask.left ? jointBleed : 0) + (seamlessNeighborMask.right ? jointBleed : 0), thickness + outerBleed);
+    }
+    if (strokeMask.bottom) {
+        context.fillRect(x - (seamlessNeighborMask.left ? jointBleed : 0), y + h - thickness, w + (seamlessNeighborMask.left ? jointBleed : 0) + (seamlessNeighborMask.right ? jointBleed : 0), thickness + outerBleed);
+    }
+    if (strokeMask.left) {
+        context.fillRect(x - outerBleed, y - (seamlessNeighborMask.top ? jointBleed : 0), thickness + outerBleed, h + (seamlessNeighborMask.top ? jointBleed : 0) + (seamlessNeighborMask.bottom ? jointBleed : 0));
+    }
+    if (strokeMask.right) {
+        context.fillRect(x + w - thickness, y - (seamlessNeighborMask.top ? jointBleed : 0), thickness + outerBleed, h + (seamlessNeighborMask.top ? jointBleed : 0) + (seamlessNeighborMask.bottom ? jointBleed : 0));
+    }
 }
 function drawSpikeSprite(context, x, y, w, h, fillColor, strokeColor) {
-    const gradient = context.createLinearGradient(x, y, x + w, y + h);
-    gradient.addColorStop(0, lightenColor(fillColor, 0.18));
-    gradient.addColorStop(1, darkenColor(fillColor, 0.28));
-    context.fillStyle = gradient;
+    const spikeRect = snapRectToDevicePixels(context, x, y, w, h);
+    const strokeThickness = getResponsiveStrokeThickness(spikeRect.w, spikeRect.h);
+    context.fillStyle = fillColor;
     context.beginPath();
-    context.moveTo(x, y + h);
-    context.lineTo(x + w / 2, y);
-    context.lineTo(x + w, y + h);
-    context.closePath();
-    context.fill();
-    context.fillStyle = 'rgba(255,255,255,0.18)';
-    context.beginPath();
-    context.moveTo(x + w * 0.22, y + h * 0.84);
-    context.lineTo(x + w / 2, y + h * 0.18);
-    context.lineTo(x + w * 0.68, y + h * 0.84);
+    context.moveTo(spikeRect.x, spikeRect.y + spikeRect.h);
+    context.lineTo(spikeRect.x + spikeRect.w / 2, spikeRect.y);
+    context.lineTo(spikeRect.x + spikeRect.w, spikeRect.y + spikeRect.h);
     context.closePath();
     context.fill();
     context.strokeStyle = strokeColor;
-    context.lineWidth = 2;
+    context.lineWidth = strokeThickness;
+    context.lineJoin = 'miter';
+    context.miterLimit = 2;
     context.stroke();
+}
+function getResponsiveStrokeThickness(w, h, maxThickness = 2) {
+    return Math.max(1, Math.min(maxThickness, Math.round(Math.min(w, h) * 0.08)));
 }
 function drawArrowRampSprite(context, type, x, y, w, h, fillColor, strokeColor) {
     const gradient = context.createLinearGradient(x, y, x + w, y + h);

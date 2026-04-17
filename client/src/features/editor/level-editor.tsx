@@ -9,12 +9,16 @@ import {
   computeAutoLevelFinishX,
   PAINT_GROUP_SLOT_COUNT,
   createEmptyLevelData,
+  getBlockCollisionMask,
   getColorGroupById,
   getObjectFillColor,
   getObjectPaintGroupId,
   getSpikeHitboxRect,
   getObjectStrokeColor,
+  hasBlockSupport,
+  isCollidableBlockType,
   isPaintableObjectType,
+  isPassThroughBlockType,
   isSpikeObjectType,
   isSawObjectType,
   stripLegacyRunAnchorObjects,
@@ -31,7 +35,7 @@ import { cn } from '../../utils/cn';
 
 type EditorTool = 'select' | 'pan' | LevelObjectType;
 type PlacementMode = 'single' | 'drag';
-type EditorLayerId = 1 | 2;
+type EditorLayerId = number;
 type EditorWorkspaceMode = 'build' | 'edit';
 type PostFxEffectType = 'flash' | 'grayscale' | 'invert' | 'scanlines' | 'blur' | 'shake' | 'tint';
 type TriggerActivationMode = 'touch' | 'zone';
@@ -296,13 +300,6 @@ const moveTriggerEasingOptions: Array<{ value: MoveTriggerEasing; label: string 
   { value: 'easeInOut', label: 'Ease In Out' },
 ];
 
-const editorSolidHitboxTypes = new Set<LevelObjectType>([
-  'GROUND_BLOCK',
-  'HALF_GROUND_BLOCK',
-  'PLATFORM_BLOCK',
-  'HALF_PLATFORM_BLOCK',
-]);
-
 const editorOrbHitboxTypes = new Set<LevelObjectType>(['JUMP_ORB', 'BLUE_ORB', 'GRAVITY_ORB']);
 
 const editorPortalHitboxTypes = new Set<LevelObjectType>([
@@ -321,8 +318,18 @@ const paletteGroups: Array<{ title: string; items: EditorTool[] }> = [
     title: 'Blocks',
     items: [
       'GROUND_BLOCK',
+      'GROUND_BLOCK_TOP',
+      'GROUND_BLOCK_TOP_BOTTOM',
+      'GROUND_BLOCK_TOP_LEFT',
+      'GROUND_BLOCK_TOP_RIGHT',
+      'GROUND_BLOCK_PASS',
       'HALF_GROUND_BLOCK',
       'PLATFORM_BLOCK',
+      'PLATFORM_BLOCK_TOP',
+      'PLATFORM_BLOCK_TOP_BOTTOM',
+      'PLATFORM_BLOCK_TOP_LEFT',
+      'PLATFORM_BLOCK_TOP_RIGHT',
+      'PLATFORM_BLOCK_PASS',
       'HALF_PLATFORM_BLOCK',
       'ARROW_RAMP_ASC',
       'ARROW_RAMP_DESC',
@@ -366,8 +373,18 @@ const toolDescriptions: Record<EditorTool, string> = {
   select: 'Pick, move and inspect objects',
   pan: 'Hold Space or drag to move around',
   GROUND_BLOCK: 'Safe floor for the run',
+  GROUND_BLOCK_TOP: 'Top-only support block',
+  GROUND_BLOCK_TOP_BOTTOM: 'Support on top and bottom only',
+  GROUND_BLOCK_TOP_LEFT: 'Support on top and left only',
+  GROUND_BLOCK_TOP_RIGHT: 'Support on top and right only',
+  GROUND_BLOCK_PASS: 'No support stroke, fully pass-through',
   HALF_GROUND_BLOCK: 'Half-height floor piece',
   PLATFORM_BLOCK: 'Extra landable block',
+  PLATFORM_BLOCK_TOP: 'Top-only platform block',
+  PLATFORM_BLOCK_TOP_BOTTOM: 'Platform support on top and bottom',
+  PLATFORM_BLOCK_TOP_LEFT: 'Platform support on top and left',
+  PLATFORM_BLOCK_TOP_RIGHT: 'Platform support on top and right',
+  PLATFORM_BLOCK_PASS: 'Platform without support stroke, pass-through',
   HALF_PLATFORM_BLOCK: 'Half-height platform piece',
   ARROW_RAMP_ASC: 'Diagonal wall for arrow routes',
   ARROW_RAMP_DESC: 'Opposite diagonal wall for arrow routes',
@@ -417,6 +434,9 @@ const EDITOR_DEFAULT_PAN_Y = 80;
 const EDITOR_SCROLL_PADDING_UNITS = 6;
 const MAX_CUSTOM_MUSIC_FILE_SIZE_BYTES = 8 * 1024 * 1024;
 const MAX_EDITOR_HISTORY_STEPS = 40;
+const MIN_EDITOR_LAYER = 1;
+const MAX_EDITOR_LAYERS = 10;
+const EDITOR_BLOCK_SUPPORT_BAND_THICKNESS_UNITS = 0.12;
 
 type EditorInitialState = {
   title: string;
@@ -432,7 +452,7 @@ function syncDerivedLevelData(next: LevelData) {
   next.player.startY = FIXED_LEVEL_START_Y;
 
   for (const object of next.objects) {
-    object.editorLayer = object.editorLayer === 2 ? 2 : 1;
+    object.editorLayer = clampEditorLayer(object.editorLayer);
   }
 
   const autoFinishX = computeAutoLevelFinishX(next);
@@ -443,6 +463,23 @@ function syncDerivedLevelData(next: LevelData) {
   const maxX = Math.max(autoFinishX + 6, ...next.objects.map((object) => object.x + object.w + 12));
   next.meta.lengthUnits = Math.max(60, Math.ceil(maxX));
   return next;
+}
+
+function clampEditorLayer(value: unknown): EditorLayerId {
+  const numericValue = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return MIN_EDITOR_LAYER;
+  }
+
+  return Math.min(MAX_EDITOR_LAYERS, Math.max(MIN_EDITOR_LAYER, Math.round(numericValue)));
+}
+
+function getHighestEditorLayer(objects: LevelObject[]) {
+  return objects.reduce((highestLayer, object) => Math.max(highestLayer, clampEditorLayer(object.editorLayer)), MIN_EDITOR_LAYER);
+}
+
+function compareEditorLayerDrawOrder(left: Pick<LevelObject, 'editorLayer'>, right: Pick<LevelObject, 'editorLayer'>) {
+  return clampEditorLayer(right.editorLayer) - clampEditorLayer(left.editorLayer);
 }
 
 function getPaletteGroupTitle(tool: EditorTool) {
@@ -729,8 +766,8 @@ export function LevelEditor({
   const [paletteDrawerGroup, setPaletteDrawerGroup] = useState<string | null>(null);
   const [placementMode, setPlacementMode] = useState<PlacementMode>('single');
   const [editorWorkspaceMode, setEditorWorkspaceMode] = useState<EditorWorkspaceMode>('build');
-  const [hasLayerTwo, setHasLayerTwo] = useState(initialEditorState.levelData.objects.some((object) => object.editorLayer === 2));
-  const [activeEditorLayer, setActiveEditorLayer] = useState<EditorLayerId>(1);
+  const [maxEditorLayer, setMaxEditorLayer] = useState(() => getHighestEditorLayer(initialEditorState.levelData.objects));
+  const [activeEditorLayer, setActiveEditorLayer] = useState<EditorLayerId>(MIN_EDITOR_LAYER);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: EDITOR_DEFAULT_PAN_X, y: EDITOR_DEFAULT_PAN_Y });
   const [cursorWorld, setCursorWorld] = useState({ x: 0, y: 0 });
@@ -804,7 +841,7 @@ export function LevelEditor({
     setActivePaletteGroup('Blocks');
     setPaletteDrawerGroup(null);
     setEditorWorkspaceMode('build');
-    setHasLayerTwo(nextEditorState.levelData.objects.some((object) => object.editorLayer === 2));
+    setMaxEditorLayer(getHighestEditorLayer(nextEditorState.levelData.objects));
     setActiveEditorLayer(1);
     setZoom(1);
     setPan({ x: EDITOR_DEFAULT_PAN_X, y: EDITOR_DEFAULT_PAN_Y });
@@ -1025,6 +1062,10 @@ export function LevelEditor({
   const placementModeLabel = placementMode === 'drag' ? 'Drag' : 'Single';
   const dragPlacementAvailable = canUseDragPlacementTool(selectedTool);
   const activeEditorLayerLabel = `Layer ${activeEditorLayer}`;
+  const canAddEditorLayer = maxEditorLayer < MAX_EDITOR_LAYERS;
+  const canStepEditorLayerBackward = activeEditorLayer > MIN_EDITOR_LAYER;
+  const canStepEditorLayerForward = activeEditorLayer < maxEditorLayer || canAddEditorLayer;
+  const activeEditorLayerProgressLabel = `${activeEditorLayer}/${maxEditorLayer}`;
   const desktopActivePaletteGroupTitle = desktopPaletteGroups.some((group) => group.title === activePaletteGroup)
     ? activePaletteGroup
     : 'Blocks';
@@ -1141,10 +1182,10 @@ export function LevelEditor({
   }, [activePaintGroupId, colorGroups]);
 
   useEffect(() => {
-    if (!hasLayerTwo && activeEditorLayer !== 1) {
-      setActiveEditorLayer(1);
+    if (activeEditorLayer > maxEditorLayer) {
+      setActiveEditorLayer(maxEditorLayer);
     }
-  }, [activeEditorLayer, hasLayerTwo]);
+  }, [activeEditorLayer, maxEditorLayer]);
 
   const stopMusicSyncPreview = useCallback((nextMessage?: string) => {
     if (musicSyncFrameRef.current !== null) {
@@ -1570,21 +1611,19 @@ export function LevelEditor({
       getStageGroundPalette(levelData.meta.theme, levelData.meta.groundColor),
     );
 
-    const orderedObjects = [
-      ...levelData.objects.filter((object) => object.editorLayer === activeEditorLayer),
-      ...levelData.objects.filter((object) => object.editorLayer !== activeEditorLayer),
-    ];
-
-    for (const object of orderedObjects) {
+    const orderedObjects = [...levelData.objects].sort(compareEditorLayerDrawOrder);
+    const drawableObjects = orderedObjects.map((object) => {
       const previewPosition = dragPreviewState?.positions[object.id];
-      const drawableObject =
-        previewPosition
-          ? {
-              ...object,
-              x: previewPosition.x,
-              y: previewPosition.y,
-            }
-          : object;
+      return previewPosition
+        ? {
+            ...object,
+            x: previewPosition.x,
+            y: previewPosition.y,
+          }
+        : object;
+    });
+
+    for (const drawableObject of drawableObjects) {
       const { x, y } = worldToScreen(drawableObject.x, drawableObject.y, pan.x, pan.y, cell);
       const w = drawableObject.w * cell;
       const h = drawableObject.h * cell;
@@ -1599,6 +1638,7 @@ export function LevelEditor({
       drawStageObjectSprite({
         context,
         object: drawableObject,
+        neighborObjects: drawableObjects,
         x,
         y,
         w,
@@ -2112,9 +2152,8 @@ export function LevelEditor({
   };
 
   const updateSelectedObjectEditorLayer = (nextEditorLayer: EditorLayerId) => {
-    if (nextEditorLayer === 2) {
-      setHasLayerTwo(true);
-    }
+    const clampedEditorLayer = clampEditorLayer(nextEditorLayer);
+    setMaxEditorLayer((currentLayer) => Math.max(currentLayer, clampedEditorLayer));
 
     updateLevelData((draft) => {
       const selectedIdsSet = new Set(selectedObjectIds);
@@ -2124,7 +2163,7 @@ export function LevelEditor({
           continue;
         }
 
-        object.editorLayer = nextEditorLayer;
+        object.editorLayer = clampedEditorLayer;
       }
     });
   };
@@ -2906,19 +2945,44 @@ export function LevelEditor({
   };
 
   const handleEditorLayerSelect = (nextLayer: EditorLayerId) => {
-    if (nextLayer === 2 && !hasLayerTwo) {
+    const clampedLayer = clampEditorLayer(nextLayer);
+
+    if (clampedLayer > maxEditorLayer) {
       return;
     }
 
-    setActiveEditorLayer(nextLayer);
+    setActiveEditorLayer(clampedLayer);
     clearSelection();
   };
 
-  const handleAddLayerTwo = () => {
-    setHasLayerTwo(true);
-    setActiveEditorLayer(2);
+  const handleAddEditorLayer = () => {
+    if (maxEditorLayer >= MAX_EDITOR_LAYERS) {
+      return;
+    }
+
+    const nextLayer = clampEditorLayer(maxEditorLayer + 1);
+    setMaxEditorLayer(nextLayer);
+    setActiveEditorLayer(nextLayer);
     clearSelection();
-    setMessage('Layer 2 enabled. Layer 1 is now dimmed while you build on top.');
+    setMessage(`Layer ${nextLayer} enabled. You can now build across ${nextLayer} layers.`);
+  };
+
+  const stepEditorLayer = (direction: -1 | 1) => {
+    if (direction < 0) {
+      if (activeEditorLayer > MIN_EDITOR_LAYER) {
+        handleEditorLayerSelect(activeEditorLayer - 1);
+      }
+      return;
+    }
+
+    if (activeEditorLayer < maxEditorLayer) {
+      handleEditorLayerSelect(activeEditorLayer + 1);
+      return;
+    }
+
+    if (canAddEditorLayer) {
+      handleAddEditorLayer();
+    }
   };
 
   const handlePaletteGroupClick = (groupTitle: string) => {
@@ -3501,34 +3565,34 @@ export function LevelEditor({
                 >
                   Color
                 </button>
-                {!hasLayerTwo ? (
+                <button
+                  type="button"
+                  className="editor-canvas-rail-button"
+                  onClick={() => stepEditorLayer(-1)}
+                  disabled={!canStepEditorLayerBackward}
+                  title="Go to previous build layer"
+                >
+                  Prev L
+                </button>
+                {canAddEditorLayer ? (
                   <button
                     type="button"
                     className="editor-canvas-rail-button"
-                    onClick={handleAddLayerTwo}
-                    title="Enable a second build layer"
+                    onClick={handleAddEditorLayer}
+                    title="Add a new build layer"
                   >
-                    Add L2
+                    Add L
                   </button>
                 ) : null}
                 <button
                   type="button"
-                  className={cn('editor-canvas-rail-button', activeEditorLayer === 1 ? 'is-active' : '')}
-                  onClick={() => handleEditorLayerSelect(1)}
-                  title="Build on layer 1"
+                  className={cn('editor-canvas-rail-button', canStepEditorLayerForward && activeEditorLayer >= maxEditorLayer ? 'is-active' : '')}
+                  onClick={() => stepEditorLayer(1)}
+                  disabled={!canStepEditorLayerForward}
+                  title={canAddEditorLayer ? 'Go to the next layer or create it' : 'Go to next build layer'}
                 >
-                  L1
+                  Next L
                 </button>
-                {hasLayerTwo ? (
-                  <button
-                    type="button"
-                    className={cn('editor-canvas-rail-button', activeEditorLayer === 2 ? 'is-active' : '')}
-                    onClick={() => handleEditorLayerSelect(2)}
-                    title="Build on layer 2"
-                  >
-                    L2
-                  </button>
-                ) : null}
                 <button
                   type="button"
                   className={cn('editor-canvas-rail-button', placementMode === 'single' ? 'is-active' : '')}
@@ -3632,20 +3696,40 @@ export function LevelEditor({
                 </button>
                 <button
                   type="button"
-                  className={cn('editor-stage-action-button', activeEditorLayer === 2 ? 'is-active' : '')}
-                  onClick={() => {
-                    if (!hasLayerTwo) {
-                      handleAddLayerTwo();
-                      return;
-                    }
-
-                    handleEditorLayerSelect(activeEditorLayer === 1 ? 2 : 1);
-                  }}
+                  className={cn('editor-stage-action-button', activeEditorLayer > MIN_EDITOR_LAYER ? 'is-active' : '')}
+                  onClick={() => stepEditorLayer(1)}
                 >
                   Go To Layer
                 </button>
                 <button type="button" className="editor-stage-action-button" onClick={clearSelection} disabled={!selectedObjectIds.length}>
                   De-Select
+                </button>
+              </div>
+              <div className="editor-stage-layer-strip">
+                <button
+                  type="button"
+                  className="editor-stage-layer-arrow editor-stage-layer-arrow--prev"
+                  onClick={() => stepEditorLayer(-1)}
+                  disabled={!canStepEditorLayerBackward}
+                  aria-label="Previous layer"
+                  title="Previous layer"
+                >
+                  <span className="editor-stage-layer-arrow-icon editor-stage-layer-arrow-icon--left" aria-hidden="true" />
+                </button>
+                <div className="editor-stage-layer-readout" aria-live="polite">
+                  <span className="editor-stage-layer-readout-label">Layer</span>
+                  <strong>{activeEditorLayer}</strong>
+                  <span className="editor-stage-layer-readout-meta">{activeEditorLayerProgressLabel}</span>
+                </div>
+                <button
+                  type="button"
+                  className="editor-stage-layer-arrow editor-stage-layer-arrow--next"
+                  onClick={() => stepEditorLayer(1)}
+                  disabled={!canStepEditorLayerForward}
+                  aria-label={canAddEditorLayer ? 'Next layer or add a new layer' : 'Next layer'}
+                  title={canAddEditorLayer ? 'Next layer or add a new layer' : 'Next layer'}
+                >
+                  <span className="editor-stage-layer-arrow-icon editor-stage-layer-arrow-icon--right" aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -3722,7 +3806,7 @@ export function LevelEditor({
                           />
                         </div>
                         <div className="editor-trigger-field">
-                          <span className="editor-trigger-field-label">Move Y</span>
+                          <span className="editor-trigger-field-label">Move Y (up +)</span>
                           <input
                             className="editor-trigger-input"
                             type="number"
@@ -4109,6 +4193,10 @@ export function LevelEditor({
                               className="editor-object-color-group-swatch"
                               style={{ backgroundColor: group?.fillColor ?? 'rgba(255,255,255,0.14)' }}
                             />
+                            <span
+                              className="editor-object-color-group-swatch"
+                              style={{ backgroundColor: group?.strokeColor ?? 'rgba(255,255,255,0.3)' }}
+                            />
                           </span>
                         </button>
                       );
@@ -4153,19 +4241,36 @@ export function LevelEditor({
                       </button>
 
                       <label className="editor-object-color-swatch-control">
-                        <span className="editor-object-color-swatch-label">OBJ</span>
+                        <span className="editor-object-color-swatch-label">Fill</span>
                         <span
                           className="editor-object-color-swatch-preview"
                           style={{ backgroundColor: selectedPaintFillColor }}
                         />
                         <input
                           type="color"
-                          aria-label="Selected object color"
+                          aria-label="Selected object fill color"
                           value={getEditorColorInputValue(
                             selectedPaintFillColor,
                             levelObjectDefinitions[paintableSelectedObject.type].color,
                           )}
                           onChange={(event) => updateSelectedObjectPaint('fillColor', event.target.value)}
+                        />
+                      </label>
+
+                      <label className="editor-object-color-swatch-control">
+                        <span className="editor-object-color-swatch-label">Stroke</span>
+                        <span
+                          className="editor-object-color-swatch-preview"
+                          style={{ backgroundColor: selectedPaintStrokeColor }}
+                        />
+                        <input
+                          type="color"
+                          aria-label="Selected object stroke color"
+                          value={getEditorColorInputValue(
+                            selectedPaintStrokeColor,
+                            levelObjectDefinitions[paintableSelectedObject.type].strokeColor,
+                          )}
+                          onChange={(event) => updateSelectedObjectPaint('strokeColor', event.target.value)}
                         />
                       </label>
                     </div>
@@ -4354,23 +4459,18 @@ export function LevelEditor({
                 </div>
 
                 <div className="editor-inline-actions">
-                  {!hasLayerTwo ? (
-                    <Button variant="ghost" onClick={handleAddLayerTwo}>
-                      Add Layer 2
-                    </Button>
-                  ) : null}
-                  <Button
-                    variant={activeEditorLayer === 1 ? 'primary' : 'ghost'}
-                    onClick={() => handleEditorLayerSelect(1)}
-                  >
-                    Build Layer 1
+                  <Button variant="ghost" onClick={() => stepEditorLayer(-1)} disabled={!canStepEditorLayerBackward}>
+                    Prev Layer
                   </Button>
-                  {hasLayerTwo ? (
-                    <Button
-                      variant={activeEditorLayer === 2 ? 'primary' : 'ghost'}
-                      onClick={() => handleEditorLayerSelect(2)}
-                    >
-                      Build Layer 2
+                  <Button variant="primary" disabled>
+                    {activeEditorLayerLabel}
+                  </Button>
+                  <Button variant="ghost" onClick={() => stepEditorLayer(1)} disabled={!canStepEditorLayerForward}>
+                    {canAddEditorLayer ? 'Next / Add' : 'Next Layer'}
+                  </Button>
+                  {canAddEditorLayer ? (
+                    <Button variant="ghost" onClick={handleAddEditorLayer}>
+                      Add Layer
                     </Button>
                   ) : null}
                   <Button
@@ -4924,19 +5024,23 @@ export function LevelEditor({
                   <span className="editor-color-control-label">Build Layer</span>
                   <Badge tone="accent">Layer {selectedObject.editorLayer}</Badge>
                 </div>
-                <div className="editor-inline-actions">
-                  <Button
-                    variant={selectedObject.editorLayer === 1 ? 'primary' : 'ghost'}
-                    onClick={() => updateSelectedObjectEditorLayer(1)}
-                  >
-                    Layer 1
-                  </Button>
-                  <Button
-                    variant={selectedObject.editorLayer === 2 ? 'primary' : 'ghost'}
-                    onClick={() => updateSelectedObjectEditorLayer(2)}
-                  >
-                    Layer 2
-                  </Button>
+                <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
+                  <div>
+                    <FieldLabel>Editor Layer</FieldLabel>
+                    <Input
+                      type="number"
+                      min={MIN_EDITOR_LAYER}
+                      max={MAX_EDITOR_LAYERS}
+                      step="1"
+                      value={selectedObject.editorLayer}
+                      onChange={(event) => updateSelectedObjectEditorLayer(clampEditorLayer(event.target.value))}
+                    />
+                  </div>
+                  <div className="flex items-end">
+                    <Button variant="ghost" onClick={() => updateSelectedObjectEditorLayer(activeEditorLayer)}>
+                      Use Current
+                    </Button>
+                  </div>
                 </div>
               </div>
 
@@ -5153,7 +5257,7 @@ export function LevelEditor({
                         />
                       </div>
                       <div>
-                        <FieldLabel>Move Y</FieldLabel>
+                        <FieldLabel>Move Y (up +)</FieldLabel>
                         <Input
                           type="number"
                           step="0.5"
@@ -6107,21 +6211,40 @@ function drawEditorObjectHitbox(
     return;
   }
 
+  if (isCollidableBlockType(object.type)) {
+    for (const band of getEditorBlockSupportRects(object)) {
+      const bandPosition = worldToScreen(band.x, band.y, panX, panY, cell);
+      drawEditorHitboxRect(
+        context,
+        bandPosition.x,
+        bandPosition.y,
+        band.w * cell,
+        band.h * cell,
+        'rgba(92, 176, 255, 0.14)',
+        'rgba(92, 176, 255, 0.96)',
+        alpha,
+      );
+    }
+    return;
+  }
+
   const position = worldToScreen(object.x, object.y, panX, panY, cell);
-  const fillColor = editorSolidHitboxTypes.has(object.type)
-    ? 'rgba(102, 211, 255, 0.14)'
+  const isPassBlock = isPassThroughBlockType(object.type);
+  const fillColor = isPassBlock
+    ? 'rgba(255, 255, 255, 0.05)'
     : editorPortalHitboxTypes.has(object.type)
       ? 'rgba(191, 129, 255, 0.14)'
       : object.type === 'JUMP_PAD'
         ? 'rgba(255, 217, 94, 0.16)'
         : 'rgba(255, 255, 255, 0.1)';
-  const strokeColor = editorSolidHitboxTypes.has(object.type)
-    ? 'rgba(116, 226, 255, 0.96)'
+  const strokeColor = isPassBlock
+    ? 'rgba(255, 255, 255, 0.5)'
     : editorPortalHitboxTypes.has(object.type)
       ? 'rgba(210, 158, 255, 0.96)'
       : object.type === 'JUMP_PAD'
         ? 'rgba(255, 228, 126, 0.98)'
         : 'rgba(255, 255, 255, 0.92)';
+  const strokeDash = isPassBlock ? [6, 5] : undefined;
 
   drawEditorHitboxRect(
     context,
@@ -6132,7 +6255,60 @@ function drawEditorObjectHitbox(
     fillColor,
     strokeColor,
     alpha,
+    strokeDash,
   );
+}
+
+function getEditorBlockSupportRects(object: LevelObject) {
+  const collisionMask = getBlockCollisionMask(object.type);
+
+  if (!collisionMask || !hasBlockSupport(collisionMask)) {
+    return [];
+  }
+
+  const thickness = Math.min(
+    Math.max(EDITOR_BLOCK_SUPPORT_BAND_THICKNESS_UNITS, Math.min(object.w, object.h) * 0.18),
+    Math.min(object.w, object.h),
+  );
+  const bands: Array<{ x: number; y: number; w: number; h: number }> = [];
+
+  if (collisionMask.top) {
+    bands.push({
+      x: object.x,
+      y: object.y,
+      w: object.w,
+      h: thickness,
+    });
+  }
+
+  if (collisionMask.bottom) {
+    bands.push({
+      x: object.x,
+      y: object.y + object.h - thickness,
+      w: object.w,
+      h: thickness,
+    });
+  }
+
+  if (collisionMask.left) {
+    bands.push({
+      x: object.x,
+      y: object.y,
+      w: thickness,
+      h: object.h,
+    });
+  }
+
+  if (collisionMask.right) {
+    bands.push({
+      x: object.x + object.w - thickness,
+      y: object.y,
+      w: thickness,
+      h: object.h,
+    });
+  }
+
+  return bands;
 }
 
 function drawEditorPlayerHitbox(

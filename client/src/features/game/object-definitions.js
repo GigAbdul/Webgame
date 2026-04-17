@@ -8,12 +8,102 @@ export const levelObjectDefinitions = {
         lethal: false,
         effect: null,
     },
+    GROUND_BLOCK_TOP: {
+        label: 'Ground Top',
+        color: '#31f0ff',
+        strokeColor: '#0f1b31',
+        defaultSize: { w: 1, h: 1 },
+        collides: true,
+        lethal: false,
+        effect: null,
+    },
+    GROUND_BLOCK_TOP_BOTTOM: {
+        label: 'Ground Top/Bottom',
+        color: '#31f0ff',
+        strokeColor: '#0f1b31',
+        defaultSize: { w: 1, h: 1 },
+        collides: true,
+        lethal: false,
+        effect: null,
+    },
+    GROUND_BLOCK_TOP_LEFT: {
+        label: 'Ground Top/Left',
+        color: '#31f0ff',
+        strokeColor: '#0f1b31',
+        defaultSize: { w: 1, h: 1 },
+        collides: true,
+        lethal: false,
+        effect: null,
+    },
+    GROUND_BLOCK_TOP_RIGHT: {
+        label: 'Ground Top/Right',
+        color: '#31f0ff',
+        strokeColor: '#0f1b31',
+        defaultSize: { w: 1, h: 1 },
+        collides: true,
+        lethal: false,
+        effect: null,
+    },
+    GROUND_BLOCK_PASS: {
+        label: 'Ground Ghost',
+        color: '#31f0ff',
+        strokeColor: '#0f1b31',
+        defaultSize: { w: 1, h: 1 },
+        collides: false,
+        lethal: false,
+        effect: null,
+    },
     PLATFORM_BLOCK: {
         label: 'Platform',
         color: '#7af0a5',
         strokeColor: '#103428',
         defaultSize: { w: 1, h: 1 },
         collides: true,
+        lethal: false,
+        effect: null,
+    },
+    PLATFORM_BLOCK_TOP: {
+        label: 'Platform Top',
+        color: '#7af0a5',
+        strokeColor: '#103428',
+        defaultSize: { w: 1, h: 1 },
+        collides: true,
+        lethal: false,
+        effect: null,
+    },
+    PLATFORM_BLOCK_TOP_BOTTOM: {
+        label: 'Platform Top/Bottom',
+        color: '#7af0a5',
+        strokeColor: '#103428',
+        defaultSize: { w: 1, h: 1 },
+        collides: true,
+        lethal: false,
+        effect: null,
+    },
+    PLATFORM_BLOCK_TOP_LEFT: {
+        label: 'Platform Top/Left',
+        color: '#7af0a5',
+        strokeColor: '#103428',
+        defaultSize: { w: 1, h: 1 },
+        collides: true,
+        lethal: false,
+        effect: null,
+    },
+    PLATFORM_BLOCK_TOP_RIGHT: {
+        label: 'Platform Top/Right',
+        color: '#7af0a5',
+        strokeColor: '#103428',
+        defaultSize: { w: 1, h: 1 },
+        collides: true,
+        lethal: false,
+        effect: null,
+    },
+    PLATFORM_BLOCK_PASS: {
+        label: 'Platform Ghost',
+        color: '#7af0a5',
+        strokeColor: '#103428',
+        defaultSize: { w: 1, h: 1 },
+        collides: false,
         lethal: false,
         effect: null,
     },
@@ -64,7 +154,7 @@ export const levelObjectDefinitions = {
     },
     SPIKE: {
         label: 'Spike',
-        color: '#ff5a87',
+        color: '#000000',
         strokeColor: '#ffffff',
         defaultSize: { w: 1, h: 1 },
         collides: false,
@@ -73,7 +163,7 @@ export const levelObjectDefinitions = {
     },
     SPIKE_FLAT: {
         label: 'Flat Spike',
-        color: '#ff6d92',
+        color: '#000000',
         strokeColor: '#ffffff',
         defaultSize: { w: 1, h: 0.5 },
         collides: false,
@@ -82,7 +172,7 @@ export const levelObjectDefinitions = {
     },
     SPIKE_SMALL: {
         label: 'Small Spike',
-        color: '#ff7398',
+        color: '#000000',
         strokeColor: '#ffffff',
         defaultSize: { w: 0.72, h: 0.72 },
         collides: false,
@@ -91,7 +181,7 @@ export const levelObjectDefinitions = {
     },
     SPIKE_TINY: {
         label: 'Tiny Spike',
-        color: '#ff82a3',
+        color: '#000000',
         strokeColor: '#ffffff',
         defaultSize: { w: 0.46, h: 0.46 },
         collides: false,
@@ -378,6 +468,119 @@ export const levelObjectDefinitions = {
         effect: null,
     },
 };
+const NO_BLOCK_SIDE_MASK = {
+    top: false,
+    bottom: false,
+    left: false,
+    right: false,
+};
+const FULL_BLOCK_SIDE_MASK = {
+    top: true,
+    bottom: true,
+    left: true,
+    right: true,
+};
+const TOP_BLOCK_SIDE_MASK = {
+    top: true,
+    bottom: false,
+    left: false,
+    right: false,
+};
+const TOP_BOTTOM_BLOCK_SIDE_MASK = {
+    top: true,
+    bottom: true,
+    left: false,
+    right: false,
+};
+const TOP_LEFT_BLOCK_SIDE_MASK = {
+    top: true,
+    bottom: false,
+    left: true,
+    right: false,
+};
+const TOP_RIGHT_BLOCK_SIDE_MASK = {
+    top: true,
+    bottom: false,
+    left: false,
+    right: true,
+};
+const blockProfilesByType = {
+    GROUND_BLOCK: {
+        family: 'ground',
+        strokeMask: FULL_BLOCK_SIDE_MASK,
+        collisionMask: FULL_BLOCK_SIDE_MASK,
+    },
+    GROUND_BLOCK_TOP: {
+        family: 'ground',
+        strokeMask: TOP_BLOCK_SIDE_MASK,
+        collisionMask: TOP_BLOCK_SIDE_MASK,
+    },
+    GROUND_BLOCK_TOP_BOTTOM: {
+        family: 'ground',
+        strokeMask: TOP_BOTTOM_BLOCK_SIDE_MASK,
+        collisionMask: TOP_BOTTOM_BLOCK_SIDE_MASK,
+    },
+    GROUND_BLOCK_TOP_LEFT: {
+        family: 'ground',
+        strokeMask: TOP_LEFT_BLOCK_SIDE_MASK,
+        collisionMask: TOP_LEFT_BLOCK_SIDE_MASK,
+    },
+    GROUND_BLOCK_TOP_RIGHT: {
+        family: 'ground',
+        strokeMask: TOP_RIGHT_BLOCK_SIDE_MASK,
+        collisionMask: TOP_RIGHT_BLOCK_SIDE_MASK,
+    },
+    GROUND_BLOCK_PASS: {
+        family: 'ground',
+        strokeMask: NO_BLOCK_SIDE_MASK,
+        collisionMask: NO_BLOCK_SIDE_MASK,
+    },
+    HALF_GROUND_BLOCK: {
+        family: 'ground',
+        strokeMask: FULL_BLOCK_SIDE_MASK,
+        collisionMask: FULL_BLOCK_SIDE_MASK,
+    },
+    PLATFORM_BLOCK: {
+        family: 'platform',
+        strokeMask: FULL_BLOCK_SIDE_MASK,
+        collisionMask: FULL_BLOCK_SIDE_MASK,
+    },
+    PLATFORM_BLOCK_TOP: {
+        family: 'platform',
+        strokeMask: TOP_BLOCK_SIDE_MASK,
+        collisionMask: TOP_BLOCK_SIDE_MASK,
+    },
+    PLATFORM_BLOCK_TOP_BOTTOM: {
+        family: 'platform',
+        strokeMask: TOP_BOTTOM_BLOCK_SIDE_MASK,
+        collisionMask: TOP_BOTTOM_BLOCK_SIDE_MASK,
+    },
+    PLATFORM_BLOCK_TOP_LEFT: {
+        family: 'platform',
+        strokeMask: TOP_LEFT_BLOCK_SIDE_MASK,
+        collisionMask: TOP_LEFT_BLOCK_SIDE_MASK,
+    },
+    PLATFORM_BLOCK_TOP_RIGHT: {
+        family: 'platform',
+        strokeMask: TOP_RIGHT_BLOCK_SIDE_MASK,
+        collisionMask: TOP_RIGHT_BLOCK_SIDE_MASK,
+    },
+    PLATFORM_BLOCK_PASS: {
+        family: 'platform',
+        strokeMask: NO_BLOCK_SIDE_MASK,
+        collisionMask: NO_BLOCK_SIDE_MASK,
+    },
+    HALF_PLATFORM_BLOCK: {
+        family: 'platform',
+        strokeMask: FULL_BLOCK_SIDE_MASK,
+        collisionMask: FULL_BLOCK_SIDE_MASK,
+    },
+    DECORATION_BLOCK: {
+        family: 'decoration',
+        strokeMask: FULL_BLOCK_SIDE_MASK,
+        collisionMask: NO_BLOCK_SIDE_MASK,
+    },
+};
 export const objectPaletteOrder = Object.keys(levelObjectDefinitions);
 export const PAINT_GROUP_SLOT_COUNT = 6;
 export const FIXED_LEVEL_START_X = 2;
@@ -413,8 +616,8 @@ const nonPaintableObjectTypes = new Set([
 const legacyRunAnchorObjectTypes = new Set(['START_MARKER', 'FINISH_PORTAL']);
 const autoFinishIgnoredObjectTypes = new Set(['START_MARKER', 'FINISH_PORTAL', 'START_POS']);
 const JUMP_PAD_LEGACY_TOP_ALIGN_EPSILON = 0.001;
-export const SPIKE_HITBOX_NARROW_FACTOR = 0.34;
-export const SPIKE_HITBOX_LONG_FACTOR = 0.58;
+export const SPIKE_HITBOX_NARROW_FACTOR = 0.17;
+export const SPIKE_HITBOX_LONG_FACTOR = 0.5;
 export const SPIKE_HITBOX_TIP_INSET_FACTOR = 0.28;
 export function isPaintableObjectType(type) {
     return !nonPaintableObjectTypes.has(type);
@@ -424,6 +627,30 @@ export function isSpikeObjectType(type) {
 }
 export function isSawObjectType(type) {
     return sawObjectTypes.includes(type);
+}
+export function isBlockObjectType(type) {
+    return type in blockProfilesByType;
+}
+export function getBlockStrokeMask(type) {
+    return blockProfilesByType[type]?.strokeMask ?? null;
+}
+export function getBlockCollisionMask(type) {
+    return blockProfilesByType[type]?.collisionMask ?? null;
+}
+export function getBlockFamily(type) {
+    return blockProfilesByType[type]?.family ?? null;
+}
+export function hasBlockSupport(mask) {
+    return Boolean(mask && (mask.top || mask.bottom || mask.left || mask.right));
+}
+export function isCollidableBlockType(type) {
+    return hasBlockSupport(getBlockCollisionMask(type));
+}
+export function isGroundFamilyBlockType(type) {
+    return blockProfilesByType[type]?.family === 'ground';
+}
+export function isPassThroughBlockType(type) {
+    return blockProfilesByType[type]?.family !== 'decoration' && isBlockObjectType(type) && !hasBlockSupport(getBlockCollisionMask(type));
 }
 export function isTriggerObjectType(type) {
     return triggerObjectTypes.has(type);
