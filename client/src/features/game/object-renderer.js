@@ -6,6 +6,11 @@ const decorationSpriteTypes = new Set([
     'DECOR_CHAIN',
     'DECOR_CRYSTAL',
     'DECOR_LANTERN',
+    'DECOR_PLANET',
+    'DECOR_RING_PLANET',
+    'DECOR_STAR_CLUSTER',
+    'DECOR_SATELLITE',
+    'DECOR_COMET',
 ]);
 const spritePortalPathByType = {
     GRAVITY_FLIP_PORTAL: '/portals/gravity-flip.svg',
@@ -1007,6 +1012,21 @@ function drawDecorationSprite(context, type, x, y, w, h, fillColor, strokeColor,
         case 'DECOR_LANTERN':
             drawLanternDecoration(context, x, y, w, h, fillColor, strokeColor, animationTimeMs);
             return;
+        case 'DECOR_PLANET':
+            drawPlanetDecoration(context, x, y, w, h, fillColor, strokeColor);
+            return;
+        case 'DECOR_RING_PLANET':
+            drawRingPlanetDecoration(context, x, y, w, h, fillColor, strokeColor);
+            return;
+        case 'DECOR_STAR_CLUSTER':
+            drawStarClusterDecoration(context, x, y, w, h, fillColor, strokeColor, animationTimeMs);
+            return;
+        case 'DECOR_SATELLITE':
+            drawSatelliteDecoration(context, x, y, w, h, fillColor, strokeColor, animationTimeMs);
+            return;
+        case 'DECOR_COMET':
+            drawCometDecoration(context, x, y, w, h, fillColor, strokeColor);
+            return;
     }
 }
 function drawFlameDecoration(context, x, y, w, h, fillColor, strokeColor, animationTimeMs) {
@@ -1219,6 +1239,215 @@ function drawLanternDecoration(context, x, y, w, h, fillColor, strokeColor, anim
     context.lineTo(centerX + w * 0.08, y + h * 0.92);
     context.closePath();
     context.fillStyle = strokeColor;
+    context.fill();
+}
+function drawPlanetDecoration(context, x, y, w, h, fillColor, strokeColor) {
+    const centerX = x + w / 2;
+    const centerY = y + h / 2;
+    const radius = Math.min(w, h) * 0.42;
+    const glow = context.createRadialGradient(centerX, centerY, radius * 0.12, centerX, centerY, radius * 1.7);
+    glow.addColorStop(0, toRgba(lightenColor(fillColor, 0.28), 0.34));
+    glow.addColorStop(0.48, toRgba(fillColor, 0.16));
+    glow.addColorStop(1, toRgba(fillColor, 0));
+    context.fillStyle = glow;
+    context.beginPath();
+    context.arc(centerX, centerY, radius * 1.7, 0, Math.PI * 2);
+    context.fill();
+    const sphereGradient = context.createRadialGradient(centerX - radius * 0.28, centerY - radius * 0.32, radius * 0.08, centerX, centerY, radius);
+    sphereGradient.addColorStop(0, lightenColor(fillColor, 0.45));
+    sphereGradient.addColorStop(0.42, lightenColor(fillColor, 0.12));
+    sphereGradient.addColorStop(1, darkenColor(fillColor, 0.24));
+    context.fillStyle = sphereGradient;
+    context.beginPath();
+    context.arc(centerX, centerY, radius, 0, Math.PI * 2);
+    context.fill();
+    context.strokeStyle = strokeColor;
+    context.lineWidth = Math.max(1.4, radius * 0.12);
+    context.beginPath();
+    context.arc(centerX, centerY, radius, 0, Math.PI * 2);
+    context.stroke();
+    context.fillStyle = toRgba(darkenColor(fillColor, 0.22), 0.58);
+    context.beginPath();
+    context.ellipse(centerX - radius * 0.2, centerY + radius * 0.08, radius * 0.24, radius * 0.14, -0.4, 0, Math.PI * 2);
+    context.ellipse(centerX + radius * 0.28, centerY - radius * 0.12, radius * 0.17, radius * 0.1, 0.3, 0, Math.PI * 2);
+    context.fill();
+    context.strokeStyle = toRgba('#ffffff', 0.38);
+    context.lineWidth = Math.max(1, radius * 0.06);
+    context.beginPath();
+    context.arc(centerX - radius * 0.04, centerY - radius * 0.02, radius * 0.82, Math.PI * 1.08, Math.PI * 1.82);
+    context.stroke();
+}
+function drawRingPlanetDecoration(context, x, y, w, h, fillColor, strokeColor) {
+    const centerX = x + w / 2;
+    const centerY = y + h / 2;
+    const ringColor = lightenColor(fillColor, 0.4);
+    const ringShadow = darkenColor(strokeColor, 0.12);
+    context.save();
+    context.strokeStyle = toRgba(ringShadow, 0.55);
+    context.lineWidth = Math.max(3, Math.min(w, h) * 0.12);
+    context.beginPath();
+    context.ellipse(centerX, centerY, w * 0.46, h * 0.16, -0.22, 0, Math.PI * 2);
+    context.stroke();
+    context.strokeStyle = toRgba(ringColor, 0.85);
+    context.lineWidth = Math.max(2, Math.min(w, h) * 0.08);
+    context.beginPath();
+    context.ellipse(centerX, centerY, w * 0.46, h * 0.16, -0.22, 0, Math.PI * 2);
+    context.stroke();
+    context.restore();
+    drawPlanetDecoration(context, x + w * 0.18, y + h * 0.04, w * 0.64, h * 0.92, fillColor, strokeColor);
+    context.strokeStyle = toRgba('#fff7e6', 0.72);
+    context.lineWidth = Math.max(1.6, Math.min(w, h) * 0.055);
+    context.beginPath();
+    context.ellipse(centerX, centerY, w * 0.44, h * 0.14, -0.22, Math.PI * 0.08, Math.PI * 0.92);
+    context.stroke();
+}
+function drawStarClusterDecoration(context, x, y, w, h, fillColor, strokeColor, animationTimeMs) {
+    const centerX = x + w / 2;
+    const centerY = y + h / 2;
+    const pulse = 0.86 + Math.sin(animationTimeMs / 240) * 0.08;
+    const glow = context.createRadialGradient(centerX, centerY, w * 0.06, centerX, centerY, Math.max(w, h) * 0.6);
+    glow.addColorStop(0, toRgba('#ffffff', 0.34 * pulse));
+    glow.addColorStop(0.42, toRgba(fillColor, 0.18 * pulse));
+    glow.addColorStop(1, toRgba(fillColor, 0));
+    context.fillStyle = glow;
+    context.beginPath();
+    context.ellipse(centerX, centerY, w * 0.46, h * 0.4, 0, 0, Math.PI * 2);
+    context.fill();
+    drawSparkStar(context, x + w * 0.5, y + h * 0.42, Math.min(w, h) * 0.3, fillColor, strokeColor, pulse);
+    drawSparkStar(context, x + w * 0.26, y + h * 0.7, Math.min(w, h) * 0.16, '#ffffff', strokeColor, 0.92);
+    drawSparkStar(context, x + w * 0.76, y + h * 0.24, Math.min(w, h) * 0.18, lightenColor(fillColor, 0.32), strokeColor, 0.94);
+    context.fillStyle = toRgba('#ffffff', 0.92);
+    context.beginPath();
+    context.arc(x + w * 0.16, y + h * 0.3, Math.max(1.2, w * 0.03), 0, Math.PI * 2);
+    context.arc(x + w * 0.86, y + h * 0.62, Math.max(1.4, w * 0.038), 0, Math.PI * 2);
+    context.fill();
+}
+function drawSatelliteDecoration(context, x, y, w, h, fillColor, strokeColor, animationTimeMs) {
+    const centerX = x + w / 2;
+    const centerY = y + h / 2;
+    const bodyX = x + w * 0.36;
+    const bodyY = y + h * 0.24;
+    const bodyW = w * 0.28;
+    const bodyH = h * 0.52;
+    const panelW = w * 0.24;
+    const panelH = h * 0.36;
+    const lightPulse = 0.72 + Math.sin(animationTimeMs / 180) * 0.18;
+    const panelGradient = context.createLinearGradient(x, centerY, x + panelW, centerY);
+    panelGradient.addColorStop(0, darkenColor(fillColor, 0.18));
+    panelGradient.addColorStop(1, lightenColor(fillColor, 0.18));
+    context.fillStyle = panelGradient;
+    roundedRectPath(context, x + w * 0.04, centerY - panelH / 2, panelW, panelH, Math.min(w, h) * 0.06);
+    context.fill();
+    roundedRectPath(context, x + w * 0.72, centerY - panelH / 2, panelW, panelH, Math.min(w, h) * 0.06);
+    context.fill();
+    context.strokeStyle = strokeColor;
+    context.lineWidth = Math.max(1.2, Math.min(w, h) * 0.05);
+    roundedRectPath(context, x + w * 0.04, centerY - panelH / 2, panelW, panelH, Math.min(w, h) * 0.06);
+    context.stroke();
+    roundedRectPath(context, x + w * 0.72, centerY - panelH / 2, panelW, panelH, Math.min(w, h) * 0.06);
+    context.stroke();
+    context.beginPath();
+    context.moveTo(x + w * 0.28, centerY);
+    context.lineTo(bodyX, centerY);
+    context.moveTo(bodyX + bodyW, centerY);
+    context.lineTo(x + w * 0.72, centerY);
+    context.stroke();
+    const bodyGradient = context.createLinearGradient(bodyX, bodyY, bodyX + bodyW, bodyY + bodyH);
+    bodyGradient.addColorStop(0, lightenColor('#d7e9ff', 0.04));
+    bodyGradient.addColorStop(1, '#7d96b8');
+    context.fillStyle = bodyGradient;
+    roundedRectPath(context, bodyX, bodyY, bodyW, bodyH, Math.min(w, h) * 0.08);
+    context.fill();
+    context.stroke();
+    context.fillStyle = '#213452';
+    context.fillRect(bodyX + bodyW * 0.18, bodyY + bodyH * 0.2, bodyW * 0.64, bodyH * 0.18);
+    context.fillRect(bodyX + bodyW * 0.22, bodyY + bodyH * 0.5, bodyW * 0.56, bodyH * 0.1);
+    context.strokeStyle = strokeColor;
+    context.beginPath();
+    context.moveTo(bodyX + bodyW / 2, bodyY + bodyH);
+    context.lineTo(bodyX + bodyW / 2, y + h * 0.92);
+    context.stroke();
+    context.beginPath();
+    context.arc(bodyX + bodyW / 2, y + h * 0.92, w * 0.07, Math.PI, 0);
+    context.stroke();
+    context.fillStyle = toRgba('#ff6a7d', 0.72 + lightPulse * 0.18);
+    context.beginPath();
+    context.arc(bodyX + bodyW * 0.82, bodyY + bodyH * 0.24, Math.max(1.6, Math.min(w, h) * 0.04), 0, Math.PI * 2);
+    context.fill();
+}
+function drawCometDecoration(context, x, y, w, h, fillColor, strokeColor) {
+    const headX = x + w * 0.72;
+    const headY = y + h * 0.38;
+    const headRadius = Math.min(w, h) * 0.18;
+    const tailGradient = context.createLinearGradient(x + w * 0.04, y + h * 0.82, headX, headY);
+    tailGradient.addColorStop(0, toRgba(fillColor, 0));
+    tailGradient.addColorStop(0.45, toRgba(fillColor, 0.2));
+    tailGradient.addColorStop(1, toRgba(lightenColor(fillColor, 0.22), 0.6));
+    context.fillStyle = tailGradient;
+    context.beginPath();
+    context.moveTo(x + w * 0.04, y + h * 0.86);
+    context.quadraticCurveTo(x + w * 0.42, y + h * 0.56, headX - headRadius * 1.4, headY + headRadius * 0.2);
+    context.lineTo(headX - headRadius * 1.8, headY + headRadius * 0.8);
+    context.quadraticCurveTo(x + w * 0.34, y + h * 0.94, x + w * 0.04, y + h * 0.86);
+    context.closePath();
+    context.fill();
+    const tailCore = context.createLinearGradient(x + w * 0.16, y + h * 0.76, headX, headY);
+    tailCore.addColorStop(0, toRgba('#ffffff', 0));
+    tailCore.addColorStop(0.5, toRgba(lightenColor(fillColor, 0.34), 0.24));
+    tailCore.addColorStop(1, toRgba('#ffffff', 0.68));
+    context.fillStyle = tailCore;
+    context.beginPath();
+    context.moveTo(x + w * 0.16, y + h * 0.78);
+    context.quadraticCurveTo(x + w * 0.46, y + h * 0.58, headX - headRadius * 0.9, headY + headRadius * 0.02);
+    context.lineTo(headX - headRadius * 1.08, headY + headRadius * 0.28);
+    context.quadraticCurveTo(x + w * 0.42, y + h * 0.84, x + w * 0.16, y + h * 0.78);
+    context.closePath();
+    context.fill();
+    const headGlow = context.createRadialGradient(headX, headY, headRadius * 0.12, headX, headY, headRadius * 2.4);
+    headGlow.addColorStop(0, toRgba('#ffffff', 0.72));
+    headGlow.addColorStop(0.38, toRgba(lightenColor(fillColor, 0.32), 0.34));
+    headGlow.addColorStop(1, toRgba(fillColor, 0));
+    context.fillStyle = headGlow;
+    context.beginPath();
+    context.arc(headX, headY, headRadius * 2.4, 0, Math.PI * 2);
+    context.fill();
+    const headGradient = context.createRadialGradient(headX - headRadius * 0.28, headY - headRadius * 0.3, headRadius * 0.08, headX, headY, headRadius);
+    headGradient.addColorStop(0, '#ffffff');
+    headGradient.addColorStop(0.52, lightenColor(fillColor, 0.28));
+    headGradient.addColorStop(1, darkenColor(fillColor, 0.18));
+    context.fillStyle = headGradient;
+    context.beginPath();
+    context.arc(headX, headY, headRadius, 0, Math.PI * 2);
+    context.fill();
+    context.strokeStyle = strokeColor;
+    context.lineWidth = Math.max(1, headRadius * 0.24);
+    context.beginPath();
+    context.arc(headX, headY, headRadius, 0, Math.PI * 2);
+    context.stroke();
+}
+function drawSparkStar(context, centerX, centerY, radius, fillColor, strokeColor, pulse = 1) {
+    const verticalRadius = radius * (1.12 * pulse);
+    const horizontalRadius = radius * 0.7;
+    context.strokeStyle = toRgba(strokeColor, 0.82);
+    context.lineWidth = Math.max(1.2, radius * 0.12);
+    context.lineCap = 'round';
+    context.beginPath();
+    context.moveTo(centerX, centerY - verticalRadius);
+    context.lineTo(centerX, centerY + verticalRadius);
+    context.moveTo(centerX - horizontalRadius, centerY);
+    context.lineTo(centerX + horizontalRadius, centerY);
+    context.stroke();
+    context.strokeStyle = toRgba(fillColor, 0.9);
+    context.lineWidth = Math.max(1, radius * 0.08);
+    context.beginPath();
+    context.moveTo(centerX - radius * 0.44, centerY - radius * 0.44);
+    context.lineTo(centerX + radius * 0.44, centerY + radius * 0.44);
+    context.moveTo(centerX + radius * 0.44, centerY - radius * 0.44);
+    context.lineTo(centerX - radius * 0.44, centerY + radius * 0.44);
+    context.stroke();
+    context.fillStyle = toRgba(fillColor, 0.96);
+    context.beginPath();
+    context.arc(centerX, centerY, Math.max(1.4, radius * 0.16), 0, Math.PI * 2);
     context.fill();
 }
 function drawFlameShape(context, centerX, baseY, width, height, sway = 0) {

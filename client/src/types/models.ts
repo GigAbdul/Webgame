@@ -70,6 +70,11 @@ export type LevelObjectType =
   | 'DECOR_CHAIN'
   | 'DECOR_CRYSTAL'
   | 'DECOR_LANTERN'
+  | 'DECOR_PLANET'
+  | 'DECOR_RING_PLANET'
+  | 'DECOR_STAR_CLUSTER'
+  | 'DECOR_SATELLITE'
+  | 'DECOR_COMET'
   | 'START_MARKER'
   | 'START_POS';
 

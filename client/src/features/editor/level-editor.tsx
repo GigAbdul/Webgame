@@ -340,7 +340,19 @@ const paletteGroups: Array<{ title: string; items: EditorTool[] }> = [
   },
   {
     title: 'Decor',
-    items: ['DECORATION_BLOCK', 'DECOR_FLAME', 'DECOR_TORCH', 'DECOR_CHAIN', 'DECOR_CRYSTAL', 'DECOR_LANTERN'],
+    items: [
+      'DECORATION_BLOCK',
+      'DECOR_FLAME',
+      'DECOR_TORCH',
+      'DECOR_CHAIN',
+      'DECOR_CRYSTAL',
+      'DECOR_LANTERN',
+      'DECOR_PLANET',
+      'DECOR_RING_PLANET',
+      'DECOR_STAR_CLUSTER',
+      'DECOR_SATELLITE',
+      'DECOR_COMET',
+    ],
   },
   { title: 'Helpers', items: ['DASH_BLOCK'] },
   {
@@ -435,6 +447,11 @@ const toolDescriptions: Record<EditorTool, string> = {
   DECOR_CHAIN: 'Hanging chain for ceilings and industrial sections',
   DECOR_CRYSTAL: 'Glowing crystal cluster',
   DECOR_LANTERN: 'Hanging lantern with warm light',
+  DECOR_PLANET: 'Large planet for space backdrops',
+  DECOR_RING_PLANET: 'Planet with a wide orbit ring',
+  DECOR_STAR_CLUSTER: 'Sparkling star cluster',
+  DECOR_SATELLITE: 'Floating sci-fi satellite',
+  DECOR_COMET: 'Bright comet with a trailing tail',
   START_MARKER: 'Legacy spawn point',
   START_POS: 'Preview checkpoint for editor testing',
 };
@@ -525,7 +542,7 @@ function getDesktopPalettePreviewTool(groupTitle: string): EditorTool {
     case 'Blocks':
       return 'GROUND_BLOCK';
     case 'Decor':
-      return 'DECOR_FLAME';
+      return 'DECOR_PLANET';
     case 'Helpers':
       return 'DASH_BLOCK';
     case 'Obstacles':
