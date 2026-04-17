@@ -338,7 +338,6 @@ export function GameCanvas({ levelData, attemptNumber = 1, runId = 0, autoRestar
         const activeTriggers = new Set();
         const usedOrbs = new Set();
         const activePostFxEffects = [];
-        const trail = [];
         const pathLine = currentPathRef.current;
         const sourceObjects = sanitizedLevelObjects.map((object) => structuredClone(object));
         let runtimeObjects = sourceObjects.map((object) => structuredClone(object));
@@ -491,7 +490,6 @@ export function GameCanvas({ levelData, attemptNumber = 1, runId = 0, autoRestar
             resetRuntimeObjects();
             activeTriggers.clear();
             usedOrbs.clear();
-            trail.length = 0;
             pathLine.length = 0;
             pathLine.push({
                 x: player.x + player.w / 2,
@@ -1378,21 +1376,6 @@ export function GameCanvas({ levelData, attemptNumber = 1, runId = 0, autoRestar
                         pathLine.splice(0, pathLine.length - maxPathPoints);
                     }
                 }
-                trail.push({
-                    x: playerCenterX,
-                    y: playerCenterY,
-                    alpha: currentStatus === 'running' ? 0.26 : 0.14,
-                    size: getPlayerTrailSize(player.mode),
-                    mode: player.mode,
-                    rotation: player.rotation,
-                });
-                if (trail.length > (isMobilePreviewPerformanceMode ? 3 : isLowPowerDevice ? 6 : 12)) {
-                    trail.shift();
-                }
-                for (const point of trail) {
-                    point.alpha *= 0.88;
-                    point.size *= 0.988;
-                }
                 const previousRight = previousCollisionRect.x + previousCollisionRect.w;
                 const nextRight = currentCollisionRect.x + currentCollisionRect.w;
                 if (previousRight <= levelBounds.maxX && nextRight > levelBounds.maxX + 4) {
@@ -1417,21 +1400,6 @@ export function GameCanvas({ levelData, attemptNumber = 1, runId = 0, autoRestar
                     finishSequence.startRotation +
                         (finishSequence.targetRotation - finishSequence.startRotation) * pullProgress +
                         finishProgress * Math.PI * 0.28;
-                trail.push({
-                    x: centerX,
-                    y: centerY,
-                    alpha: 0.2 * (1 - finishProgress * 0.45),
-                    size: Math.max(0.42, getPlayerTrailSize(player.mode) - finishProgress * 0.18),
-                    mode: player.mode,
-                    rotation: player.rotation,
-                });
-                if (trail.length > (isMobilePreviewPerformanceMode ? 4 : isLowPowerDevice ? 8 : 14)) {
-                    trail.shift();
-                }
-                for (const point of trail) {
-                    point.alpha *= 0.9;
-                    point.size *= 0.992;
-                }
                 if (showRunPath) {
                     const lastPathPoint = pathLine[pathLine.length - 1];
                     if (!lastPathPoint || !Number.isFinite(lastPathPoint.x)) {
@@ -1516,9 +1484,6 @@ export function GameCanvas({ levelData, attemptNumber = 1, runId = 0, autoRestar
                     triggerGuideTop: -shakeOffsetY,
                     triggerGuideBottom: height - shakeOffsetY,
                 });
-            }
-            for (const point of trail) {
-                drawPlayerTrailPoint(context, point, cell, verticalOffset);
             }
             drawPlayer(context, player, cell, verticalOffset, {
                 alpha: playerConsumedByFinishGateway ? 0 : finishSequence ? 1 - finishGatewayProgress * 0.82 : 1,
@@ -1645,32 +1610,6 @@ function drawObject(context, object, neighborObjects, cell, verticalOffset, elap
         editorGuideTop: isTriggerObjectType(object.type) ? options?.triggerGuideTop : undefined,
         editorGuideBottom: isTriggerObjectType(object.type) ? options?.triggerGuideBottom : undefined,
     });
-}
-function getPlayerTrailGlowColor(mode) {
-    switch (mode) {
-        case 'ship':
-            return '#7dfdff';
-        case 'arrow':
-            return '#ff78f8';
-        case 'ball':
-            return '#ffd95e';
-        case 'cube':
-        default:
-            return '#caff45';
-    }
-}
-function getPlayerTrailSize(mode) {
-    switch (mode) {
-        case 'ship':
-            return 0.92;
-        case 'arrow':
-            return 0.88;
-        case 'ball':
-            return 0.78;
-        case 'cube':
-        default:
-            return 0.82;
-    }
 }
 function drawPlayer(context, player, cell, verticalOffset, visual = {}) {
     const playerX = player.x * cell;
@@ -1847,45 +1786,6 @@ function drawPlayer(context, player, cell, verticalOffset, visual = {}) {
     context.fillRect(-sizeW * 0.18, -sizeH * 0.18, sizeW * 0.12, sizeH * 0.12);
     context.fillRect(sizeW * 0.06, -sizeH * 0.18, sizeW * 0.12, sizeH * 0.12);
     context.fillRect(-sizeW * 0.18, sizeH * 0.12, sizeW * 0.36, sizeH * 0.08);
-    context.restore();
-}
-function drawPlayerTrailPoint(context, point, cell, verticalOffset) {
-    if (point.alpha <= 0.02) {
-        return;
-    }
-    const glowColor = getPlayerTrailGlowColor(point.mode);
-    const worldX = point.x * cell;
-    const worldY = verticalOffset + point.y * cell;
-    const size = point.size * cell;
-    const glowRadius = point.mode === 'ship' ? size * 1.2 : point.mode === 'arrow' ? size * 1.1 : point.mode === 'ball' ? size : size * 0.94;
-    const trailPlayer = {
-        x: point.x - PLAYER_HITBOX_SIZE / 2,
-        y: point.y - PLAYER_HITBOX_SIZE / 2,
-        w: PLAYER_HITBOX_SIZE,
-        h: PLAYER_HITBOX_SIZE,
-        vy: 0,
-        rotation: point.rotation,
-        grounded: false,
-        gravity: 1,
-        speedMultiplier: 1,
-        mode: point.mode,
-    };
-    context.save();
-    context.globalCompositeOperation = 'lighter';
-    const glow = context.createRadialGradient(worldX, worldY, size * 0.12, worldX, worldY, glowRadius);
-    glow.addColorStop(0, hexToRgba(glowColor, point.alpha * 0.62));
-    glow.addColorStop(0.4, hexToRgba(glowColor, point.alpha * 0.28));
-    glow.addColorStop(1, hexToRgba(glowColor, 0));
-    context.fillStyle = glow;
-    context.beginPath();
-    context.arc(worldX, worldY, glowRadius, 0, Math.PI * 2);
-    context.fill();
-    context.shadowColor = hexToRgba(glowColor, clamp(point.alpha * 1.5, 0, 0.95));
-    context.shadowBlur = Math.max(10, size * 0.95);
-    drawPlayer(context, trailPlayer, cell, verticalOffset, {
-        alpha: point.alpha * 0.72,
-        scale: point.size / PLAYER_HITBOX_SIZE,
-    });
     context.restore();
 }
 function drawRuntimeHitboxes(context, objects, player, cell, verticalOffset, levelMaxY) {
