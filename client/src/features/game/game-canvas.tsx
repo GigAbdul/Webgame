@@ -616,9 +616,14 @@ export function GameCanvas({
     let shakePower = 0;
     let restartTimeout = 0;
     let jumpCount = 0;
+    let ballFlipQueuedUntilRelease = false;
 
     const syncInputHeldState = () => {
       inputHeldRef.current = keyboardInputHeldRef.current || activePointerIdsRef.current.size > 0;
+
+      if (!inputHeldRef.current) {
+        ballFlipQueuedUntilRelease = false;
+      }
     };
 
     const releaseAllHeldInput = () => {
@@ -1006,7 +1011,11 @@ export function GameCanvas({
       }
 
       if (player.mode === 'ball') {
-        tryImmediateBallFlip(timestamp);
+        ballFlipQueuedUntilRelease = true;
+
+        if (tryImmediateBallFlip(timestamp)) {
+          ballFlipQueuedUntilRelease = false;
+        }
       }
     };
 
@@ -1546,6 +1555,12 @@ export function GameCanvas({
             jumpBufferedUntil = 0;
           } else if (orbBufferedUntil < timestamp) {
             jumpBufferedUntil = 0;
+          }
+        }
+
+        if (player.mode === 'ball' && currentStatus === 'running' && ballFlipQueuedUntilRelease && inputHeldRef.current) {
+          if (tryImmediateBallFlip(timestamp)) {
+            ballFlipQueuedUntilRelease = false;
           }
         }
 

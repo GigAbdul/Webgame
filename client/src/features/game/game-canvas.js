@@ -364,8 +364,12 @@ export function GameCanvas({ levelData, attemptNumber = 1, runId = 0, autoRestar
         let shakePower = 0;
         let restartTimeout = 0;
         let jumpCount = 0;
+        let ballFlipQueuedUntilRelease = false;
         const syncInputHeldState = () => {
             inputHeldRef.current = keyboardInputHeldRef.current || activePointerIdsRef.current.size > 0;
+            if (!inputHeldRef.current) {
+                ballFlipQueuedUntilRelease = false;
+            }
         };
         const releaseAllHeldInput = () => {
             keyboardInputHeldRef.current = false;
@@ -663,7 +667,10 @@ export function GameCanvas({ levelData, attemptNumber = 1, runId = 0, autoRestar
                 return;
             }
             if (player.mode === 'ball') {
-                tryImmediateBallFlip(timestamp);
+                ballFlipQueuedUntilRelease = true;
+                if (tryImmediateBallFlip(timestamp)) {
+                    ballFlipQueuedUntilRelease = false;
+                }
             }
         };
         const keyListener = (event) => {
@@ -1080,6 +1087,11 @@ export function GameCanvas({ levelData, attemptNumber = 1, runId = 0, autoRestar
                     }
                     else if (orbBufferedUntil < timestamp) {
                         jumpBufferedUntil = 0;
+                    }
+                }
+                if (player.mode === 'ball' && currentStatus === 'running' && ballFlipQueuedUntilRelease && inputHeldRef.current) {
+                    if (tryImmediateBallFlip(timestamp)) {
+                        ballFlipQueuedUntilRelease = false;
                     }
                 }
                 if ((player.mode === 'cube' || player.mode === 'ball') && currentStatus === 'running' && orbBufferedUntil >= timestamp) {
