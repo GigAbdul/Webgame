@@ -690,7 +690,6 @@ const blockProfilesByType = {
     },
 };
 export const objectPaletteOrder = Object.keys(levelObjectDefinitions);
-export const PAINT_GROUP_SLOT_COUNT = 6;
 export const FIXED_LEVEL_START_X = 2;
 export const FIXED_LEVEL_START_Y = 8;
 export const AUTO_LEVEL_FINISH_PADDING_UNITS = 10;

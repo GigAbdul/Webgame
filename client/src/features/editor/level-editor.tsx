@@ -7,7 +7,6 @@ import {
   FIXED_LEVEL_START_X,
   FIXED_LEVEL_START_Y,
   computeAutoLevelFinishX,
-  PAINT_GROUP_SLOT_COUNT,
   createEmptyLevelData,
   getBlockCollisionMask,
   getColorGroupById,
@@ -1072,25 +1071,33 @@ export function LevelEditor({
   const isSelectedObjectPaintPopupOpen = Boolean(isPaintPopupOpen && paintableSelectedObject);
   const canOpenTriggerPopup = Boolean(selectedTriggerObject);
   const isEditObjectPopupOpen = Boolean(isSelectedObjectPaintPopupOpen || isTriggerPopupOpen);
-  const nextFreePaintGroupId = useMemo(() => {
-    const occupiedIds = new Set<number>((levelData.meta.colorGroups ?? []).map((group) => group.id));
+  const paintGroupIds = useMemo(() => {
+    const ids = new Set<number>();
+
+    for (const group of levelData.meta.colorGroups ?? []) {
+      ids.add(group.id);
+    }
 
     for (const object of levelData.objects) {
       const groupId = getObjectPaintGroupId(object);
 
       if (groupId) {
-        occupiedIds.add(groupId);
+        ids.add(groupId);
       }
     }
 
-    for (let groupId = 1; groupId <= PAINT_GROUP_SLOT_COUNT; groupId += 1) {
-      if (!occupiedIds.has(groupId)) {
-        return groupId;
-      }
-    }
-
-    return null;
+    return Array.from(ids).sort((left, right) => left - right);
   }, [levelData.meta.colorGroups, levelData.objects]);
+  const nextFreePaintGroupId = useMemo(() => {
+    const occupiedIds = new Set<number>(paintGroupIds);
+    let groupId = 1;
+
+    while (occupiedIds.has(groupId)) {
+      groupId += 1;
+    }
+
+    return groupId;
+  }, [paintGroupIds]);
   const placementModeLabel = placementMode === 'drag' ? 'Drag' : 'Single';
   const dragPlacementAvailable = canUseDragPlacementTool(selectedTool);
   const activeEditorLayerLabel = `Layer ${activeEditorLayer}`;
@@ -2273,7 +2280,6 @@ export function LevelEditor({
     const currentGroupId = Number(selectedPaintGroupTriggerObject.props.groupId ?? 1);
     updateSelectedTriggerNumericProp('groupId', String(currentGroupId + delta), {
       min: 1,
-      max: PAINT_GROUP_SLOT_COUNT,
     });
   };
 
@@ -2472,12 +2478,32 @@ export function LevelEditor({
       return;
     }
 
-    if (!nextFreePaintGroupId) {
-      setMessage('No free color groups are available right now.');
+    assignSelectedObjectToPaintGroup(nextFreePaintGroupId);
+  };
+
+  const addPaintGroup = () => {
+    if (paintableSelectedObjects.length) {
+      assignSelectedObjectToPaintGroup(nextFreePaintGroupId);
       return;
     }
 
-    assignSelectedObjectToPaintGroup(nextFreePaintGroupId);
+    const activePaintDefinition = activePaintTool ? levelObjectDefinitions[activePaintTool] : null;
+    const fillColor = activePaintDefinition?.color ?? '#ffffff';
+    const strokeColor = activePaintDefinition?.strokeColor ?? '#1b243d';
+
+    updateLevelData((draft) => {
+      const currentGroups = draft.meta.colorGroups ?? [];
+
+      if (currentGroups.some((group) => group.id === nextFreePaintGroupId)) {
+        return;
+      }
+
+      const nextGroups = [...currentGroups, { id: nextFreePaintGroupId, fillColor, strokeColor }];
+      nextGroups.sort((left, right) => left.id - right.id);
+      draft.meta.colorGroups = nextGroups;
+    });
+
+    setActivePaintGroupId(nextFreePaintGroupId);
   };
 
   const toggleEditObjectPopup = () => {
@@ -3816,12 +3842,10 @@ export function LevelEditor({
                             className="editor-trigger-input editor-trigger-input--stepper"
                             type="number"
                             min="1"
-                            max={String(PAINT_GROUP_SLOT_COUNT)}
                             value={Number(selectedPaintGroupTriggerObject.props.groupId ?? 1)}
                             onChange={(event) =>
                               updateSelectedTriggerNumericProp('groupId', event.target.value, {
                                 min: 1,
-                                max: PAINT_GROUP_SLOT_COUNT,
                               })
                             }
                           />
@@ -4214,8 +4238,7 @@ export function LevelEditor({
                   </div>
 
                   <div className="editor-object-color-group-grid">
-                    {Array.from({ length: PAINT_GROUP_SLOT_COUNT }, (_, index) => {
-                      const groupId = index + 1;
+                    {paintGroupIds.map((groupId) => {
                       const group = getColorGroupById(colorGroups, groupId);
                       const isCurrentGroup = selectedPaintGroupId === groupId;
 
@@ -4248,9 +4271,8 @@ export function LevelEditor({
                         type="button"
                         className="editor-object-color-action editor-object-color-action--ghost"
                         onClick={assignSelectedObjectToNextFreePaintGroup}
-                        disabled={!nextFreePaintGroupId}
                       >
-                        Next Free
+                        Add Group
                       </button>
                       <button
                         type="button"
@@ -4431,8 +4453,7 @@ export function LevelEditor({
                   </div>
 
                   <div className="editor-paint-group-grid">
-                    {Array.from({ length: PAINT_GROUP_SLOT_COUNT }, (_, index) => {
-                      const groupId = index + 1;
+                    {paintGroupIds.map((groupId) => {
                       const group = getColorGroupById(colorGroups, groupId);
 
                       return (
@@ -4463,6 +4484,9 @@ export function LevelEditor({
                   <div className="editor-paint-inline-actions">
                     <Button variant="ghost" onClick={() => setActivePaintGroupId(null)}>
                       Place Direct
+                    </Button>
+                    <Button variant="ghost" onClick={addPaintGroup}>
+                      Add Group
                     </Button>
                   </div>
                 </div>
@@ -5118,8 +5142,7 @@ export function LevelEditor({
                   </Badge>
                 </div>
                 <div className="editor-inline-actions">
-                  {Array.from({ length: PAINT_GROUP_SLOT_COUNT }, (_, index) => {
-                    const groupId = index + 1;
+                  {paintGroupIds.map((groupId) => {
                     const isActive = selectedPaintGroupId === groupId;
 
                     return (
@@ -5133,6 +5156,9 @@ export function LevelEditor({
                       </Button>
                     );
                   })}
+                  <Button variant="ghost" className="min-w-[4.25rem]" onClick={assignSelectedObjectToNextFreePaintGroup}>
+                    Add Group
+                  </Button>
                 </div>
                 <div className="editor-inline-actions">
                   <Button variant="ghost" onClick={() => setIsPaintPopupOpen(true)}>
@@ -5272,12 +5298,10 @@ export function LevelEditor({
                       <Input
                         type="number"
                         min="1"
-                        max={String(PAINT_GROUP_SLOT_COUNT)}
                         value={Number(selectedPaintGroupTriggerObject.props.groupId ?? 1)}
                         onChange={(event) =>
                           updateSelectedTriggerNumericProp('groupId', event.target.value, {
                             min: 1,
-                            max: PAINT_GROUP_SLOT_COUNT,
                           })
                         }
                       />
