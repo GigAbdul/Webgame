@@ -386,7 +386,11 @@ export function LevelSetupPage() {
   }
 
   async function handleOpenEditor() {
-    if (!level || level.isOfficial) {
+    if (!level) {
+      return;
+    }
+
+    if (level.isOfficial && user?.role !== 'ADMIN') {
       return;
     }
 
@@ -522,6 +526,7 @@ export function LevelSetupPage() {
 
   if (!isNewLevel && level) {
     const canPublish = user?.role === 'ADMIN' || level.status === 'DRAFT';
+    const canOpenEditor = user?.role === 'ADMIN' || !level.isOfficial;
 
     return (
       <div className="gd-draft-view-page gd-draft-view-page--arcade">
@@ -592,7 +597,7 @@ export function LevelSetupPage() {
               variant="editor"
               label="Editor"
               onClick={handleOpenEditor}
-              disabled={isBusy || level.isOfficial}
+              disabled={isBusy || !canOpenEditor}
               hideLabel
             />
             <DraftViewActionButton
