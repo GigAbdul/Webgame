@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../store/auth-store';
 import { Button } from './ui';
@@ -19,14 +20,38 @@ export function AppLayout() {
   const { user, clearAuth } = useAuthStore();
   const isHomeRoute = location.pathname === '/';
   const isWorkshopDetailRoute = location.pathname.startsWith('/my-levels/');
-  const levelsViewportFitClassName = location.pathname === '/levels'
-    ? 'viewport-fit-frame--levels-classic'
-    : 'viewport-fit-frame--arcade-blue';
+  const isSkinStudioRoute = location.pathname === '/admin/player-skins';
+  const levelsViewportFitClassName = isSkinStudioRoute
+    ? 'viewport-fit-frame--skin-studio'
+    : location.pathname === '/levels'
+      ? 'viewport-fit-frame--levels-classic'
+      : 'viewport-fit-frame--arcade-blue';
   const isFullScreenArcadeRoute =
     location.pathname === '/levels' ||
     location.pathname === '/my-levels' ||
     location.pathname === '/leaderboard' ||
-    isWorkshopDetailRoute;
+    isWorkshopDetailRoute ||
+    isSkinStudioRoute;
+
+  useEffect(() => {
+    document.body.classList.toggle('skin-studio-route-active', isSkinStudioRoute);
+    document.getElementById('root')?.classList.toggle('skin-studio-route-active', isSkinStudioRoute);
+
+    return () => {
+      document.body.classList.remove('skin-studio-route-active');
+      document.getElementById('root')?.classList.remove('skin-studio-route-active');
+    };
+  }, [isSkinStudioRoute]);
+
+  if (isSkinStudioRoute) {
+    return (
+      <div className="app-root app-root--levels viewport-fit-frame--skin-studio">
+        <main className="app-main app-main--levels app-main--skin-studio">
+          <Outlet />
+        </main>
+      </div>
+    );
+  }
 
   if (isFullScreenArcadeRoute) {
     return (

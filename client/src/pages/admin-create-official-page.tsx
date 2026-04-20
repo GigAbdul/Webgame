@@ -3,18 +3,22 @@ import { useNavigate } from 'react-router-dom';
 import { Panel } from '../components/ui';
 import { LevelEditor } from '../features/editor/level-editor';
 import { moveLocalEditorDraft } from '../features/editor/local-draft-storage';
-import { apiRequest } from '../services/api';
+import { apiRequest, type ApiUploadProgress } from '../services/api';
 import type { Level } from '../types/models';
 
 export function AdminCreateOfficialPage() {
   const navigate = useNavigate();
 
   const createMutation = useMutation({
-    mutationFn: (payload: {
+    mutationFn: ({
+      onUploadProgress,
+      ...payload
+    }: {
       title: string;
       description: string;
       theme: string;
       dataJson: Level['dataJson'];
+      onUploadProgress?: (progress: ApiUploadProgress) => void;
     }) =>
       apiRequest<{ level: Level }>('/api/admin/levels/create-official', {
         method: 'POST',
@@ -24,6 +28,7 @@ export function AdminCreateOfficialPage() {
           featured: false,
           isVisible: true,
         }),
+        onUploadProgress,
       }),
     onSuccess: (payload) => {
       moveLocalEditorDraft('admin-official-new', payload.level.id);
@@ -65,7 +70,16 @@ export function AdminCreateOfficialPage() {
         draftStorageKey="admin-official-new"
         saveLabel="Save Admin Draft"
         onClose={() => navigate('/admin/levels')}
-        onSave={(payload) => createMutation.mutateAsync(payload).then(() => undefined)}
+        onSave={(payload, options) =>
+          createMutation
+            .mutateAsync({
+              ...payload,
+              onUploadProgress: (progress) => {
+                options?.onUploadProgress?.(progress.percent);
+              },
+            })
+            .then(() => undefined)
+        }
       />
     </div>
   );

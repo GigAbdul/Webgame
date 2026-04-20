@@ -44,8 +44,9 @@ import {
 import type { PlayerHitboxKind } from './player-physics';
 import { readStoredMusicVolume, resolveLevelMusic } from './level-music';
 import { drawStageObjectSprite } from './object-renderer';
+import { drawPlayerModelSprite, usePlayerSkinsQuery } from './player-skins';
 import { getStageGroundPalette, getStageThemePalette } from './stage-theme-palette';
-import type { LevelData, LevelObject } from '../../types/models';
+import type { LevelData, LevelObject, PlayerSkinData, PlayerSkinRecord } from '../../types/models';
 import { Panel } from '../../components/ui';
 import { cn } from '../../utils/cn';
 
@@ -65,6 +66,7 @@ type GameCanvasProps = {
   stopSignal?: number;
   showRunPath?: boolean;
   className?: string;
+  playerSkinOverrides?: Partial<PlayerSkinRecord>;
   onFail?: (payload: {
     progressPercent: number;
     completionTimeMs: number;
@@ -213,6 +215,7 @@ export function GameCanvas({
   stopSignal = 0,
   showRunPath = false,
   className,
+  playerSkinOverrides,
   onFail,
   onComplete,
   onExitToMenu,
@@ -248,6 +251,8 @@ export function GameCanvas({
   const [isScreenShakeEnabled, setIsScreenShakeEnabled] = useState(true);
   const [isMusicLoading, setIsMusicLoading] = useState(false);
   const [musicLoadProgress, setMusicLoadProgress] = useState<number | null>(null);
+  const playerSkinsQuery = usePlayerSkinsQuery();
+  const playerSkinMap = playerSkinsQuery.data?.skins ?? null;
   const playerModeLabel = getPlayerModeLabel(levelData.player.mode);
   const resolvedMusic = useMemo(() => resolveLevelMusic(levelData.meta), [levelData.meta]);
   const musicOffsetMs = Math.max(0, Number(levelData.meta.musicOffsetMs ?? 0) || 0);
@@ -2061,7 +2066,7 @@ export function GameCanvas({
       drawPlayer(context, player, cell, verticalOffset, {
         alpha: playerConsumedByFinishGateway ? 0 : finishSequence ? 1 - finishGatewayProgress * 0.82 : 1,
         scale: playerConsumedByFinishGateway ? 0.66 : finishSequence ? 1 - finishGatewayProgress * 0.34 : 1,
-      });
+      }, playerSkinOverrides?.[player.mode] ?? playerSkinMap?.[player.mode] ?? null);
       if (hitboxObjects) {
         drawRuntimeHitboxes(context, hitboxObjects, player, cell, verticalOffset, levelBounds.maxY);
       }
@@ -2110,7 +2115,7 @@ export function GameCanvas({
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       canvas.removeEventListener('pointerdown', pointerDownListener);
     };
-  }, [autoFinishX, autoRestartOnFail, fullscreen, levelBounds.maxX, levelBounds.maxY, levelData, previewBootstrap, previewStartPosEnabled, runId, runtimeMusicOffsetMs, sanitizedLevelObjects, showRunPath, suppressCompletionOverlay]); // eslint-disable-line react-hooks/exhaustive-deps -- onFail/onComplete are mirrored into refs above so the runtime loop does not rebuild on parent re-renders
+  }, [autoFinishX, autoRestartOnFail, fullscreen, levelBounds.maxX, levelBounds.maxY, levelData, playerSkinMap, playerSkinOverrides, previewBootstrap, previewStartPosEnabled, runId, runtimeMusicOffsetMs, sanitizedLevelObjects, showRunPath, suppressCompletionOverlay]); // eslint-disable-line react-hooks/exhaustive-deps -- onFail/onComplete are mirrored into refs above so the runtime loop does not rebuild on parent re-renders
 
   if (fullscreen) {
     return (
@@ -2431,6 +2436,7 @@ function drawPlayer(
     alpha?: number;
     scale?: number;
   } = {},
+  skinData: PlayerSkinData | null = null,
 ) {
   const playerX = player.x * cell;
   const playerY = verticalOffset + player.y * cell;
@@ -2444,196 +2450,7 @@ function drawPlayer(
   context.translate(playerX + sizeW / 2, playerY + sizeH / 2);
   context.rotate(player.rotation);
   context.scale(scale, scale);
-
-  if (player.mode === 'ship') {
-    const bodyLength = sizeW * 0.84;
-    const bodyHeight = sizeH * 0.54;
-    const halfLength = bodyLength / 2;
-    const halfHeight = bodyHeight / 2;
-    const cubeSize = Math.min(sizeW, sizeH) * 0.3;
-
-    context.fillStyle = '#101a2a';
-    context.beginPath();
-    context.moveTo(halfLength, 0);
-    context.lineTo(halfLength * 0.18, -halfHeight);
-    context.lineTo(-halfLength * 0.9, -halfHeight * 0.9);
-    context.lineTo(-halfLength, 0);
-    context.lineTo(-halfLength * 0.9, halfHeight * 0.9);
-    context.lineTo(halfLength * 0.18, halfHeight);
-    context.closePath();
-    context.fill();
-
-    context.fillStyle = '#f4f7ff';
-    context.beginPath();
-    context.moveTo(halfLength * 0.94, 0);
-    context.lineTo(halfLength * 0.14, -halfHeight * 0.94);
-    context.lineTo(-halfLength * 0.74, -halfHeight * 0.76);
-    context.lineTo(-halfLength * 0.88, 0);
-    context.lineTo(-halfLength * 0.74, halfHeight * 0.76);
-    context.lineTo(halfLength * 0.14, halfHeight * 0.94);
-    context.closePath();
-    context.fill();
-    context.strokeStyle = '#182133';
-    context.lineWidth = 3;
-    context.stroke();
-
-    context.fillStyle = '#67ff9f';
-    context.beginPath();
-    context.moveTo(-halfLength * 0.2, 0);
-    context.lineTo(halfLength * 0.46, -halfHeight * 0.6);
-    context.lineTo(halfLength * 0.16, 0);
-    context.lineTo(halfLength * 0.46, halfHeight * 0.6);
-    context.closePath();
-    context.fill();
-
-    context.fillStyle = '#dffcff';
-    context.beginPath();
-    context.moveTo(halfLength * 0.2, 0);
-    context.lineTo(-halfLength * 0.12, -halfHeight * 0.42);
-    context.lineTo(-halfLength * 0.34, 0);
-    context.lineTo(-halfLength * 0.12, halfHeight * 0.42);
-    context.closePath();
-    context.fill();
-
-    context.fillStyle = '#f4f7ff';
-    context.fillRect(-halfLength * 0.64, -cubeSize / 2, cubeSize, cubeSize);
-    context.strokeStyle = '#182133';
-    context.lineWidth = 2.5;
-    context.strokeRect(-halfLength * 0.64, -cubeSize / 2, cubeSize, cubeSize);
-
-    context.fillStyle = '#182133';
-    context.fillRect(-halfLength * 0.56, -cubeSize * 0.2, cubeSize * 0.12, cubeSize * 0.12);
-    context.fillRect(-halfLength * 0.42, -cubeSize * 0.2, cubeSize * 0.12, cubeSize * 0.12);
-    context.fillRect(-halfLength * 0.56, cubeSize * 0.12, cubeSize * 0.26, cubeSize * 0.08);
-
-    context.fillStyle = '#79f7ff';
-    context.fillRect(-halfLength * 0.06, -cubeSize * 0.24, cubeSize * 0.2, cubeSize * 0.48);
-
-    context.restore();
-    return;
-  }
-
-  if (player.mode === 'arrow') {
-    const bodyLength = sizeW * 0.94;
-    const bodyHeight = sizeH * 0.58;
-    const halfLength = bodyLength / 2;
-    const halfHeight = bodyHeight / 2;
-    const pilotSize = Math.min(sizeW, sizeH) * 0.24;
-
-    context.fillStyle = '#132339';
-    context.beginPath();
-    context.moveTo(-halfLength * 0.9, 0);
-    context.lineTo(-halfLength * 0.18, -halfHeight);
-    context.lineTo(halfLength, 0);
-    context.lineTo(-halfLength * 0.18, halfHeight);
-    context.closePath();
-    context.fill();
-
-    context.fillStyle = '#f4f7ff';
-    context.beginPath();
-    context.moveTo(-halfLength * 0.76, 0);
-    context.lineTo(-halfLength * 0.08, -halfHeight * 0.88);
-    context.lineTo(halfLength * 0.92, 0);
-    context.lineTo(-halfLength * 0.08, halfHeight * 0.88);
-    context.closePath();
-    context.fill();
-    context.strokeStyle = '#182133';
-    context.lineWidth = 2.6;
-    context.stroke();
-
-    context.fillStyle = '#63ffbd';
-    context.beginPath();
-    context.moveTo(-halfLength * 0.06, -halfHeight * 0.54);
-    context.lineTo(halfLength * 0.3, 0);
-    context.lineTo(-halfLength * 0.06, halfHeight * 0.54);
-    context.closePath();
-    context.fill();
-
-    context.fillStyle = '#f4f7ff';
-    context.fillRect(-halfLength * 0.54, -pilotSize / 2, pilotSize, pilotSize);
-    context.strokeStyle = '#182133';
-    context.lineWidth = 2;
-    context.strokeRect(-halfLength * 0.54, -pilotSize / 2, pilotSize, pilotSize);
-    context.fillStyle = '#182133';
-    context.fillRect(-halfLength * 0.48, -pilotSize * 0.2, pilotSize * 0.1, pilotSize * 0.1);
-    context.fillRect(-halfLength * 0.36, -pilotSize * 0.2, pilotSize * 0.1, pilotSize * 0.1);
-    context.fillRect(-halfLength * 0.48, pilotSize * 0.12, pilotSize * 0.22, pilotSize * 0.07);
-
-    context.restore();
-    return;
-  }
-
-  if (player.mode === 'ball') {
-    const radius = Math.min(sizeW, sizeH) * 0.48;
-
-    context.fillStyle = '#132339';
-    context.beginPath();
-    context.arc(0, 0, radius, 0, Math.PI * 2);
-    context.fill();
-
-    context.fillStyle = '#f4f7ff';
-    context.beginPath();
-    context.arc(0, 0, radius * 0.86, 0, Math.PI * 2);
-    context.fill();
-
-    context.strokeStyle = '#182133';
-    context.lineWidth = 3;
-    context.beginPath();
-    context.arc(0, 0, radius * 0.86, 0, Math.PI * 2);
-    context.stroke();
-
-    context.fillStyle = '#ffd95e';
-    context.beginPath();
-    context.arc(0, 0, radius * 0.54, 0, Math.PI * 2);
-    context.fill();
-
-    context.strokeStyle = '#182133';
-    context.lineWidth = 2.4;
-    context.beginPath();
-    context.arc(0, 0, radius * 0.54, 0, Math.PI * 2);
-    context.stroke();
-
-    context.fillStyle = '#63ffbd';
-    context.beginPath();
-    context.moveTo(-radius * 0.02, -radius * 0.68);
-    context.lineTo(radius * 0.46, -radius * 0.12);
-    context.lineTo(radius * 0.02, radius * 0.02);
-    context.lineTo(radius * 0.58, radius * 0.54);
-    context.lineTo(radius * 0.08, radius * 0.18);
-    context.lineTo(-radius * 0.46, radius * 0.68);
-    context.lineTo(-radius * 0.02, radius * 0.12);
-    context.lineTo(-radius * 0.58, -radius * 0.42);
-    context.closePath();
-    context.fill();
-
-    context.strokeStyle = 'rgba(24,33,51,0.72)';
-    context.lineWidth = 1.6;
-    context.beginPath();
-    context.moveTo(-radius * 0.78, 0);
-    context.lineTo(radius * 0.78, 0);
-    context.moveTo(0, -radius * 0.78);
-    context.lineTo(0, radius * 0.78);
-    context.stroke();
-
-    context.fillStyle = '#182133';
-    context.fillRect(-radius * 0.34, -radius * 0.18, radius * 0.14, radius * 0.14);
-    context.fillRect(radius * 0.08, -radius * 0.18, radius * 0.14, radius * 0.14);
-    context.fillRect(-radius * 0.24, radius * 0.18, radius * 0.44, radius * 0.08);
-
-    context.restore();
-    return;
-  }
-
-  context.fillStyle = '#f4f7ff';
-  context.fillRect(-sizeW / 2, -sizeH / 2, sizeW, sizeH);
-  context.strokeStyle = '#182133';
-  context.lineWidth = 3;
-  context.strokeRect(-sizeW / 2, -sizeH / 2, sizeW, sizeH);
-
-  context.fillStyle = '#182133';
-  context.fillRect(-sizeW * 0.18, -sizeH * 0.18, sizeW * 0.12, sizeH * 0.12);
-  context.fillRect(sizeW * 0.06, -sizeH * 0.18, sizeW * 0.12, sizeH * 0.12);
-  context.fillRect(-sizeW * 0.18, sizeH * 0.12, sizeW * 0.36, sizeH * 0.08);
+  drawPlayerModelSprite(context, player.mode, sizeW, sizeH, { skinData });
   context.restore();
 }
 

@@ -46,12 +46,17 @@ type LevelEditorProps = {
   draftStorageKey: string;
   saveLabel?: string;
   onClose?: () => void;
-  onSave: (payload: {
-    title: string;
-    description: string;
-    theme: string;
-    dataJson: LevelData;
-  }) => Promise<void>;
+  onSave: (
+    payload: {
+      title: string;
+      description: string;
+      theme: string;
+      dataJson: LevelData;
+    },
+    options?: {
+      onUploadProgress?: (progressPercent: number | null) => void;
+    },
+  ) => Promise<void>;
   onSubmit?: () => Promise<void>;
 };
 
@@ -461,6 +466,7 @@ const EDITOR_CANVAS_ASPECT_RATIO = EDITOR_CANVAS_WIDTH / EDITOR_CANVAS_HEIGHT;
 const EDITOR_DEFAULT_PAN_X = 60;
 const EDITOR_DEFAULT_PAN_Y = 80;
 const EDITOR_SCROLL_PADDING_UNITS = 6;
+const EDITOR_VIEWPORT_CULL_PADDING_UNITS = 3;
 const MAX_CUSTOM_MUSIC_FILE_SIZE_BYTES = 8 * 1024 * 1024;
 const MAX_EDITOR_HISTORY_STEPS = 40;
 const MIN_EDITOR_LAYER = 1;
@@ -509,6 +515,43 @@ function getHighestEditorLayer(objects: LevelObject[]) {
 
 function compareEditorLayerDrawOrder(left: Pick<LevelObject, 'editorLayer'>, right: Pick<LevelObject, 'editorLayer'>) {
   return clampEditorLayer(right.editorLayer) - clampEditorLayer(left.editorLayer);
+}
+
+function getEditorViewportWorldBounds(
+  panX: number,
+  panY: number,
+  viewportWidth: number,
+  viewportHeight: number,
+  cell: number,
+  paddingUnits = EDITOR_VIEWPORT_CULL_PADDING_UNITS,
+) {
+  if (cell <= 0) {
+    return {
+      left: Number.NEGATIVE_INFINITY,
+      top: Number.NEGATIVE_INFINITY,
+      right: Number.POSITIVE_INFINITY,
+      bottom: Number.POSITIVE_INFINITY,
+    };
+  }
+
+  return {
+    left: -panX / cell - paddingUnits,
+    top: -panY / cell - paddingUnits,
+    right: (viewportWidth - panX) / cell + paddingUnits,
+    bottom: (viewportHeight - panY) / cell + paddingUnits,
+  };
+}
+
+function objectIntersectsEditorViewport(
+  object: Pick<LevelObject, 'x' | 'y' | 'w' | 'h'>,
+  viewport: ReturnType<typeof getEditorViewportWorldBounds>,
+) {
+  return (
+    object.x <= viewport.right &&
+    object.x + object.w >= viewport.left &&
+    object.y <= viewport.bottom &&
+    object.y + object.h >= viewport.top
+  );
 }
 
 function getPaletteGroupTitle(tool: EditorTool) {
@@ -830,6 +873,7 @@ export function LevelEditor({
   const [musicUrlInput, setMusicUrlInput] = useState(() => getInitialMusicUrlInput(initialEditorState.levelData.meta.music));
   const [musicLabelInput, setMusicLabelInput] = useState(initialEditorState.levelData.meta.musicLabel ?? '');
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [saveProgressPercent, setSaveProgressPercent] = useState<number | null>(null);
   const [message, setMessage] = useState<string>(initialEditorState.restoredFromLocal ? 'Local draft restored.' : '');
   const paintHsvBaseColorsRef = useRef<{ fillColor: string; strokeColor: string } | null>(null);
 
@@ -848,6 +892,9 @@ export function LevelEditor({
   const musicSyncFrameRef = useRef<number | null>(null);
 
   const loadedDraftStorageKeyRef = useRef(draftStorageKey);
+  const updateCursorWorld = useCallback((x: number, y: number) => {
+    setCursorWorld((current) => (current.x === x && current.y === y ? current : { x, y }));
+  }, []);
 
   useEffect(() => {
     if (loadedDraftStorageKeyRef.current === draftStorageKey) {
@@ -907,6 +954,7 @@ export function LevelEditor({
     setMusicUrlInput(getInitialMusicUrlInput(nextEditorState.levelData.meta.music));
     setMusicLabelInput(nextEditorState.levelData.meta.musicLabel ?? '');
     setSaveState('idle');
+    setSaveProgressPercent(null);
     setMessage(nextEditorState.restoredFromLocal ? 'Local draft restored.' : '');
   }, [draftStorageKey, initialLevel]);
 
@@ -1027,6 +1075,47 @@ export function LevelEditor({
     () => (selectedObject ? levelObjectDefinitions[selectedObject.type] : null),
     [selectedObject],
   );
+  const orderedLevelObjects = useMemo(() => [...levelData.objects].sort(compareEditorLayerDrawOrder), [levelData.objects]);
+  const drawableLevelObjects = useMemo(
+    () =>
+      orderedLevelObjects.map((object) => {
+        const previewPosition = dragPreviewState?.positions[object.id];
+
+        return previewPosition
+          ? {
+              ...object,
+              x: previewPosition.x,
+              y: previewPosition.y,
+            }
+          : object;
+      }),
+    [dragPreviewState, orderedLevelObjects],
+  );
+  const visibleDrawableObjects = useMemo(() => {
+    const viewportCell = levelData.meta.gridSize * zoom;
+    const viewportBounds = getEditorViewportWorldBounds(
+      pan.x,
+      pan.y,
+      canvasViewport.width,
+      canvasViewport.height,
+      viewportCell,
+    );
+
+    return drawableLevelObjects.filter((object) => objectIntersectsEditorViewport(object, viewportBounds));
+  }, [canvasViewport.height, canvasViewport.width, drawableLevelObjects, levelData.meta.gridSize, pan.x, pan.y, zoom]);
+  const activeLayerObjectsTopDown = useMemo(() => {
+    const nextObjects: LevelObject[] = [];
+
+    for (let index = drawableLevelObjects.length - 1; index >= 0; index -= 1) {
+      const object = drawableLevelObjects[index];
+
+      if (object.editorLayer === activeEditorLayer) {
+        nextObjects.push(object);
+      }
+    }
+
+    return nextObjects;
+  }, [activeEditorLayer, drawableLevelObjects]);
   const activeToolDescription = toolDescriptions[selectedTool];
   const activeToolLabel =
     selectedTool === 'select' ? 'Select' : selectedTool === 'pan' ? 'Pan' : levelObjectDefinitions[selectedTool].label;
@@ -1125,8 +1214,6 @@ export function LevelEditor({
         ? `${selectedDefinition?.label ?? selectedObject.type} at ${selectedObject.x}, ${selectedObject.y}`
         : 'No object selected';
   const objectCount = String(levelData.objects.length);
-  const saveButtonLabel =
-    saveState === 'saving' ? 'Saving' : saveState === 'saved' ? 'Saved' : saveState === 'error' ? 'Retry' : 'Save';
   const musicOffsetMsValue = Math.max(0, Number(levelData.meta.musicOffsetMs ?? 0) || 0);
   const startPosObjects = useMemo(
     () => levelData.objects.filter((object) => object.type === 'START_POS'),
@@ -1657,19 +1744,7 @@ export function LevelEditor({
       getStageGroundPalette(levelData.meta.theme, levelData.meta.groundColor),
     );
 
-    const orderedObjects = [...levelData.objects].sort(compareEditorLayerDrawOrder);
-    const drawableObjects = orderedObjects.map((object) => {
-      const previewPosition = dragPreviewState?.positions[object.id];
-      return previewPosition
-        ? {
-            ...object,
-            x: previewPosition.x,
-            y: previewPosition.y,
-          }
-        : object;
-    });
-
-    for (const drawableObject of drawableObjects) {
+    for (const drawableObject of visibleDrawableObjects) {
       const { x, y } = worldToScreen(drawableObject.x, drawableObject.y, pan.x, pan.y, cell);
       const w = drawableObject.w * cell;
       const h = drawableObject.h * cell;
@@ -1684,7 +1759,7 @@ export function LevelEditor({
       drawStageObjectSprite({
         context,
         object: drawableObject,
-        neighborObjects: drawableObjects,
+        neighborObjects: visibleDrawableObjects,
         x,
         y,
         w,
@@ -1844,6 +1919,7 @@ export function LevelEditor({
     canvasViewport.height,
     canvasViewport.width,
     colorGroups,
+    editorShowHitboxes,
     dragPreviewState,
     inlineTestDeathMarker,
     inlineTestPathPoints,
@@ -1855,6 +1931,7 @@ export function LevelEditor({
     selectedObjectId,
     selectedObjectIdSet,
     selectionBox,
+    visibleDrawableObjects,
     zoom,
   ]);
 
@@ -2639,10 +2716,7 @@ export function LevelEditor({
     const cell = levelData.meta.gridSize * zoom;
     const world = screenToWorld(screenX, screenY, pan.x, pan.y, cell);
 
-    setCursorWorld({
-      x: Math.floor(world.x),
-      y: Math.floor(world.y),
-    });
+    updateCursorWorld(Math.floor(world.x), Math.floor(world.y));
 
     if (event.button === 2) {
       if (selectedTool === 'select') {
@@ -2704,10 +2778,7 @@ export function LevelEditor({
     }
 
     if (selectedTool === 'select') {
-      const hitObject = [...levelData.objects]
-        .filter((object) => object.editorLayer === activeEditorLayer)
-        .reverse()
-        .find((object) => pointInsideObject(world.x, world.y, object));
+      const hitObject = activeLayerObjectsTopDown.find((object) => pointInsideObject(world.x, world.y, object));
 
       if (hitObject) {
         const nextSelectedIds =
@@ -2772,10 +2843,7 @@ export function LevelEditor({
     const cell = levelData.meta.gridSize * zoom;
     const world = screenToWorld(screenX, screenY, pan.x, pan.y, cell);
 
-    setCursorWorld({
-      x: Math.floor(world.x),
-      y: Math.floor(world.y),
-    });
+    updateCursorWorld(Math.floor(world.x), Math.floor(world.y));
 
     if (event.pointerType === 'touch' && touchPointsRef.current.has(event.pointerId)) {
       touchPointsRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
@@ -3149,6 +3217,7 @@ export function LevelEditor({
 
   const handleSave = async () => {
     setSaveState('saving');
+    setSaveProgressPercent(0);
     setMessage('');
 
     try {
@@ -3156,16 +3225,25 @@ export function LevelEditor({
       dataToSave.meta.theme = theme;
       dataToSave.meta.background = theme;
 
-      await onSave({
-        title,
-        description,
-        theme,
-        dataJson: dataToSave,
-      });
+      await onSave(
+        {
+          title,
+          description,
+          theme,
+          dataJson: dataToSave,
+        },
+        {
+          onUploadProgress: (progressPercent) => {
+            setSaveProgressPercent(progressPercent);
+          },
+        },
+      );
+      setSaveProgressPercent(100);
       setSaveState('saved');
       setMessage('Level saved successfully.');
       return true;
     } catch (error) {
+      setSaveProgressPercent(null);
       setSaveState('error');
       setMessage(error instanceof Error ? error.message : 'Failed to save level');
       return false;
@@ -3235,6 +3313,22 @@ export function LevelEditor({
     }
   };
 
+  const saveActionLabel =
+    saveState === 'saving'
+      ? saveProgressPercent != null
+        ? `Saving ${saveProgressPercent}%`
+        : 'Saving...'
+      : saveLabel;
+  const pauseSaveLabel = saveState === 'saving' ? saveActionLabel : 'Save';
+  const pauseSaveAndPlayLabel = saveState === 'saving' ? saveActionLabel : 'Save and Play';
+  const pauseSaveAndExitLabel = saveState === 'saving' ? saveActionLabel : 'Save and Exit';
+  const saveStatusMessage =
+    saveState === 'saving'
+      ? saveProgressPercent != null
+        ? `Uploading level data: ${saveProgressPercent}%`
+        : 'Uploading level data...'
+      : message;
+
   const deleteAllStartPositions = () => {
     if (!hasStartPositions) {
       return;
@@ -3280,7 +3374,7 @@ export function LevelEditor({
               </button>
             ) : null}
             <Button onClick={handleSave} disabled={saveState === 'saving'}>
-              {saveState === 'saving' ? 'Saving...' : saveLabel}
+              {saveActionLabel}
             </Button>
             {onSubmit ? (
               <Button
@@ -3563,7 +3657,7 @@ export function LevelEditor({
                     onClick={handlePauseSaveAndPlay}
                     disabled={saveState === 'saving'}
                   >
-                    {saveState === 'saving' ? 'Saving...' : 'Save and Play'}
+                    {pauseSaveAndPlayLabel}
                   </button>
                   <button
                     type="button"
@@ -3571,7 +3665,7 @@ export function LevelEditor({
                     onClick={handlePauseSaveAndExit}
                     disabled={saveState === 'saving' || !onClose}
                   >
-                    Save and Exit
+                    {pauseSaveAndExitLabel}
                   </button>
                   <button
                     type="button"
@@ -3579,7 +3673,7 @@ export function LevelEditor({
                     onClick={handlePauseSave}
                     disabled={saveState === 'saving'}
                   >
-                    {saveState === 'saving' ? 'Saving...' : 'Save'}
+                    {pauseSaveLabel}
                   </button>
                   <button
                     type="button"
@@ -4845,14 +4939,25 @@ export function LevelEditor({
           </div>
         ) : null}
 
-        {message ? (
+        {saveStatusMessage ? (
           <div
             className={cn(
               'editor-note-box px-4 py-3 text-sm',
               saveState === 'error' ? 'text-[#ff8aa1]' : 'text-[#82f6ff]',
             )}
           >
-            {message}
+            <div className="flex items-center justify-between gap-3">
+              <span>{saveStatusMessage}</span>
+              {saveState === 'saving' && saveProgressPercent != null ? <span>{saveProgressPercent}%</span> : null}
+            </div>
+            {saveState === 'saving' ? (
+              <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
+                <div
+                  className="h-full rounded-full bg-[#82f6ff] transition-[width] duration-150"
+                  style={{ width: `${saveProgressPercent ?? 0}%` }}
+                />
+              </div>
+            ) : null}
           </div>
         ) : null}
       </Panel>
@@ -4925,9 +5030,9 @@ export function LevelEditor({
               </Button>
             ) : (
               <>
-                <Button onClick={handleSave} disabled={saveState === 'saving'}>
-                  {saveState === 'saving' ? 'Saving...' : saveLabel}
-                </Button>
+              <Button onClick={handleSave} disabled={saveState === 'saving'}>
+                {saveActionLabel}
+              </Button>
                 {onSubmit ? (
                   <Button
                     variant="secondary"

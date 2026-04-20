@@ -124,6 +124,30 @@ export type LevelData = {
   };
 };
 
+export type PlayerMode = LevelData['player']['mode'];
+
+export type PlayerSkinPixel = {
+  x: number;
+  y: number;
+  color: string;
+};
+
+export type PlayerSkinLayer = {
+  id: string;
+  name: string;
+  visible: boolean;
+  pixels: PlayerSkinPixel[];
+};
+
+export type PlayerSkinData = {
+  gridCols: number;
+  gridRows: number;
+  pixels: PlayerSkinPixel[];
+  layers?: PlayerSkinLayer[];
+};
+
+export type PlayerSkinRecord = Record<PlayerMode, PlayerSkinData | null>;
+
 export type User = {
   id: string;
   username: string;

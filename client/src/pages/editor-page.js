@@ -17,9 +17,10 @@ export function EditorPage() {
         enabled: Boolean(id),
     });
     const saveMutation = useMutation({
-        mutationFn: (payload) => apiRequest(`/api/levels/${id}`, {
+        mutationFn: ({ onUploadProgress, ...payload }) => apiRequest(`/api/levels/${id}`, {
             method: 'PUT',
             body: JSON.stringify(payload),
+            onUploadProgress,
         }),
         onSuccess: () => {
             void queryClient.invalidateQueries({ queryKey: ['my-levels'] });
@@ -53,7 +54,14 @@ export function EditorPage() {
         }
         navigate(id ? `/my-levels/${id}` : '/my-levels');
     };
-    return (_jsx(ViewportFit, { className: "viewport-fit-frame--editor", children: _jsx("div", { className: "editor-page-shell", children: _jsx(LevelEditor, { initialLevel: level, draftStorageKey: id ?? 'new', onClose: handleCloseEditor, onSave: (payload) => saveMutation.mutateAsync(payload).then(() => undefined), onSubmit: id && user?.role !== 'ADMIN' && !level?.isOfficial
+    return (_jsx(ViewportFit, { className: "viewport-fit-frame--editor", children: _jsx("div", { className: "editor-page-shell", children: _jsx(LevelEditor, { initialLevel: level, draftStorageKey: id ?? 'new', onClose: handleCloseEditor, onSave: (payload, options) => saveMutation
+                    .mutateAsync({
+                    ...payload,
+                    onUploadProgress: (progress) => {
+                        options?.onUploadProgress?.(progress.percent);
+                    },
+                })
+                    .then(() => undefined), onSubmit: id && user?.role !== 'ADMIN' && !level?.isOfficial
                     ? () => submitMutation.mutateAsync().then(() => undefined)
                     : undefined }) }) }));
 }

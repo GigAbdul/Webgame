@@ -4,7 +4,7 @@ import { HomeMenuTraffic } from '../components/home-menu-traffic';
 import { cn } from '../utils/cn';
 import { useAuthStore } from '../store/auth-store';
 
-type HomePanel = 'skins' | 'settings' | null;
+type HomePanel = 'skins' | 'settings' | 'admin-tools' | null;
 type SkinId = 'pulse' | 'nova' | 'volt';
 
 type HomeSettings = {
@@ -42,6 +42,49 @@ const skinOptions: Array<{
     flavor: 'Electric palette tuned for clear silhouettes.',
   },
 ];
+
+const adminToolOptions = [
+  {
+    id: 'dashboard',
+    name: 'Control Room',
+    accent: 'Overview Hub',
+    flavor: 'Главная админ-панель со статусом системы и быстрыми переходами.',
+    route: '/admin',
+    routeLabel: '/admin',
+  },
+  {
+    id: 'queue',
+    name: 'Review Queue',
+    accent: 'Moderation Flow',
+    flavor: 'Проверка отправленных уровней, official-решения и publish control.',
+    route: '/admin/levels',
+    routeLabel: '/admin/levels',
+  },
+  {
+    id: 'forge',
+    name: 'Official Forge',
+    accent: 'Create Stage',
+    flavor: 'Старт нового official-уровня с админским драфтом и редактором.',
+    route: '/admin/create-official',
+    routeLabel: '/admin/create-official',
+  },
+  {
+    id: 'skins',
+    name: 'Skin Lab',
+    accent: 'Pixel Workshop',
+    flavor: 'Редактор скинов с заливкой, слоями, undo/redo и игровым preview.',
+    route: '/admin/player-skins',
+    routeLabel: '/admin/player-skins',
+  },
+  {
+    id: 'users',
+    name: 'Users',
+    accent: 'Account Watch',
+    flavor: 'Список игроков, статусы аккаунтов и быстрая ручная проверка.',
+    route: '/admin/users',
+    routeLabel: '/admin/users',
+  },
+] as const;
 
 const defaultSettings: HomeSettings = {
   musicVolume: 70,
@@ -94,6 +137,7 @@ function readStoredSettings(): HomeSettings {
 
 export function HomePage() {
   const user = useAuthStore((state) => state.user);
+  const isAdmin = user?.role === 'ADMIN';
   const playRoute = '/levels';
   const builderRoute = user ? '/my-levels' : '/register';
   const homeScreenRef = useRef<HTMLDivElement | null>(null);
@@ -206,6 +250,18 @@ export function HomePage() {
           </div>
 
           <div className="game-home-submenu">
+            {isAdmin ? (
+              <button
+                type="button"
+                className="game-home-submenu-button game-home-submenu-button--admin"
+                onClick={() => setActivePanel('admin-tools')}
+                aria-label="Admin Tools"
+              >
+                <span className="game-home-submenu-icon game-home-submenu-icon--admin" aria-hidden="true">
+                  Admin
+                </span>
+              </button>
+            ) : null}
             <button
               type="button"
               className="game-home-submenu-button game-home-submenu-button--settings"
@@ -335,6 +391,41 @@ export function HomePage() {
                   Hit Flash
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {activePanel === 'admin-tools' && isAdmin ? (
+        <div className="game-home-overlay" role="presentation" onClick={() => setActivePanel(null)}>
+          <div className="game-home-panel" role="dialog" aria-modal="true" aria-label="Admin Tools" onClick={(event) => event.stopPropagation()}>
+            <div className="game-home-panel-header">
+              <div>
+                <p className="game-home-panel-kicker">Admin Access</p>
+                <h2 className="game-home-panel-title">Admin Tools</h2>
+              </div>
+              <button type="button" className="game-home-close" onClick={() => setActivePanel(null)}>
+                Close
+              </button>
+            </div>
+
+            <div className="game-home-skin-grid game-home-skin-grid--admin">
+              {adminToolOptions.map((tool) => (
+                <Link
+                  key={tool.id}
+                  to={tool.route}
+                  className="game-home-skin-card game-home-skin-card--tool"
+                  onClick={() => setActivePanel(null)}
+                >
+                  <span className="game-home-tool-preview" data-admin-tool={tool.id}>
+                    <strong>{tool.name.slice(0, 3).toUpperCase()}</strong>
+                  </span>
+                  <span className="game-home-skin-name">{tool.name}</span>
+                  <span className="game-home-skin-accent">{tool.accent}</span>
+                  <span className="game-home-skin-flavor">{tool.flavor}</span>
+                  <span className="game-home-tool-route">{tool.routeLabel}</span>
+                </Link>
+              ))}
             </div>
           </div>
         </div>

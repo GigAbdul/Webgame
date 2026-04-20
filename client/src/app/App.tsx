@@ -7,6 +7,7 @@ import { AdminLevelPage } from '../pages/admin-level-page';
 import { AdminLevelsPage } from '../pages/admin-levels-page';
 import { AdminCreateOfficialPage } from '../pages/admin-create-official-page';
 import { AdminUsersPage } from '../pages/admin-users-page';
+import { AdminPlayerSkinsPage } from '../pages/admin-player-skins-page';
 import { EditorPage } from '../pages/editor-page';
 import { HomePage } from '../pages/home-page';
 import { LeaderboardPage } from '../pages/leaderboard-page';
@@ -63,6 +64,7 @@ const router = createBrowserRouter([
           { path: 'admin/levels', element: <AdminLevelsPage /> },
           { path: 'admin/levels/:id', element: <AdminLevelPage /> },
           { path: 'admin/create-official', element: <AdminCreateOfficialPage /> },
+          { path: 'admin/player-skins', element: <AdminPlayerSkinsPage /> },
           { path: 'admin/users', element: <AdminUsersPage /> },
         ],
       },

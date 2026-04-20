@@ -11,6 +11,7 @@ import { authRouter } from '../modules/auth/auth.routes';
 import { gameRouter } from '../modules/game/game.routes';
 import { leaderboardRouter } from '../modules/leaderboard/leaderboard.routes';
 import { levelsRouter } from '../modules/levels/levels.routes';
+import { playerSkinsRouter } from '../modules/player-skins/player-skins.routes';
 import { profileRouter } from '../modules/users/profile.routes';
 
 export function createApp() {
@@ -35,6 +36,7 @@ export function createApp() {
   app.use('/api/leaderboard', leaderboardRouter);
   app.use('/api/profile', profileRouter);
   app.use('/api/game', gameRouter);
+  app.use('/api/player-skins', playerSkinsRouter);
   app.use('/api/admin', adminRouter);
 
   const clientDistPath = path.resolve(__dirname, '../../../client/dist');

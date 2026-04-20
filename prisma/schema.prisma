@@ -50,6 +50,13 @@ enum AttemptResult {
   COMPLETED
 }
 
+enum PlayerSkinMode {
+  CUBE
+  BALL
+  SHIP
+  ARROW
+}
+
 model User {
   id                      String         @id @default(cuid())
   username                String         @unique
@@ -147,4 +154,12 @@ model LevelReward {
 
   @@unique([userId, levelId])
   @@index([levelId])
+}
+
+model PlayerSkin {
+  id        String         @id @default(cuid())
+  mode      PlayerSkinMode @unique
+  dataJson  Json
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
 }

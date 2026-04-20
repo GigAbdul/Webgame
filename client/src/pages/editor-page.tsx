@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import { LevelEditor } from '../features/editor/level-editor';
-import { apiRequest } from '../services/api';
+import { apiRequest, type ApiUploadProgress } from '../services/api';
 import { useAuthStore } from '../store/auth-store';
 import type { Level } from '../types/models';
 import { ViewportFit } from '../components/viewport-fit';
@@ -20,15 +20,20 @@ export function EditorPage() {
   });
 
   const saveMutation = useMutation({
-    mutationFn: (payload: {
+    mutationFn: ({
+      onUploadProgress,
+      ...payload
+    }: {
       title: string;
       description: string;
       theme: string;
       dataJson: Level['dataJson'];
+      onUploadProgress?: (progress: ApiUploadProgress) => void;
     }) =>
       apiRequest<{ level: Level }>(`/api/levels/${id}`, {
         method: 'PUT',
         body: JSON.stringify(payload),
+        onUploadProgress,
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['my-levels'] });
@@ -91,7 +96,16 @@ export function EditorPage() {
           initialLevel={level}
           draftStorageKey={id ?? 'new'}
           onClose={handleCloseEditor}
-          onSave={(payload) => saveMutation.mutateAsync(payload).then(() => undefined)}
+          onSave={(payload, options) =>
+            saveMutation
+              .mutateAsync({
+                ...payload,
+                onUploadProgress: (progress) => {
+                  options?.onUploadProgress?.(progress.percent);
+                },
+              })
+              .then(() => undefined)
+          }
           onSubmit={
             id && user?.role !== 'ADMIN' && !level?.isOfficial
               ? () => submitMutation.mutateAsync().then(() => undefined)
