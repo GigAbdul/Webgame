@@ -1,33 +1,66 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
+import { ApiError } from '../../utils/api-error';
 import {
   createEmptyPlayerSkinRecord,
   fromPlayerSkinModeDb,
+  playerSkinDataSchema,
   type PlayerSkinDataInput,
   type PlayerSkinModeDb,
   type PublicPlayerSkinMode,
   toPlayerSkinModeDb,
 } from './player-skins.schemas';
 
-const playerSkinClient = prisma as unknown as {
-  playerSkin: {
-    findMany(args: { orderBy: { mode: 'asc' | 'desc' } }): Promise<
-      Array<{
-        mode: PlayerSkinModeDb;
-        dataJson: unknown;
-      }>
-    >;
-    upsert(args: {
-      where: { mode: PlayerSkinModeDb };
-      update: { dataJson: PlayerSkinDataInput };
-      create: { mode: PlayerSkinModeDb; dataJson: PlayerSkinDataInput };
-    }): Promise<{
-      mode: PlayerSkinModeDb;
-      dataJson: unknown;
-    }>;
-  };
+type PlayerSkinRow = {
+  mode: PlayerSkinModeDb;
+  dataJson: unknown;
 };
 
-function normalizePlayerSkinData(input: PlayerSkinDataInput): PlayerSkinDataInput {
+function getDefaultPlayerSkinName(mode: PublicPlayerSkinMode) {
+  if (mode === 'ship') {
+    return 'Ship Skin';
+  }
+
+  if (mode === 'arrow') {
+    return 'Arrow Skin';
+  }
+
+  return mode === 'ball' ? 'Ball Skin' : 'Cube Skin';
+}
+
+function normalizePlayerSkinName(name: string | undefined, mode: PublicPlayerSkinMode) {
+  const trimmedName = name?.trim();
+
+  if (trimmedName) {
+    return trimmedName.slice(0, 64);
+  }
+
+  return getDefaultPlayerSkinName(mode);
+}
+
+async function hasPlayerSkinStorage() {
+  const [result] = await prisma.$queryRaw<Array<{ name: string | null }>>`
+    SELECT CAST(to_regclass('public."PlayerSkin"') AS text) AS name
+  `;
+
+  return Boolean(result?.name);
+}
+
+function isMissingPlayerSkinStorage(error: unknown) {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    (error.code === 'P2010' ||
+      error.code === 'P2021' ||
+      error.meta?.code === '42P01' ||
+      error.meta?.code === '42704')
+  );
+}
+
+function parseStoredPlayerSkinData(dataJson: unknown, mode: PublicPlayerSkinMode) {
+  return normalizePlayerSkinData(playerSkinDataSchema.parse(dataJson), mode);
+}
+
+function normalizePlayerSkinData(input: PlayerSkinDataInput, mode: PublicPlayerSkinMode): PlayerSkinDataInput {
   const gridCols = input.gridCols;
   const gridRows = input.gridRows;
   const normalizedLayers = normalizeLayers(input.layers, gridCols, gridRows);
@@ -36,6 +69,7 @@ function normalizePlayerSkinData(input: PlayerSkinDataInput): PlayerSkinDataInpu
     normalizedLayers.length > 0 ? flattenVisibleLayerPixels(normalizedLayers, gridCols, gridRows) : fallbackPixels;
 
   return {
+    name: normalizePlayerSkinName(input.name, mode),
     gridCols,
     gridRows,
     pixels,
@@ -135,38 +169,78 @@ function flattenVisibleLayerPixels(
 
 export const playerSkinsService = {
   async list() {
-    const skins = await playerSkinClient.playerSkin.findMany({
-      orderBy: { mode: 'asc' },
-    });
-
     const mapped = createEmptyPlayerSkinRecord<PlayerSkinDataInput | null>(null);
 
+    if (!(await hasPlayerSkinStorage())) {
+      return mapped;
+    }
+
+    let skins: PlayerSkinRow[] = [];
+
+    try {
+      skins = await prisma.$queryRaw<PlayerSkinRow[]>`
+        SELECT "mode", "dataJson"
+        FROM "PlayerSkin"
+        ORDER BY "mode" ASC
+      `;
+    } catch (error) {
+      if (isMissingPlayerSkinStorage(error)) {
+        return mapped;
+      }
+
+      throw error;
+    }
+
     for (const skin of skins) {
-      mapped[fromPlayerSkinModeDb(skin.mode)] = normalizePlayerSkinData(skin.dataJson as PlayerSkinDataInput);
+      mapped[fromPlayerSkinModeDb(skin.mode)] = parseStoredPlayerSkinData(skin.dataJson, fromPlayerSkinModeDb(skin.mode));
     }
 
     return mapped;
   },
 
   async upsert(mode: PublicPlayerSkinMode, data: PlayerSkinDataInput) {
-    const normalizedData = normalizePlayerSkinData(data);
+    if (!(await hasPlayerSkinStorage())) {
+      throw new ApiError(503, 'Player skin storage is not ready yet. Apply the latest Prisma migration.');
+    }
 
-    const skin = await playerSkinClient.playerSkin.upsert({
-      where: {
-        mode: toPlayerSkinModeDb(mode),
-      },
-      update: {
-        dataJson: normalizedData,
-      },
-      create: {
-        mode: toPlayerSkinModeDb(mode),
-        dataJson: normalizedData,
-      },
-    });
+    const normalizedData = normalizePlayerSkinData(data, mode);
+    const id = crypto.randomUUID();
+    const now = new Date();
+    const dbMode = toPlayerSkinModeDb(mode);
+    const serializedData = JSON.stringify(normalizedData);
+    let skin: PlayerSkinRow | undefined;
+
+    try {
+      [skin] = await prisma.$queryRaw<PlayerSkinRow[]>`
+        INSERT INTO "PlayerSkin" ("id", "mode", "dataJson", "createdAt", "updatedAt")
+        VALUES (
+          ${id},
+          CAST(${dbMode} AS "PlayerSkinMode"),
+          CAST(${serializedData} AS jsonb),
+          ${now},
+          ${now}
+        )
+        ON CONFLICT ("mode")
+        DO UPDATE SET
+          "dataJson" = EXCLUDED."dataJson",
+          "updatedAt" = EXCLUDED."updatedAt"
+        RETURNING "mode", "dataJson"
+      `;
+    } catch (error) {
+      if (isMissingPlayerSkinStorage(error)) {
+        throw new ApiError(503, 'Player skin storage is not ready yet. Apply the latest Prisma migration.');
+      }
+
+      throw error;
+    }
+
+    if (!skin) {
+      throw new ApiError(500, 'Player skin upsert did not return a stored record');
+    }
 
     return {
       mode: fromPlayerSkinModeDb(skin.mode),
-      data: skin.dataJson as PlayerSkinDataInput,
+      data: parseStoredPlayerSkinData(skin.dataJson, fromPlayerSkinModeDb(skin.mode)),
     };
   },
 };

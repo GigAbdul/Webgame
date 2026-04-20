@@ -200,7 +200,7 @@ const toolDescriptions = {
     GRAVITY_ORB: 'Flips gravity, then launches the player in the new direction',
     GRAVITY_FLIP_PORTAL: 'Flips gravity relative to the current direction',
     GRAVITY_RETURN_PORTAL: 'Returns gravity to the normal downward direction',
-    GRAVITY_PORTAL: 'Legacy gravity portal with manual direction',
+    GRAVITY_PORTAL: 'Legacy alias that auto-converts to Gravity Flip',
     SPEED_PORTAL: 'Changes run speed',
     SHIP_PORTAL: 'Switches into ship mode',
     BALL_PORTAL: 'Switches into ball mode',
@@ -2624,11 +2624,7 @@ export function LevelEditor({ initialLevel, draftStorageKey, saveLabel = 'Save D
                                                                 ...object.props,
                                                                 boost: Number(event.target.value),
                                                             };
-                                                        }) })] }) })) : null, selectedObject.type === 'GRAVITY_PORTAL' ? (_jsx("div", { className: "grid gap-3 sm:grid-cols-2", children: _jsxs("div", { children: [_jsx(FieldLabel, { children: "Gravity Direction" }), _jsxs("div", { className: "editor-inline-actions", children: [_jsx(Button, { variant: Number(selectedObject.props.gravity ?? -1) === -1 ? 'primary' : 'ghost', onClick: () => updateSelectedObject((object) => {
-                                                                    object.props = { ...object.props, gravity: -1 };
-                                                                }), children: "Up" }), _jsx(Button, { variant: Number(selectedObject.props.gravity ?? -1) === 1 ? 'primary' : 'ghost', onClick: () => updateSelectedObject((object) => {
-                                                                    object.props = { ...object.props, gravity: 1 };
-                                                                }), children: "Down" })] })] }) })) : null, selectedObject.type === 'SPEED_PORTAL' ? (_jsx("div", { className: "grid gap-3 sm:grid-cols-2", children: _jsxs("div", { children: [_jsx(FieldLabel, { children: "Speed Multiplier" }), _jsx(Input, { type: "number", step: "0.1", min: "0.2", value: Number(selectedObject.props.multiplier ?? 1.4), onChange: (event) => updateSelectedObject((object) => {
+                                                        }) })] }) })) : null, selectedObject.type === 'SPEED_PORTAL' ? (_jsx("div", { className: "grid gap-3 sm:grid-cols-2", children: _jsxs("div", { children: [_jsx(FieldLabel, { children: "Speed Multiplier" }), _jsx(Input, { type: "number", step: "0.1", min: "0.2", value: Number(selectedObject.props.multiplier ?? 1.4), onChange: (event) => updateSelectedObject((object) => {
                                                             object.props = {
                                                                 ...object.props,
                                                                 multiplier: Number(event.target.value),

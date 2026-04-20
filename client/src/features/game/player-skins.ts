@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { apiRequest } from '../../services/api';
 import type { PlayerMode, PlayerSkinData, PlayerSkinLayer, PlayerSkinRecord } from '../../types/models';
+import { getPlayerModeLabel } from './player-mode-config';
 import { PLAYER_HITBOX_SIZE, getPlayerHitboxLayout } from './player-physics';
 
 export type PlayerSkinEditorConfig = {
@@ -14,6 +15,20 @@ export const playerSkinEditorConfigs: Record<PlayerMode, PlayerSkinEditorConfig>
   ship: { gridCols: 32, gridRows: 24 },
   arrow: { gridCols: 32, gridRows: 24 },
 };
+
+export function createDefaultPlayerSkinName(mode: PlayerMode) {
+  return `${getPlayerModeLabel(mode)} Skin`;
+}
+
+function normalizePlayerSkinName(name: string | undefined, mode?: PlayerMode) {
+  const trimmedName = name?.trim();
+
+  if (trimmedName) {
+    return trimmedName.slice(0, 64);
+  }
+
+  return mode ? createDefaultPlayerSkinName(mode) : 'Player Skin';
+}
 
 function normalizePixels(
   pixels: PlayerSkinData['pixels'],
@@ -117,6 +132,7 @@ export function createEmptyPlayerSkinData(mode: PlayerMode): PlayerSkinData {
   const config = playerSkinEditorConfigs[mode];
 
   return {
+    name: createDefaultPlayerSkinName(mode),
     gridCols: config.gridCols,
     gridRows: config.gridRows,
     pixels: [],
@@ -133,7 +149,7 @@ export function createEmptyPlayerSkinRecord<T>(fallback: T) {
   } satisfies Record<PlayerMode, T>;
 }
 
-export function normalizePlayerSkinData(input: PlayerSkinData): PlayerSkinData {
+export function normalizePlayerSkinData(input: PlayerSkinData, mode?: PlayerMode): PlayerSkinData {
   const normalizedLayers = normalizeLayers(input.layers, input.gridCols, input.gridRows);
   const fallbackPixels = normalizePixels(input.pixels, input.gridCols, input.gridRows);
   const layers =
@@ -148,6 +164,7 @@ export function normalizePlayerSkinData(input: PlayerSkinData): PlayerSkinData {
   const pixels = flattenVisibleLayerPixels(layers, input.gridCols, input.gridRows);
 
   return {
+    name: normalizePlayerSkinName(input.name, mode),
     gridCols: input.gridCols,
     gridRows: input.gridRows,
     pixels,

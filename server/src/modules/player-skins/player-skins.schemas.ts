@@ -22,6 +22,7 @@ export const playerSkinLayerSchema = z.object({
 });
 
 export const playerSkinDataSchema = z.object({
+  name: z.string().trim().min(1).max(64).optional(),
   gridCols: z.number().int().min(8).max(64),
   gridRows: z.number().int().min(8).max(64),
   pixels: z.array(playerSkinPixelSchema).max(4096).default([]),

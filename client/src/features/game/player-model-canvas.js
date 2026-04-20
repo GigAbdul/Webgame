@@ -1,10 +1,18 @@
 import { jsx as _jsx } from "react/jsx-runtime";
 import { useEffect, useRef } from 'react';
 import { drawPlayerModelSprite, usePlayerSkinsQuery } from './player-skins';
-export function PlayerModelCanvas({ mode, width, height, className, skinOverride, showHitboxOverlay = false, }) {
+import { useSelectedPlayerSkinRecord } from './player-skin-selection';
+export function PlayerModelCanvas({ mode, width, height, className, skinOverride, skinSource = 'default', showHitboxOverlay = false, }) {
     const canvasRef = useRef(null);
     const playerSkinsQuery = usePlayerSkinsQuery();
-    const skinData = skinOverride ?? playerSkinsQuery.data?.skins?.[mode] ?? null;
+    const selectedPlayerSkinRecord = useSelectedPlayerSkinRecord();
+    const publishedSkinData = playerSkinsQuery.data?.skins?.[mode] ?? null;
+    const skinData = skinOverride ??
+        (skinSource === 'published'
+            ? publishedSkinData
+            : skinSource === 'selected'
+                ? selectedPlayerSkinRecord[mode] ?? null
+                : null);
     useEffect(() => {
         const canvas = canvasRef.current;
         if (!canvas) {

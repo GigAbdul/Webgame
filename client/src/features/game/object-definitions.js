@@ -351,8 +351,8 @@ export const levelObjectDefinitions = {
         effect: 'gravity',
     },
     GRAVITY_PORTAL: {
-        label: 'Gravity Legacy',
-        color: '#9d8cff',
+        label: 'Gravity Flip Legacy',
+        color: '#eeff00',
         strokeColor: '#ffffff',
         defaultSize: { w: 1, h: 2 },
         collides: false,
@@ -826,6 +826,14 @@ function normalizeQuarterRotation(value) {
     return normalized === 360 ? 0 : normalized;
 }
 function normalizeObjectPlacement(object) {
+    if (object.type === 'GRAVITY_PORTAL') {
+        const { gravity: _legacyGravity, ...nextProps } = object.props;
+        return {
+            ...object,
+            type: 'GRAVITY_FLIP_PORTAL',
+            props: nextProps,
+        };
+    }
     if (object.type === 'JUMP_PAD' &&
         Math.abs(object.y - Math.round(object.y)) <= JUMP_PAD_LEGACY_TOP_ALIGN_EPSILON) {
         return {

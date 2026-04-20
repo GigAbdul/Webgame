@@ -14,6 +14,7 @@ import { PLAYER_HITBOX_SIZE, getPlayerHitboxLayout } from '../features/game/play
 import { PlayerModelCanvas } from '../features/game/player-model-canvas';
 import { getPlayerModeLabel } from '../features/game/player-mode-config';
 import {
+  createDefaultPlayerSkinName,
   createEmptyPlayerSkinData,
   createEmptyPlayerSkinRecord,
   createPlayerSkinLayer,
@@ -123,10 +124,10 @@ function getSkinToolLabel(tool: SkinTool) {
 
 function createDraftRecord(source?: PlayerSkinRecord | null): Record<PlayerMode, PlayerSkinData> {
   return {
-    cube: normalizePlayerSkinData(source?.cube ?? createEmptyPlayerSkinData('cube')),
-    ball: normalizePlayerSkinData(source?.ball ?? createEmptyPlayerSkinData('ball')),
-    ship: normalizePlayerSkinData(source?.ship ?? createEmptyPlayerSkinData('ship')),
-    arrow: normalizePlayerSkinData(source?.arrow ?? createEmptyPlayerSkinData('arrow')),
+    cube: normalizePlayerSkinData(source?.cube ?? createEmptyPlayerSkinData('cube'), 'cube'),
+    ball: normalizePlayerSkinData(source?.ball ?? createEmptyPlayerSkinData('ball'), 'ball'),
+    ship: normalizePlayerSkinData(source?.ship ?? createEmptyPlayerSkinData('ship'), 'ship'),
+    arrow: normalizePlayerSkinData(source?.arrow ?? createEmptyPlayerSkinData('arrow'), 'arrow'),
   };
 }
 
@@ -248,8 +249,8 @@ function createActiveLayerRecord(source: Record<PlayerMode, PlayerSkinData>) {
   } satisfies Record<PlayerMode, string>;
 }
 
-function serializeSkinData(skinData: PlayerSkinData) {
-  return JSON.stringify(normalizePlayerSkinData(skinData));
+function serializeSkinData(skinData: PlayerSkinData, mode?: PlayerMode) {
+  return JSON.stringify(normalizePlayerSkinData(skinData, mode));
 }
 
 function updateLayerPixels(
@@ -1003,7 +1004,9 @@ export function AdminPlayerSkinsPage() {
   );
   const dirtyModes = useMemo(
     () =>
-      playerModes.filter((mode) => serializeSkinData(histories[mode].present) !== serializeSkinData(serverDrafts[mode])),
+      playerModes.filter(
+        (mode) => serializeSkinData(histories[mode].present, mode) !== serializeSkinData(serverDrafts[mode], mode),
+      ),
     [histories, serverDrafts],
   );
   const isCurrentModeDirty = dirtyModes.includes(activeMode);
@@ -1020,7 +1023,7 @@ export function AdminPlayerSkinsPage() {
     setHistories((current) => {
       const history = current[mode];
 
-      if (serializeSkinData(previousPresent) === serializeSkinData(history.present)) {
+      if (serializeSkinData(previousPresent, mode) === serializeSkinData(history.present, mode)) {
         return current;
       }
 
@@ -1040,7 +1043,7 @@ export function AdminPlayerSkinsPage() {
       const history = current[mode];
       const nextPresent = normalizePlayerSkinData(updater(history.present));
 
-      if (serializeSkinData(nextPresent) === serializeSkinData(history.present)) {
+      if (serializeSkinData(nextPresent, mode) === serializeSkinData(history.present, mode)) {
         return current;
       }
 
@@ -1059,7 +1062,7 @@ export function AdminPlayerSkinsPage() {
       const history = current[mode];
       const nextPresent = normalizePlayerSkinData(updater(history.present));
 
-      if (serializeSkinData(nextPresent) === serializeSkinData(history.present)) {
+      if (serializeSkinData(nextPresent, mode) === serializeSkinData(history.present, mode)) {
         return current;
       }
 
@@ -1140,10 +1143,10 @@ export function AdminPlayerSkinsPage() {
         ...current,
         [payload.skin.mode]: {
           ...current[payload.skin.mode],
-          present: normalizePlayerSkinData(payload.skin.data),
+          present: normalizePlayerSkinData(payload.skin.data, payload.skin.mode),
         },
       }));
-      setMessage(`${getPlayerModeLabel(payload.skin.mode)} skin saved.`);
+      setMessage(`Saved "${payload.skin.data.name}" for ${getPlayerModeLabel(payload.skin.mode)} mode.`);
       initializedRef.current = true;
     },
   });
@@ -1428,6 +1431,13 @@ export function AdminPlayerSkinsPage() {
     }));
   };
 
+  const handleRenameSkin = (name: string) => {
+    replaceModePresent(activeMode, (current) => ({
+      ...current,
+      name,
+    }));
+  };
+
   const handleToggleActiveLayerVisibility = () => {
     commitModeChange(activeMode, (current) => ({
       ...current,
@@ -1607,6 +1617,10 @@ export function AdminPlayerSkinsPage() {
             <div className="game-stat px-4 py-4">
               <p className="font-display text-[10px] tracking-[0.22em] text-[#ffd44a]">Current Mode</p>
               <p className="mt-2 font-display text-2xl text-white">{getPlayerModeLabel(activeMode)}</p>
+            </div>
+            <div className="game-stat px-4 py-4">
+              <p className="font-display text-[10px] tracking-[0.22em] text-[#ffd44a]">Skin Name</p>
+              <p className="mt-2 truncate font-display text-2xl text-white">{currentDraft.name}</p>
             </div>
             <div className="game-stat px-4 py-4">
               <p className="font-display text-[10px] tracking-[0.22em] text-[#ffd44a]">Dirty Modes</p>
@@ -2033,6 +2047,20 @@ export function AdminPlayerSkinsPage() {
               </div>
 
               <div className="space-y-3">
+                <div>
+                  <FieldLabel>Skin Name</FieldLabel>
+                  <Input
+                    className="h-14 text-base"
+                    value={currentDraft.name}
+                    maxLength={64}
+                    placeholder={createDefaultPlayerSkinName(activeMode)}
+                    onChange={(event) => handleRenameSkin(event.target.value)}
+                  />
+                  <p className="mt-2 text-sm leading-7 text-white/66">
+                    This is the published name shown when the player equips the skin in Character Select.
+                  </p>
+                </div>
+
                 <div>
                   <FieldLabel>Selected Layer Name</FieldLabel>
                   <Input className="h-14 text-base" value={currentLayer.name} onChange={(event) => handleRenameLayer(event.target.value)} />

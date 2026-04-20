@@ -7,7 +7,7 @@ const homeTrafficSpawnIntervalMs = 980;
 const homeTrafficExplosionLifetimeMs = 560;
 const homeTrafficMaxActors = 6;
 const homeTrafficShardAngles = [0, 60, 120, 180, 240, 300];
-export function HomeMenuTraffic({ screenRef, showHitFlash }) {
+export function HomeMenuTraffic({ screenRef, showHitFlash, playerSkinOverrides }) {
     const actorIdRef = useRef(0);
     const explosionIdRef = useRef(0);
     const actorStateRef = useRef([]);
@@ -118,7 +118,7 @@ export function HomeMenuTraffic({ screenRef, showHitFlash }) {
                     transform: `translateX(-50%) scaleX(${actor.shadowScale})`,
                     opacity: actor.shadowOpacity,
                 };
-                return (_jsxs("button", { type: "button", tabIndex: -1, className: "game-home-traffic-node", style: actorStyle, "aria-label": `Break ${actor.mode}`, onClick: (event) => handleActorClick(actor, event), children: [_jsx("span", { className: "game-home-traffic-node-shadow", style: shadowStyle }), _jsx("span", { className: "game-home-traffic-node-body", style: bodyStyle, children: _jsx("span", { className: "game-home-traffic-node-canvas-shell", children: _jsx(PlayerModelCanvas, { mode: actor.mode, width: actor.renderSizePx, height: actor.renderSizePx, className: "game-home-traffic-node-canvas" }) }) })] }, actor.id));
+                return (_jsxs("button", { type: "button", tabIndex: -1, className: "game-home-traffic-node", style: actorStyle, "aria-label": `Break ${actor.mode}`, onClick: (event) => handleActorClick(actor, event), children: [_jsx("span", { className: "game-home-traffic-node-shadow", style: shadowStyle }), _jsx("span", { className: "game-home-traffic-node-body", style: bodyStyle, children: _jsx("span", { className: "game-home-traffic-node-canvas-shell", children: _jsx(PlayerModelCanvas, { mode: actor.mode, width: actor.renderSizePx, height: actor.renderSizePx, className: "game-home-traffic-node-canvas", skinOverride: playerSkinOverrides?.[actor.mode] ?? null }) }) })] }, actor.id));
             }), explosions.map((explosion) => {
                 const explosionStyle = {
                     left: `${explosion.x}px`,

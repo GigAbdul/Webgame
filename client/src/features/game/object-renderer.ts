@@ -27,6 +27,7 @@ type DrawStageObjectOptions = {
 
 type ArrowRampObjectType = 'ARROW_RAMP_ASC' | 'ARROW_RAMP_DESC';
 type SpritePortalType =
+  | 'GRAVITY_PORTAL'
   | 'GRAVITY_FLIP_PORTAL'
   | 'GRAVITY_RETURN_PORTAL'
   | 'SHIP_PORTAL'
@@ -59,6 +60,7 @@ const decorationSpriteTypes = new Set<DecorationSpriteType>([
   'DECOR_COMET',
 ]);
 const spritePortalPathByType: Record<SpritePortalType, string> = {
+  GRAVITY_PORTAL: '/portals/gravity-flip.svg',
   GRAVITY_FLIP_PORTAL: '/portals/gravity-flip.svg',
   GRAVITY_RETURN_PORTAL: '/portals/gravity-return.svg',
   SHIP_PORTAL: '/portals/ship.svg',
@@ -960,7 +962,7 @@ function drawSpritePortalPlaceholder(
   isActive: boolean,
 ) {
   const portalCode =
-    type === 'GRAVITY_FLIP_PORTAL'
+    type === 'GRAVITY_PORTAL' || type === 'GRAVITY_FLIP_PORTAL'
       ? 'GF'
       : type === 'GRAVITY_RETURN_PORTAL'
         ? 'GR'
@@ -972,7 +974,7 @@ function drawSpritePortalPlaceholder(
               ? 'C'
               : 'W';
   const fillColor =
-    type === 'GRAVITY_FLIP_PORTAL'
+    type === 'GRAVITY_PORTAL' || type === 'GRAVITY_FLIP_PORTAL'
       ? '#eeff00'
       : type === 'GRAVITY_RETURN_PORTAL'
         ? '#51ffe7'

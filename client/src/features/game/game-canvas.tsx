@@ -44,7 +44,7 @@ import {
 import type { PlayerHitboxKind } from './player-physics';
 import { readStoredMusicVolume, resolveLevelMusic } from './level-music';
 import { drawStageObjectSprite } from './object-renderer';
-import { drawPlayerModelSprite, usePlayerSkinsQuery } from './player-skins';
+import { drawPlayerModelSprite } from './player-skins';
 import { getStageGroundPalette, getStageThemePalette } from './stage-theme-palette';
 import type { LevelData, LevelObject, PlayerSkinData, PlayerSkinRecord } from '../../types/models';
 import { Panel } from '../../components/ui';
@@ -197,6 +197,7 @@ const EARLY_FINISH_PULL_DISTANCE_UNITS = 15;
 const FINISH_GATEWAY_OFFSET_UNITS = 0.96;
 const FINISH_GATEWAY_HALF_WIDTH_UNITS = 0.42;
 const FINISH_GATEWAY_SCREEN_ANCHOR_RATIO = 0.78;
+const FINISH_GATEWAY_CAMERA_FREEZE_EXTRA_BACKTRACK_PX = 50;
 const GAMEPLAY_INPUT_CODES = new Set(['Space', 'ArrowUp', 'KeyW']);
 const postFxEffectTypes = new Set<PostFxEffectType>(['flash', 'grayscale', 'invert', 'scanlines', 'blur', 'shake', 'tint']);
 const moveTriggerEasingModes = new Set<MoveTriggerEasing>(['none', 'easeIn', 'easeOut', 'easeInOut']);
@@ -251,8 +252,6 @@ export function GameCanvas({
   const [isScreenShakeEnabled, setIsScreenShakeEnabled] = useState(true);
   const [isMusicLoading, setIsMusicLoading] = useState(false);
   const [musicLoadProgress, setMusicLoadProgress] = useState<number | null>(null);
-  const playerSkinsQuery = usePlayerSkinsQuery();
-  const playerSkinMap = playerSkinsQuery.data?.skins ?? null;
   const playerModeLabel = getPlayerModeLabel(levelData.player.mode);
   const resolvedMusic = useMemo(() => resolveLevelMusic(levelData.meta), [levelData.meta]);
   const musicOffsetMs = Math.max(0, Number(levelData.meta.musicOffsetMs ?? 0) || 0);
@@ -609,6 +608,8 @@ export function GameCanvas({
     let invertedGravityFlippedAtMs: number | null = null;
     let currentStatus: 'running' | 'failed' | 'completed' = 'running';
     let finishSequence: FinishSequenceState | null = null;
+    let finishPreviewCameraAnchorX: number | null = null;
+    let completedCameraAnchorX: number | null = null;
     let playerConsumedByFinishGateway = false;
     let lastHudCommit = 0;
     let cameraX = 0;
@@ -774,6 +775,8 @@ export function GameCanvas({
       releaseAllHeldInput();
       restartMusicFromOffset();
       currentStatus = 'running';
+      finishPreviewCameraAnchorX = null;
+      completedCameraAnchorX = null;
       playerConsumedByFinishGateway = false;
       resetRuntimeObjects();
       activeTriggers.clear();
@@ -1200,7 +1203,7 @@ export function GameCanvas({
       });
     };
 
-    const beginFinishSequence = (elapsedMs: number, sourceCenterY?: number) => {
+    const beginFinishSequence = (elapsedMs: number, sourceCenterY?: number, cameraAnchorXOverride?: number) => {
       if (currentStatus !== 'running' || finishSequence) {
         return;
       }
@@ -1220,7 +1223,10 @@ export function GameCanvas({
       );
       const arcHeight = clamp(0.2 + distanceToGateway * 0.02, 0.2, 0.58);
       const desiredPortalScreenX = width * FINISH_GATEWAY_SCREEN_ANCHOR_RATIO;
-      const cameraAnchorX = Math.max(0, finishGatewayX * cell - desiredPortalScreenX);
+      const cameraAnchorX =
+        typeof cameraAnchorXOverride === 'number'
+          ? Math.max(0, cameraAnchorXOverride)
+          : Math.max(0, finishGatewayX * cell - desiredPortalScreenX);
 
       finishSequence = {
         startedAt: elapsedMs,
@@ -1240,6 +1246,35 @@ export function GameCanvas({
       releaseAllHeldInput();
       bumpCamera(8, 0.16);
     };
+
+    const getFollowCameraX = (deltaSeconds: number) => {
+      const targetCameraX = Math.max(0, player.x * cell - width * 0.28);
+      return cameraX + (targetCameraX - cameraX) * Math.min(1, deltaSeconds * 8);
+    };
+
+    const getFinishCameraAnchorX = () => {
+      const finishGatewayWorldX = finishGatewayX * cell;
+      const desiredPortalScreenX = Math.max(cell * 3, width - FINISH_GATEWAY_CAMERA_FREEZE_EXTRA_BACKTRACK_PX);
+
+      return Math.max(0, finishGatewayWorldX - desiredPortalScreenX);
+    };
+
+    const isFinishGatewayVisibleInCamera = (cameraXValue: number) => {
+      const finishGatewayWorldX = finishGatewayX * cell;
+      const beamHalfWidth = Math.max(12, cell * FINISH_GATEWAY_HALF_WIDTH_UNITS);
+      const finishGatewayLeftEdge = finishGatewayWorldX - beamHalfWidth * 2.2;
+
+      return finishGatewayLeftEdge <= cameraXValue + width;
+    };
+
+    const hasRuntimeObjectsAheadOfPlayer = (playerFrontX: number) =>
+      getRuntimeObjectsInRange(playerFrontX + 0.001, finishGatewayX).some((object) => {
+        if (isRuntimeObjectDisabled(object) || object.type === 'FINISH_PORTAL') {
+          return false;
+        }
+
+        return object.x + object.w > playerFrontX + 0.001;
+      });
 
     const loop = (timestamp: number) => {
       if (!lastTimestamp) {
@@ -1711,7 +1746,10 @@ export function GameCanvas({
             }
 
             if (object.type === 'FINISH_PORTAL') {
-              beginFinishSequence(elapsedMs, object.y + object.h / 2);
+              const finishCameraAnchorX = finishPreviewCameraAnchorX ?? getFollowCameraX(deltaSeconds);
+              finishPreviewCameraAnchorX = finishCameraAnchorX;
+              beginFinishSequence(elapsedMs, object.y + object.h / 2, finishCameraAnchorX);
+              break;
             }
 
             if (
@@ -1804,112 +1842,136 @@ export function GameCanvas({
           }
         }
 
-        if (player.grounded) {
-          airborneStartedAtMs = null;
-        } else if (airborneStartedAtMs === null) {
-          airborneStartedAtMs = elapsedMs;
-        }
+        if (!finishSequence) {
+          if (player.grounded) {
+            airborneStartedAtMs = null;
+          } else if (airborneStartedAtMs === null) {
+            airborneStartedAtMs = elapsedMs;
+          }
 
-        const invertedAirborneDurationMs =
-          airborneStartedAtMs !== null && invertedGravityFlippedAtMs !== null
-            ? elapsedMs - Math.max(airborneStartedAtMs, invertedGravityFlippedAtMs)
-            : 0;
-        const canAutoFinishFromInvertedFlight =
-          player.mode !== 'ship' &&
-          player.gravity < 0 &&
-          airborneStartedAtMs !== null &&
-          invertedGravityFlippedAtMs !== null &&
-          invertedAirborneDurationMs >= AUTO_FINISH_INVERTED_AIRBORNE_DELAY_MS;
+          const invertedAirborneDurationMs =
+            airborneStartedAtMs !== null && invertedGravityFlippedAtMs !== null
+              ? elapsedMs - Math.max(airborneStartedAtMs, invertedGravityFlippedAtMs)
+              : 0;
+          const canAutoFinishFromInvertedFlight =
+            player.mode !== 'ship' &&
+            player.gravity < 0 &&
+            airborneStartedAtMs !== null &&
+            invertedGravityFlippedAtMs !== null &&
+            invertedAirborneDurationMs >= AUTO_FINISH_INVERTED_AIRBORNE_DELAY_MS;
+          const playerFrontX = currentCollisionRect.x + currentCollisionRect.w;
+          const followCameraX = getFollowCameraX(deltaSeconds);
+          const finishGatewayVisibleInCamera = isFinishGatewayVisibleInCamera(followCameraX);
+          const noRuntimeObjectsAhead = !hasRuntimeObjectsAheadOfPlayer(playerFrontX);
+          const finishCameraFreezeThresholdX = getFinishCameraAnchorX();
 
-        const remainingToAutoFinish = autoFinishX - (currentCollisionRect.x + currentCollisionRect.w);
-        if (
-          currentStatus === 'running' &&
-          canAutoFinishFromInvertedFlight &&
-          remainingToAutoFinish <= EARLY_FINISH_PULL_DISTANCE_UNITS
-        ) {
-          beginFinishSequence(elapsedMs);
-        }
+          if (
+            currentStatus === 'running' &&
+            finishPreviewCameraAnchorX === null &&
+            followCameraX >= finishCameraFreezeThresholdX
+          ) {
+            finishPreviewCameraAnchorX = followCameraX;
+          }
 
-        if (currentStatus === 'running' && currentCollisionRect.x + currentCollisionRect.w >= autoFinishX) {
-          beginFinishSequence(elapsedMs);
-        }
+          const finishCameraAnchorX = finishPreviewCameraAnchorX ?? followCameraX;
 
-        if (currentStatus === 'running') {
-          if (player.mode === 'ship') {
-            if (currentCollisionRect.x > levelBounds.maxX + 8) {
+          const remainingToAutoFinish = autoFinishX - playerFrontX;
+          if (
+            currentStatus === 'running' &&
+            finishGatewayVisibleInCamera &&
+            noRuntimeObjectsAhead &&
+            canAutoFinishFromInvertedFlight &&
+            remainingToAutoFinish <= EARLY_FINISH_PULL_DISTANCE_UNITS
+          ) {
+            beginFinishSequence(elapsedMs, undefined, finishCameraAnchorX);
+          }
+
+          if (
+            currentStatus === 'running' &&
+            finishGatewayVisibleInCamera &&
+            noRuntimeObjectsAhead &&
+            playerFrontX >= autoFinishX
+          ) {
+            beginFinishSequence(elapsedMs, undefined, finishCameraAnchorX);
+          }
+
+          if (currentStatus === 'running') {
+            if (player.mode === 'ship') {
+              if (currentCollisionRect.x > levelBounds.maxX + 8) {
+                markFailed(elapsedMs);
+              }
+            } else if (player.y > levelBounds.maxY + 3 || player.y < -3 || player.x > levelBounds.maxX + 8) {
               markFailed(elapsedMs);
             }
-          } else if (player.y > levelBounds.maxY + 3 || player.y < -3 || player.x > levelBounds.maxX + 8) {
-            markFailed(elapsedMs);
           }
-        }
 
-        if (player.mode === 'ship') {
-          const targetRotation = clamp(player.vy * 0.07, -0.58, 0.58);
-          player.rotation += (targetRotation - player.rotation) * Math.min(1, deltaSeconds * 10);
-        } else if (player.mode === 'arrow') {
-          player.rotation = Math.atan2(player.vy, horizontalSpeed);
-        } else if (player.mode === 'ball') {
-          const radius = Math.max(0.001, player.w / 2);
-          player.rotation = normalizeAngle(
-            player.rotation + (horizontalSpeed / radius) * deltaSeconds * Math.sign(player.gravity || 1),
-          );
-        } else if (player.grounded) {
-          player.rotation = snapCubeRotation(player.rotation);
-        } else {
-          player.rotation = normalizeAngle(
-            player.rotation + AIR_ROTATION_SPEED * deltaSeconds * Math.sign(player.gravity || 1),
-          );
-        }
-
-        const playerCenterX = player.x + player.w / 2;
-        const playerCenterY = player.y + player.h / 2;
-
-        if (showRunPath) {
-          const maxPathPoints = isMobilePreviewPerformanceMode
-            ? MOBILE_PREVIEW_MAX_PATH_POINTS
-            : isLowPowerDevice
-              ? LOW_POWER_MAX_PATH_POINTS
-              : DESKTOP_MAX_PATH_POINTS;
-          const lastPathPoint = pathLine[pathLine.length - 1];
-
-          if (!lastPathPoint) {
-            pathLine.push({
-              x: playerCenterX,
-              y: playerCenterY,
-            });
+          if (player.mode === 'ship') {
+            const targetRotation = clamp(player.vy * 0.07, -0.58, 0.58);
+            player.rotation += (targetRotation - player.rotation) * Math.min(1, deltaSeconds * 10);
+          } else if (player.mode === 'arrow') {
+            player.rotation = Math.atan2(player.vy, horizontalSpeed);
+          } else if (player.mode === 'ball') {
+            const radius = Math.max(0.001, player.w / 2);
+            player.rotation = normalizeAngle(
+              player.rotation + (horizontalSpeed / radius) * deltaSeconds * Math.sign(player.gravity || 1),
+            );
+          } else if (player.grounded) {
+            player.rotation = snapCubeRotation(player.rotation);
           } else {
-            const deltaX = playerCenterX - lastPathPoint.x;
-            const deltaY = playerCenterY - lastPathPoint.y;
-            const minSegmentDistance = player.mode === 'arrow' ? 0.01 : 0.008;
-            const rewoundToEarlierPosition = !Number.isFinite(lastPathPoint.x) || deltaX < -Math.max(0.6, player.w * 1.35);
+            player.rotation = normalizeAngle(
+              player.rotation + AIR_ROTATION_SPEED * deltaSeconds * Math.sign(player.gravity || 1),
+            );
+          }
 
-            if (rewoundToEarlierPosition) {
-              pathLine.push({
-                x: Number.NaN,
-                y: Number.NaN,
-              });
+          const playerCenterX = player.x + player.w / 2;
+          const playerCenterY = player.y + player.h / 2;
+
+          if (showRunPath) {
+            const maxPathPoints = isMobilePreviewPerformanceMode
+              ? MOBILE_PREVIEW_MAX_PATH_POINTS
+              : isLowPowerDevice
+                ? LOW_POWER_MAX_PATH_POINTS
+                : DESKTOP_MAX_PATH_POINTS;
+            const lastPathPoint = pathLine[pathLine.length - 1];
+
+            if (!lastPathPoint) {
               pathLine.push({
                 x: playerCenterX,
                 y: playerCenterY,
               });
-            } else if (deltaX * deltaX + deltaY * deltaY >= minSegmentDistance * minSegmentDistance) {
-              pathLine.push({
-                x: playerCenterX,
-                y: playerCenterY,
-              });
+            } else {
+              const deltaX = playerCenterX - lastPathPoint.x;
+              const deltaY = playerCenterY - lastPathPoint.y;
+              const minSegmentDistance = player.mode === 'arrow' ? 0.01 : 0.008;
+              const rewoundToEarlierPosition = !Number.isFinite(lastPathPoint.x) || deltaX < -Math.max(0.6, player.w * 1.35);
+
+              if (rewoundToEarlierPosition) {
+                pathLine.push({
+                  x: Number.NaN,
+                  y: Number.NaN,
+                });
+                pathLine.push({
+                  x: playerCenterX,
+                  y: playerCenterY,
+                });
+              } else if (deltaX * deltaX + deltaY * deltaY >= minSegmentDistance * minSegmentDistance) {
+                pathLine.push({
+                  x: playerCenterX,
+                  y: playerCenterY,
+                });
+              }
+            }
+
+            if (pathLine.length > maxPathPoints) {
+              pathLine.splice(0, pathLine.length - maxPathPoints);
             }
           }
 
-          if (pathLine.length > maxPathPoints) {
-            pathLine.splice(0, pathLine.length - maxPathPoints);
+          const previousRight = previousCollisionRect.x + previousCollisionRect.w;
+          const nextRight = currentCollisionRect.x + currentCollisionRect.w;
+          if (previousRight <= levelBounds.maxX && nextRight > levelBounds.maxX + 4) {
+            markFailed(elapsedMs);
           }
-        }
-
-        const previousRight = previousCollisionRect.x + previousCollisionRect.w;
-        const nextRight = currentCollisionRect.x + currentCollisionRect.w;
-        if (previousRight <= levelBounds.maxX && nextRight > levelBounds.maxX + 4) {
-          markFailed(elapsedMs);
         }
       } else if (currentStatus === 'running' && finishSequence && !isPaused) {
         const finishElapsedMs = Math.max(0, elapsedMs - finishSequence.startedAt);
@@ -1947,6 +2009,7 @@ export function GameCanvas({
         }
 
         if (finishProgress >= 1) {
+          completedCameraAnchorX = finishSequence.cameraAnchorX;
           playerConsumedByFinishGateway = true;
           finishSequence = null;
           markCompleted(elapsedMs);
@@ -1955,9 +2018,12 @@ export function GameCanvas({
 
       if (finishSequence) {
         cameraX = finishSequence.cameraAnchorX;
+      } else if (currentStatus === 'completed' && completedCameraAnchorX !== null) {
+        cameraX = completedCameraAnchorX;
+      } else if (currentStatus === 'running' && finishPreviewCameraAnchorX !== null) {
+        cameraX = finishPreviewCameraAnchorX;
       } else {
-        const targetCameraX = Math.max(0, player.x * cell - width * 0.28);
-        cameraX += (targetCameraX - cameraX) * Math.min(1, deltaSeconds * 8);
+        cameraX = getFollowCameraX(deltaSeconds);
       }
       shakeTime = Math.max(0, shakeTime - deltaSeconds);
       const runtimePostFxState = getRuntimePostFxState(activePostFxEffects, elapsedMs);
@@ -2066,7 +2132,7 @@ export function GameCanvas({
       drawPlayer(context, player, cell, verticalOffset, {
         alpha: playerConsumedByFinishGateway ? 0 : finishSequence ? 1 - finishGatewayProgress * 0.82 : 1,
         scale: playerConsumedByFinishGateway ? 0.66 : finishSequence ? 1 - finishGatewayProgress * 0.34 : 1,
-      }, playerSkinOverrides?.[player.mode] ?? playerSkinMap?.[player.mode] ?? null);
+      }, playerSkinOverrides?.[player.mode] ?? null);
       if (hitboxObjects) {
         drawRuntimeHitboxes(context, hitboxObjects, player, cell, verticalOffset, levelBounds.maxY);
       }
@@ -2115,7 +2181,7 @@ export function GameCanvas({
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       canvas.removeEventListener('pointerdown', pointerDownListener);
     };
-  }, [autoFinishX, autoRestartOnFail, fullscreen, levelBounds.maxX, levelBounds.maxY, levelData, playerSkinMap, playerSkinOverrides, previewBootstrap, previewStartPosEnabled, runId, runtimeMusicOffsetMs, sanitizedLevelObjects, showRunPath, suppressCompletionOverlay]); // eslint-disable-line react-hooks/exhaustive-deps -- onFail/onComplete are mirrored into refs above so the runtime loop does not rebuild on parent re-renders
+  }, [autoFinishX, autoRestartOnFail, fullscreen, levelBounds.maxX, levelBounds.maxY, levelData, playerSkinOverrides, previewBootstrap, previewStartPosEnabled, runId, runtimeMusicOffsetMs, sanitizedLevelObjects, showRunPath, suppressCompletionOverlay]); // eslint-disable-line react-hooks/exhaustive-deps -- onFail/onComplete are mirrored into refs above so the runtime loop does not rebuild on parent re-renders
 
   if (fullscreen) {
     return (

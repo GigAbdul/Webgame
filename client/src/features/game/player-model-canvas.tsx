@@ -1,8 +1,10 @@
 import { useEffect, useRef } from 'react';
 import type { PlayerSkinData } from '../../types/models';
 import { drawPlayerModelSprite, usePlayerSkinsQuery } from './player-skins';
+import { useSelectedPlayerSkinRecord, type PlayerSkinSelectionSource } from './player-skin-selection';
 
 export type PlayerModelMode = 'cube' | 'ball' | 'ship' | 'arrow';
+export type PlayerModelSkinSource = PlayerSkinSelectionSource | 'selected';
 
 type PlayerModelCanvasProps = {
   mode: PlayerModelMode;
@@ -10,6 +12,7 @@ type PlayerModelCanvasProps = {
   height: number;
   className?: string;
   skinOverride?: PlayerSkinData | null;
+  skinSource?: PlayerModelSkinSource;
   showHitboxOverlay?: boolean;
 };
 
@@ -19,11 +22,20 @@ export function PlayerModelCanvas({
   height,
   className,
   skinOverride,
+  skinSource = 'default',
   showHitboxOverlay = false,
 }: PlayerModelCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const playerSkinsQuery = usePlayerSkinsQuery();
-  const skinData = skinOverride ?? playerSkinsQuery.data?.skins?.[mode] ?? null;
+  const selectedPlayerSkinRecord = useSelectedPlayerSkinRecord();
+  const publishedSkinData = playerSkinsQuery.data?.skins?.[mode] ?? null;
+  const skinData =
+    skinOverride ??
+    (skinSource === 'published'
+      ? publishedSkinData
+      : skinSource === 'selected'
+        ? selectedPlayerSkinRecord[mode] ?? null
+        : null);
 
   useEffect(() => {
     const canvas = canvasRef.current;

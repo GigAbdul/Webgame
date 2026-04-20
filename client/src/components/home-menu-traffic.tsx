@@ -20,10 +20,12 @@ import {
   SHIP_THRUST_ACCELERATION,
   SHIP_VISUAL_BOUND_PADDING,
 } from '../features/game/player-mode-config';
+import type { PlayerSkinRecord } from '../types/models';
 
 type HomeMenuTrafficProps = {
   screenRef: RefObject<HTMLDivElement | null>;
   showHitFlash: boolean;
+  playerSkinOverrides?: Partial<PlayerSkinRecord>;
 };
 
 type HomeTrafficBehavior = 'cube_run' | 'cube_hop' | 'ball_roll' | 'ship_fly' | 'arrow_fly';
@@ -64,7 +66,7 @@ const homeTrafficExplosionLifetimeMs = 560;
 const homeTrafficMaxActors = 6;
 const homeTrafficShardAngles = [0, 60, 120, 180, 240, 300];
 
-export function HomeMenuTraffic({ screenRef, showHitFlash }: HomeMenuTrafficProps) {
+export function HomeMenuTraffic({ screenRef, showHitFlash, playerSkinOverrides }: HomeMenuTrafficProps) {
   const actorIdRef = useRef(0);
   const explosionIdRef = useRef(0);
   const actorStateRef = useRef<HomeTrafficActor[]>([]);
@@ -228,6 +230,7 @@ export function HomeMenuTraffic({ screenRef, showHitFlash }: HomeMenuTrafficProp
                   width={actor.renderSizePx}
                   height={actor.renderSizePx}
                   className="game-home-traffic-node-canvas"
+                  skinOverride={playerSkinOverrides?.[actor.mode] ?? null}
                 />
               </span>
             </span>

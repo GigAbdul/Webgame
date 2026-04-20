@@ -13,6 +13,7 @@ const decorationSpriteTypes = new Set([
     'DECOR_COMET',
 ]);
 const spritePortalPathByType = {
+    GRAVITY_PORTAL: '/portals/gravity-flip.svg',
     GRAVITY_FLIP_PORTAL: '/portals/gravity-flip.svg',
     GRAVITY_RETURN_PORTAL: '/portals/gravity-return.svg',
     SHIP_PORTAL: '/portals/ship.svg',
@@ -624,7 +625,7 @@ function drawPortalSpriteImage(context, image, x, y, w, h, isActive, rotationDeg
     context.restore();
 }
 function drawSpritePortalPlaceholder(context, type, x, y, w, h, isActive) {
-    const portalCode = type === 'GRAVITY_FLIP_PORTAL'
+    const portalCode = type === 'GRAVITY_PORTAL' || type === 'GRAVITY_FLIP_PORTAL'
         ? 'GF'
         : type === 'GRAVITY_RETURN_PORTAL'
             ? 'GR'
@@ -635,7 +636,7 @@ function drawSpritePortalPlaceholder(context, type, x, y, w, h, isActive) {
                     : type === 'CUBE_PORTAL'
                         ? 'C'
                         : 'W';
-    const fillColor = type === 'GRAVITY_FLIP_PORTAL'
+    const fillColor = type === 'GRAVITY_PORTAL' || type === 'GRAVITY_FLIP_PORTAL'
         ? '#eeff00'
         : type === 'GRAVITY_RETURN_PORTAL'
             ? '#51ffe7'

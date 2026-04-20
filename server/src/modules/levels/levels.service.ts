@@ -38,13 +38,41 @@ function assertMutableLevelOwnership(
   }
 }
 
+function normalizeLegacyGravityPortals(data: LevelData): LevelData {
+  return {
+    ...data,
+    objects: data.objects.map((object) => {
+      if (object.type !== 'GRAVITY_PORTAL') {
+        return object;
+      }
+
+      const { gravity: _legacyGravity, ...nextProps } = object.props;
+
+      return {
+        ...object,
+        type: 'GRAVITY_FLIP_PORTAL',
+        props: nextProps,
+      };
+    }),
+  };
+}
+
 function normalizeLevelData(data: LevelData) {
-  return levelDataSchema.parse(data);
+  return normalizeLegacyGravityPortals(levelDataSchema.parse(data));
+}
+
+function normalizeLevelRecordData<TLevel extends { dataJson: unknown }>(
+  level: TLevel,
+): Omit<TLevel, 'dataJson'> & { dataJson: LevelData } {
+  return {
+    ...level,
+    dataJson: normalizeLevelData(level.dataJson as LevelData),
+  };
 }
 
 export const levelsService = {
   async listOfficial() {
-    return prisma.level.findMany({
+    const levels = await prisma.level.findMany({
       where: {
         status: 'OFFICIAL',
         isOfficial: true,
@@ -60,6 +88,8 @@ export const levelsService = {
       },
       orderBy: [{ featured: 'desc' }, { publishedAt: 'desc' }],
     });
+
+    return levels.map((level) => normalizeLevelRecordData(level));
   },
 
   async getOfficial(slugOrId: string) {
@@ -84,14 +114,16 @@ export const levelsService = {
       throw new ApiError(404, 'Official level not found');
     }
 
-    return level;
+    return normalizeLevelRecordData(level);
   },
 
   async getMine(userId: string) {
-    return prisma.level.findMany({
+    const levels = await prisma.level.findMany({
       where: { authorId: userId },
       orderBy: { updatedAt: 'desc' },
     });
+
+    return levels.map((level) => normalizeLevelRecordData(level));
   },
 
   async getById(user: { id: string; role: Role }, levelId: string) {
@@ -115,7 +147,7 @@ export const levelsService = {
       throw new ApiError(403, 'You cannot access this level');
     }
 
-    return level;
+    return normalizeLevelRecordData(level);
   },
 
   async create(user: { id: string }, input: CreateLevelInput) {

@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import { GameCanvas } from '../features/game/game-canvas';
+import { useSelectedPlayerSkinRecord } from '../features/game/player-skin-selection';
 import { apiRequest, ApiClientError } from '../services/api';
 import { useAuthStore } from '../store/auth-store';
 import { ViewportFit } from '../components/viewport-fit';
@@ -27,6 +28,7 @@ export function PlayPage() {
     const queryClient = useQueryClient();
     const user = useAuthStore((state) => state.user);
     const isAuthenticated = Boolean(user);
+    const selectedPlayerSkinRecord = useSelectedPlayerSkinRecord();
     const [runId, setRunId] = useState(0);
     const [attemptNumber, setAttemptNumber] = useState(1);
     const [activeSessionId, setActiveSessionId] = useState(null);
@@ -129,7 +131,7 @@ export function PlayPage() {
     if (!level) {
         return (_jsx(ViewportFit, { className: "viewport-fit-frame--play", children: _jsx("div", { className: "play-screen play-screen--fullscreen", children: _jsx("div", { className: "play-screen-state", children: "Level not found." }) }) }));
     }
-    return (_jsx(ViewportFit, { className: "viewport-fit-frame--play", children: _jsxs("div", { className: "play-screen play-screen--fullscreen", children: [resultMessage && !completionOverlay ? _jsx("div", { className: "play-screen-toast", children: resultMessage }) : null, guestPlayable || activeSessionId ? (_jsx(GameCanvas, { levelData: level.dataJson, runId: activeSessionId ?? `guest-${runId}`, attemptNumber: attemptNumber, fullscreen: true, suppressCompletionOverlay: true, onFail: ({ progressPercent }) => {
+    return (_jsx(ViewportFit, { className: "viewport-fit-frame--play", children: _jsxs("div", { className: "play-screen play-screen--fullscreen", children: [resultMessage && !completionOverlay ? _jsx("div", { className: "play-screen-toast", children: resultMessage }) : null, guestPlayable || activeSessionId ? (_jsx(GameCanvas, { levelData: level.dataJson, runId: activeSessionId ?? `guest-${runId}`, attemptNumber: attemptNumber, fullscreen: true, suppressCompletionOverlay: true, playerSkinOverrides: selectedPlayerSkinRecord, onFail: ({ progressPercent }) => {
                         if (activeSessionId) {
                             failSessionMutation.mutate({
                                 sessionId: activeSessionId,

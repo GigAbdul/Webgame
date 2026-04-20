@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import { Badge, Button, Panel } from '../components/ui';
 import { GameCanvas } from '../features/game/game-canvas';
+import { useSelectedPlayerSkinRecord } from '../features/game/player-skin-selection';
 import { DifficultyIcon } from '../features/levels/difficulty-icon';
 import { formatThemeName, getDifficultyPresentation, getDisplayedStars } from '../features/levels/level-presentation';
 import { apiRequest } from '../services/api';
@@ -12,6 +13,7 @@ import type { Level } from '../types/models';
 export function LevelDetailPage() {
   const { slugOrId = '' } = useParams();
   const user = useAuthStore((state) => state.user);
+  const selectedPlayerSkinRecord = useSelectedPlayerSkinRecord();
 
   const levelQuery = useQuery({
     queryKey: ['official-level', slugOrId],
@@ -139,7 +141,12 @@ export function LevelDetailPage() {
       </article>
 
       <div className="grid gap-6 xl:grid-cols-[1.18fr_0.82fr]">
-        <GameCanvas levelData={level.dataJson} attemptNumber={1} autoRestartOnFail />
+        <GameCanvas
+          levelData={level.dataJson}
+          attemptNumber={1}
+          autoRestartOnFail
+          playerSkinOverrides={selectedPlayerSkinRecord}
+        />
 
         <div className="space-y-4">
           <Panel className="game-screen bg-transparent">

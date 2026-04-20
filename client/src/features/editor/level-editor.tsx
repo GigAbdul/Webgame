@@ -433,7 +433,7 @@ const toolDescriptions: Record<EditorTool, string> = {
   GRAVITY_ORB: 'Flips gravity, then launches the player in the new direction',
   GRAVITY_FLIP_PORTAL: 'Flips gravity relative to the current direction',
   GRAVITY_RETURN_PORTAL: 'Returns gravity to the normal downward direction',
-  GRAVITY_PORTAL: 'Legacy gravity portal with manual direction',
+  GRAVITY_PORTAL: 'Legacy alias that auto-converts to Gravity Flip',
   SPEED_PORTAL: 'Changes run speed',
   SHIP_PORTAL: 'Switches into ship mode',
   BALL_PORTAL: 'Switches into ball mode',
@@ -5292,36 +5292,6 @@ export function LevelEditor({
                       };
                     })}
                   />
-                </div>
-              </div>
-            ) : null}
-
-            {selectedObject.type === 'GRAVITY_PORTAL' ? (
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <FieldLabel>Gravity Direction</FieldLabel>
-                  <div className="editor-inline-actions">
-                    <Button
-                      variant={Number(selectedObject.props.gravity ?? -1) === -1 ? 'primary' : 'ghost'}
-                      onClick={() =>
-                        updateSelectedObject((object) => {
-                          object.props = { ...object.props, gravity: -1 };
-                        })
-                      }
-                    >
-                      Up
-                    </Button>
-                    <Button
-                      variant={Number(selectedObject.props.gravity ?? -1) === 1 ? 'primary' : 'ghost'}
-                      onClick={() =>
-                        updateSelectedObject((object) => {
-                          object.props = { ...object.props, gravity: 1 };
-                        })
-                      }
-                    >
-                      Down
-                    </Button>
-                  </div>
                 </div>
               </div>
             ) : null}

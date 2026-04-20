@@ -5,6 +5,7 @@ import { Badge, Button, FieldLabel, Input, Select } from '../components/ui';
 import { createEmptyLevelData } from '../features/game/object-definitions';
 import { GameCanvas } from '../features/game/game-canvas';
 import { resolveLevelMusic } from '../features/game/level-music';
+import { useSelectedPlayerSkinRecord } from '../features/game/player-skin-selection';
 import { difficultyOptions, getDifficultyPresentation } from '../features/levels/level-presentation';
 import { ApiClientError, apiRequest } from '../services/api';
 import { useAuthStore } from '../store/auth-store';
@@ -109,6 +110,7 @@ export function LevelSetupPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const user = useAuthStore((state) => state.user);
+  const selectedPlayerSkinRecord = useSelectedPlayerSkinRecord();
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [musicValue, setMusicValue] = useState('none');
@@ -663,6 +665,7 @@ export function LevelSetupPage() {
               previewStartPosEnabled
               fullscreen
               className="gd-draft-view-preview-fullscreen"
+              playerSkinOverrides={selectedPlayerSkinRecord}
               onExitToMenu={() => setIsPreviewOpen(false)}
             />
           </div>
@@ -944,6 +947,7 @@ export function LevelSetupPage() {
             previewStartPosEnabled
             fullscreen
             className="gd-draft-view-preview-fullscreen"
+            playerSkinOverrides={selectedPlayerSkinRecord}
             onExitToMenu={() => setIsPreviewOpen(false)}
           />
         </div>

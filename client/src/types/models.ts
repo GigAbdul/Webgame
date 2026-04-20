@@ -140,6 +140,7 @@ export type PlayerSkinLayer = {
 };
 
 export type PlayerSkinData = {
+  name: string;
   gridCols: number;
   gridRows: number;
   pixels: PlayerSkinPixel[];

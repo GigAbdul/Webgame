@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import { GameCanvas } from '../features/game/game-canvas';
+import { useSelectedPlayerSkinRecord } from '../features/game/player-skin-selection';
 import { apiRequest, ApiClientError } from '../services/api';
 import { useAuthStore } from '../store/auth-store';
 import type { Level } from '../types/models';
@@ -70,6 +71,7 @@ export function PlayPage() {
   const queryClient = useQueryClient();
   const user = useAuthStore((state) => state.user);
   const isAuthenticated = Boolean(user);
+  const selectedPlayerSkinRecord = useSelectedPlayerSkinRecord();
   const [runId, setRunId] = useState(0);
   const [attemptNumber, setAttemptNumber] = useState(1);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -235,6 +237,7 @@ export function PlayPage() {
             attemptNumber={attemptNumber}
             fullscreen
             suppressCompletionOverlay
+            playerSkinOverrides={selectedPlayerSkinRecord}
             onFail={({ progressPercent }) => {
               if (activeSessionId) {
                 failSessionMutation.mutate({
