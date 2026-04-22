@@ -11,7 +11,6 @@ import { getPlayerModeLabel } from '../features/game/player-mode-config';
 import { createDefaultPlayerSkinName, createEmptyPlayerSkinData, createEmptyPlayerSkinRecord, createPlayerSkinLayer, normalizePlayerSkinData, playerSkinEditorConfigs, usePlayerSkinsQuery, } from '../features/game/player-skins';
 import { apiRequest } from '../services/api';
 import { cn } from '../utils/cn';
-const colorPresets = ['#F4F7FF', '#182133', '#FFD44A', '#63FFBD', '#79F7FF', '#FF6B9E', '#FF8F3D', '#845CFF'];
 const playerModes = ['cube', 'ball', 'ship', 'arrow'];
 const MAX_SKIN_LAYERS = 32;
 const MAX_HISTORY_STEPS = 120;
@@ -21,6 +20,9 @@ const MAX_SKIN_CANVAS_ZOOM = 4;
 const DEFAULT_SKIN_CANVAS_ZOOM = 1.6;
 const DEFAULT_FULLSCREEN_SKIN_CANVAS_ZOOM = 2.25;
 const PLAYER_SKIN_DRAFTS_STORAGE_KEY = 'dashforge-player-skin-studio-drafts-v1';
+const SKIN_CANVAS_BASE_COLOR = '#10192f';
+const SKIN_CANVAS_CHECKER_COLOR = 'rgba(255,255,255,0.05)';
+const SKIN_CANVAS_CONTRAST_STROKE = 'rgba(244,247,255,0.34)';
 const skinToolOptions = [
     {
         tool: 'paint',
@@ -44,6 +46,13 @@ const skinToolOptions = [
         activeVariant: 'secondary',
     },
     {
+        tool: 'circle',
+        label: 'Circle',
+        hotkey: 'C',
+        description: 'Drag out a filled circle or ellipse on the active layer.',
+        activeVariant: 'secondary',
+    },
+    {
         tool: 'select',
         label: 'Select',
         hotkey: 'V',
@@ -61,8 +70,81 @@ const skinToolOptions = [
 function clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));
 }
+function hslToHex(hue, saturation, lightness) {
+    const normalizedHue = ((hue % 360) + 360) % 360;
+    const normalizedSaturation = clamp(saturation, 0, 100) / 100;
+    const normalizedLightness = clamp(lightness, 0, 100) / 100;
+    const chroma = (1 - Math.abs(2 * normalizedLightness - 1)) * normalizedSaturation;
+    const hueSection = normalizedHue / 60;
+    const match = normalizedLightness - chroma / 2;
+    const secondary = chroma * (1 - Math.abs((hueSection % 2) - 1));
+    let red = 0;
+    let green = 0;
+    let blue = 0;
+    if (hueSection >= 0 && hueSection < 1) {
+        red = chroma;
+        green = secondary;
+    }
+    else if (hueSection < 2) {
+        red = secondary;
+        green = chroma;
+    }
+    else if (hueSection < 3) {
+        green = chroma;
+        blue = secondary;
+    }
+    else if (hueSection < 4) {
+        green = secondary;
+        blue = chroma;
+    }
+    else if (hueSection < 5) {
+        red = secondary;
+        blue = chroma;
+    }
+    else {
+        red = chroma;
+        blue = secondary;
+    }
+    const toHex = (channel) => Math.round((channel + match) * 255)
+        .toString(16)
+        .padStart(2, '0')
+        .toUpperCase();
+    return `#${toHex(red)}${toHex(green)}${toHex(blue)}`;
+}
+function buildSkinColorPalette() {
+    const grayscale = ['#FFFFFF', '#EFF3FA', '#D2DBEA', '#AAB7D0', '#76839F', '#4A5670', '#2A344D', '#182133', '#090D16'];
+    const paletteRows = [
+        { saturation: 92, lightness: 72 },
+        { saturation: 90, lightness: 58 },
+        { saturation: 84, lightness: 46 },
+        { saturation: 78, lightness: 34 },
+    ];
+    const hues = [0, 16, 28, 42, 56, 78, 110, 146, 176, 204, 228, 254, 282, 316];
+    return Array.from(new Set([
+        ...grayscale,
+        ...paletteRows.flatMap((row) => hues.map((hue) => hslToHex(hue, row.saturation, row.lightness))),
+    ]));
+}
+const colorPresets = buildSkinColorPalette();
 function isHexColor(value) {
     return /^#[0-9A-F]{6}$/.test(value.trim().toUpperCase());
+}
+function getHexColorLuminance(value) {
+    const normalized = value.trim().toUpperCase();
+    if (!isHexColor(normalized)) {
+        return null;
+    }
+    const red = Number.parseInt(normalized.slice(1, 3), 16);
+    const green = Number.parseInt(normalized.slice(3, 5), 16);
+    const blue = Number.parseInt(normalized.slice(5, 7), 16);
+    return (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255;
+}
+function shouldUseContrastStroke(color) {
+    const luminance = getHexColorLuminance(color);
+    if (luminance === null) {
+        return false;
+    }
+    return luminance <= 0.18;
 }
 function getSkinToolLabel(tool) {
     return skinToolOptions.find((entry) => entry.tool === tool)?.label ?? 'Brush';
@@ -294,6 +376,57 @@ function applyToolToSelection(skinData, layerId, selection, tool, color) {
         };
     });
 }
+function getEllipseCells(selection) {
+    const width = selection.right - selection.left + 1;
+    const height = selection.bottom - selection.top + 1;
+    const radiusX = width / 2;
+    const radiusY = height / 2;
+    const centerX = selection.left + radiusX - 0.5;
+    const centerY = selection.top + radiusY - 0.5;
+    const cells = [];
+    for (let y = selection.top; y <= selection.bottom; y += 1) {
+        for (let x = selection.left; x <= selection.right; x += 1) {
+            const dx = (x - centerX) / radiusX;
+            const dy = (y - centerY) / radiusY;
+            if (dx * dx + dy * dy <= 1) {
+                cells.push({ x, y });
+            }
+        }
+    }
+    return cells;
+}
+function applyEllipseToLayer(skinData, layerId, selection, color) {
+    const nextColor = color?.toUpperCase() ?? null;
+    const ellipseCells = getEllipseCells(selection);
+    return updateLayerPixels(skinData, layerId, (layer, pixelMap) => {
+        let changed = false;
+        for (const cell of ellipseCells) {
+            const key = `${cell.x}:${cell.y}`;
+            const currentColor = pixelMap.get(key)?.color ?? null;
+            if (currentColor === nextColor) {
+                continue;
+            }
+            changed = true;
+            if (nextColor) {
+                pixelMap.set(key, {
+                    x: cell.x,
+                    y: cell.y,
+                    color: nextColor,
+                });
+            }
+            else {
+                pixelMap.delete(key);
+            }
+        }
+        if (!changed) {
+            return null;
+        }
+        return {
+            ...layer,
+            pixels: Array.from(pixelMap.values()),
+        };
+    });
+}
 function createLayerDraft(existingLayers) {
     let nextIndex = existingLayers.length + 1;
     while (existingLayers.some((layer) => layer.id === `layer-${nextIndex}`)) {
@@ -346,9 +479,32 @@ function drawSelectionOverlay(context, selection, cellSize, options) {
     context.strokeRect(x + 1.5, y + 1.5, Math.max(0, width - 3), Math.max(0, height - 3));
     context.restore();
 }
-function PlayerSkinPaintCanvas({ mode, skinData, activeLayerId, tool, selection, cellSize = SKIN_CANVAS_CELL_SIZE, containerClassName, canvasClassName, onCanvasWheel, onUseTool, onPickColor, onSelectionChange, onHoverCellChange, onGestureStart, onGestureEnd, }) {
+function drawEllipseOverlay(context, selection, cellSize, options) {
+    const x = selection.left * cellSize;
+    const y = selection.top * cellSize;
+    const width = (selection.right - selection.left + 1) * cellSize;
+    const height = (selection.bottom - selection.top + 1) * cellSize;
+    const centerX = x + width / 2;
+    const centerY = y + height / 2;
+    const radiusX = Math.max(cellSize / 2, width / 2 - 1.5);
+    const radiusY = Math.max(cellSize / 2, height / 2 - 1.5);
+    context.save();
+    context.fillStyle = options.fill;
+    for (const cell of getEllipseCells(selection)) {
+        context.fillRect(cell.x * cellSize, cell.y * cellSize, cellSize, cellSize);
+    }
+    context.strokeStyle = options.stroke;
+    context.lineWidth = options.lineWidth ?? 3;
+    context.setLineDash(options.lineDash ?? [12, 8]);
+    context.beginPath();
+    context.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
+    context.stroke();
+    context.restore();
+}
+function PlayerSkinPaintCanvas({ mode, skinData, activeLayerId, tool, selection, cellSize = SKIN_CANVAS_CELL_SIZE, containerClassName, canvasClassName, onCanvasWheel, onUseTool, onApplyCircle, onPickColor, onSelectionChange, onHoverCellChange, onGestureStart, onGestureEnd, }) {
     const canvasRef = useRef(null);
     const [selectionDraft, setSelectionDraft] = useState(null);
+    const [circleDraft, setCircleDraft] = useState(null);
     const pointerStateRef = useRef({
         mode: null,
         lastCellKey: null,
@@ -377,12 +533,13 @@ function PlayerSkinPaintCanvas({ mode, skinData, activeLayerId, tool, selection,
         const width = skinData.gridCols * cellSize;
         const height = skinData.gridRows * cellSize;
         const normalizedSelectionDraft = selectionDraft ? normalizeSkinSelection(selectionDraft) : null;
+        const normalizedCircleDraft = circleDraft ? normalizeSkinSelection(circleDraft) : null;
         canvas.width = width;
         canvas.height = height;
         context.clearRect(0, 0, width, height);
-        context.fillStyle = '#09101e';
+        context.fillStyle = SKIN_CANVAS_BASE_COLOR;
         context.fillRect(0, 0, width, height);
-        context.fillStyle = 'rgba(255,255,255,0.03)';
+        context.fillStyle = SKIN_CANVAS_CHECKER_COLOR;
         for (let row = 0; row < skinData.gridRows; row += 1) {
             for (let column = 0; column < skinData.gridCols; column += 1) {
                 if ((row + column) % 2 === 0) {
@@ -396,9 +553,20 @@ function PlayerSkinPaintCanvas({ mode, skinData, activeLayerId, tool, selection,
                 continue;
             }
             context.globalAlpha = shouldGhostHiddenLayer ? 0.32 : 1;
+            const contrastPixels = [];
             for (const pixel of layer.pixels) {
                 context.fillStyle = pixel.color;
                 context.fillRect(pixel.x * cellSize, pixel.y * cellSize, cellSize, cellSize);
+                if (shouldUseContrastStroke(pixel.color)) {
+                    contrastPixels.push(pixel);
+                }
+            }
+            if (contrastPixels.length > 0) {
+                context.strokeStyle = SKIN_CANVAS_CONTRAST_STROKE;
+                context.lineWidth = Math.max(1, Math.min(2, cellSize * 0.08));
+                for (const pixel of contrastPixels) {
+                    context.strokeRect(pixel.x * cellSize + 1.25, pixel.y * cellSize + 1.25, cellSize - 2.5, cellSize - 2.5);
+                }
             }
         }
         context.globalAlpha = 1;
@@ -439,6 +607,14 @@ function PlayerSkinPaintCanvas({ mode, skinData, activeLayerId, tool, selection,
                 lineWidth: 3.5,
             });
         }
+        if (normalizedCircleDraft) {
+            drawEllipseOverlay(context, normalizedCircleDraft, cellSize, {
+                fill: 'rgba(255, 212, 74, 0.18)',
+                stroke: 'rgba(255, 212, 74, 0.96)',
+                lineDash: [10, 6],
+                lineWidth: 3.5,
+            });
+        }
         const contactLayout = getPlayerHitboxLayout(mode, 'contact');
         const solidLayout = getPlayerHitboxLayout(mode, 'solid');
         const scaleX = width / PLAYER_HITBOX_SIZE;
@@ -454,7 +630,7 @@ function PlayerSkinPaintCanvas({ mode, skinData, activeLayerId, tool, selection,
         context.strokeStyle = 'rgba(255,255,255,0.2)';
         context.lineWidth = 2;
         context.strokeRect(1, 1, width - 2, height - 2);
-    }, [activeLayer, cellSize, mode, selection, selectionDraft, skinData]);
+    }, [activeLayer, cellSize, circleDraft, mode, selection, selectionDraft, skinData]);
     const getGridPosition = (event, clampToBounds = false) => {
         const canvas = canvasRef.current;
         if (!canvas) {
@@ -499,6 +675,19 @@ function PlayerSkinPaintCanvas({ mode, skinData, activeLayerId, tool, selection,
         emitHoverCell(position);
         event.currentTarget.setPointerCapture(event.pointerId);
     };
+    const startCircleGesture = (event, position) => {
+        pointerStateRef.current.mode = 'circle';
+        pointerStateRef.current.lastCellKey = null;
+        pointerStateRef.current.selectionStart = position;
+        setCircleDraft({
+            startX: position.x,
+            startY: position.y,
+            endX: position.x,
+            endY: position.y,
+        });
+        emitHoverCell(position);
+        event.currentTarget.setPointerCapture(event.pointerId);
+    };
     return (_jsx("div", { className: cn('overflow-auto rounded-[28px] border-[4px] border-[#0f1b31] bg-[#09101e] p-3 shadow-[0_18px_40px_rgba(0,0,0,0.28)]', containerClassName), onWheel: onCanvasWheel, children: _jsx("canvas", { ref: canvasRef, className: cn('mx-auto block max-w-none touch-none rounded-[18px]', canvasClassName), style: { imageRendering: 'pixelated' }, onContextMenu: (event) => event.preventDefault(), onPointerDown: (event) => {
                 const position = getGridPosition(event, event.button === 2);
                 if (!position) {
@@ -522,7 +711,11 @@ function PlayerSkinPaintCanvas({ mode, skinData, activeLayerId, tool, selection,
                 if (selection && !isInsideSelection) {
                     onSelectionChange(null);
                 }
-                const applySelection = Boolean(tool !== 'fill' && isInsideSelection);
+                if (tool === 'circle') {
+                    startCircleGesture(event, position);
+                    return;
+                }
+                const applySelection = Boolean((tool === 'paint' || tool === 'erase') && isInsideSelection);
                 if (tool === 'fill' || applySelection) {
                     onUseTool(position.x, position.y, { applySelection });
                     return;
@@ -541,6 +734,19 @@ function PlayerSkinPaintCanvas({ mode, skinData, activeLayerId, tool, selection,
                         return;
                     }
                     setSelectionDraft({
+                        startX: pointerStateRef.current.selectionStart.x,
+                        startY: pointerStateRef.current.selectionStart.y,
+                        endX: position.x,
+                        endY: position.y,
+                    });
+                    return;
+                }
+                if (pointerStateRef.current.mode === 'circle') {
+                    const position = getGridPosition(event, true);
+                    if (!position || !pointerStateRef.current.selectionStart) {
+                        return;
+                    }
+                    setCircleDraft({
                         startX: pointerStateRef.current.selectionStart.x,
                         startY: pointerStateRef.current.selectionStart.y,
                         endX: position.x,
@@ -577,6 +783,29 @@ function PlayerSkinPaintCanvas({ mode, skinData, activeLayerId, tool, selection,
                     }
                     setSelectionDraft(null);
                 }
+                if (pointerStateRef.current.mode === 'circle') {
+                    const finalDraft = (pointerStateRef.current.selectionStart && finalPosition
+                        ? {
+                            startX: pointerStateRef.current.selectionStart.x,
+                            startY: pointerStateRef.current.selectionStart.y,
+                            endX: finalPosition.x,
+                            endY: finalPosition.y,
+                        }
+                        : null) ??
+                        circleDraft ??
+                        (pointerStateRef.current.selectionStart
+                            ? {
+                                startX: pointerStateRef.current.selectionStart.x,
+                                startY: pointerStateRef.current.selectionStart.y,
+                                endX: pointerStateRef.current.selectionStart.x,
+                                endY: pointerStateRef.current.selectionStart.y,
+                            }
+                            : null);
+                    if (finalDraft) {
+                        onApplyCircle(normalizeSkinSelection(finalDraft));
+                    }
+                    setCircleDraft(null);
+                }
                 if (pointerStateRef.current.mode === 'paint') {
                     onGestureEnd();
                 }
@@ -598,6 +827,7 @@ function PlayerSkinPaintCanvas({ mode, skinData, activeLayerId, tool, selection,
                 pointerStateRef.current.lastCellKey = null;
                 pointerStateRef.current.selectionStart = null;
                 setSelectionDraft(null);
+                setCircleDraft(null);
                 if (event.currentTarget.hasPointerCapture(event.pointerId)) {
                     event.currentTarget.releasePointerCapture(event.pointerId);
                 }
@@ -811,7 +1041,7 @@ export function AdminPlayerSkinsPage() {
         setTool(nextTool);
     };
     const handleCanvasGestureStart = () => {
-        if (tool === 'fill' || tool === 'pick' || tool === 'select' || gestureBaseRef.current[activeMode]) {
+        if (tool === 'fill' || tool === 'pick' || tool === 'select' || tool === 'circle' || gestureBaseRef.current[activeMode]) {
             return;
         }
         gestureBaseRef.current[activeMode] = currentHistory.present;
@@ -871,7 +1101,7 @@ export function AdminPlayerSkinsPage() {
         handleAdjustFullscreenCanvasZoom(event.deltaY < 0 ? 0.12 : -0.12);
     };
     const handleUseTool = (x, y, options) => {
-        if (tool === 'select' || tool === 'pick') {
+        if (tool === 'select' || tool === 'pick' || tool === 'circle') {
             return;
         }
         const activeLayerId = currentLayer.id;
@@ -892,6 +1122,9 @@ export function AdminPlayerSkinsPage() {
             return;
         }
         applyActiveColor(nextColor);
+    };
+    const handleApplyCircle = (selection) => {
+        commitModeChange(activeMode, (current) => applyEllipseToLayer(current, currentLayer.id, selection, activeColor));
     };
     const handleHoverCellChange = (cell) => {
         setHoverCells((current) => ({
@@ -1117,6 +1350,10 @@ export function AdminPlayerSkinsPage() {
                 setTool('fill');
                 return;
             }
+            if (code === 'KeyC') {
+                setTool('circle');
+                return;
+            }
             if (code === 'KeyV') {
                 setTool('select');
                 return;
@@ -1157,7 +1394,11 @@ export function AdminPlayerSkinsPage() {
                                                         : option.activeVariant === 'primary'
                                                             ? 'border-[#caff45] bg-[#1a3410] text-white'
                                                             : 'border-[#79f7ff] bg-[#14253d] text-white'
-                                                    : 'border-[#152545] bg-[#0c1630] text-white/84 hover:border-[#335d95]'), children: [_jsxs("div", { className: "flex items-center justify-between gap-3", children: [_jsx("span", { className: "font-display text-xl", children: option.label }), _jsx("span", { className: "rounded-[12px] border-[2px] border-white/12 px-2 py-1 text-xs uppercase tracking-[0.18em] text-white/64", children: option.hotkey })] }), _jsx("p", { className: "mt-2 text-sm leading-6 text-white/68", children: option.description })] }, option.tool))) })] }), _jsxs("div", { className: "rounded-[26px] border-[4px] border-[#0f1b31] bg-[#101a30] px-5 py-5", children: [_jsxs("div", { className: "flex items-start justify-between gap-3", children: [_jsxs("div", { children: [_jsx("p", { className: "arcade-eyebrow", children: "Brush Color" }), _jsx("h4", { className: "font-display text-2xl text-white", children: activeColor })] }), _jsx("span", { className: "h-12 w-12 rounded-[16px] border-[3px] border-white/18 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]", style: { backgroundColor: activeColor }, "aria-hidden": "true" })] }), _jsxs("div", { className: "mt-4 flex flex-wrap items-center gap-3", children: [_jsx(Input, { type: "color", value: activeColor, onChange: (event) => applyActiveColor(event.target.value), className: "h-14 w-24 cursor-pointer p-1" }), _jsx(Input, { value: colorDraft, onChange: (event) => handleColorDraftChange(event.target.value), onBlur: handleColorDraftBlur, className: "h-14 min-w-[148px] flex-1 text-base" })] }), _jsx("div", { className: "mt-4 grid grid-cols-4 gap-2", children: colorPresets.map((color) => (_jsx("button", { type: "button", className: cn('h-12 rounded-[14px] border-[3px] transition', activeColor === color ? 'border-white scale-[1.04]' : 'border-[#0f1b31]'), style: { backgroundColor: color }, onClick: () => applyActiveColor(color), "aria-label": `Use ${color}`, title: color }, color))) }), _jsx("p", { className: "mt-3 text-sm leading-7 text-white/68", children: "`Alt + click` or the Picker tool samples a visible pixel and jumps straight back to Brush." })] }), _jsxs("div", { className: "rounded-[26px] border-[4px] border-[#0f1b31] bg-[#101a30] px-5 py-5", children: [_jsxs("div", { className: "flex items-center justify-between gap-3", children: [_jsxs("div", { children: [_jsx("p", { className: "arcade-eyebrow", children: "Selection" }), _jsx("h4", { className: "font-display text-2xl text-white", children: hasSelection ? `${selectedCellCount} Cells` : 'No Box Yet' })] }), _jsx(Badge, { tone: hasSelection ? 'accent' : 'default', children: hasSelection ? 'Ready' : 'Idle' })] }), _jsx("p", { className: "mt-3 text-sm leading-7 text-white/72", children: "Use Select, hold `Shift` while dragging, or right-drag if you prefer the old flow. Clicking inside an existing selection applies Brush or Eraser to the whole box." }), _jsxs("div", { className: "mt-4 grid gap-2", children: [_jsx(Button, { variant: "primary", onClick: () => handleApplySelectionTool('paint'), disabled: !hasSelection, children: "Paint Selection" }), _jsx(Button, { variant: "danger", onClick: () => handleApplySelectionTool('erase'), disabled: !hasSelection, children: "Erase Selection" }), _jsx(Button, { variant: "ghost", onClick: () => handleSelectionChange(null), disabled: !hasSelection, children: "Clear Selection" })] })] }), _jsxs("div", { className: "rounded-[26px] border-[4px] border-[#0f1b31] bg-[#101a30] px-5 py-5", children: [_jsx("p", { className: "arcade-eyebrow", children: "Quick Keys" }), _jsxs("div", { className: "mt-3 space-y-2 text-sm leading-7 text-white/76", children: [_jsx("p", { children: "`B / E / F / V / I` switches Brush, Eraser, Fill, Select, and Picker." }), _jsx("p", { children: "`Ctrl/Cmd + Z`, `Ctrl/Cmd + Y`, and `Ctrl/Cmd + Shift + Z` handle undo and redo." }), _jsx("p", { children: "`Ctrl/Cmd + wheel`, `+`, `-`, and `0` zoom the workbench canvas without opening fullscreen." }), _jsx("p", { children: "`Delete` clears the active selection, and `Esc` clears the box or exits Select." })] })] })] }) }), _jsx(Panel, { className: "game-screen min-h-0 bg-transparent", children: _jsxs("div", { className: "space-y-5", children: [_jsxs("div", { className: "flex flex-wrap items-start justify-between gap-4", children: [_jsxs("div", { children: [_jsx("p", { className: "arcade-eyebrow", children: "Workbench" }), _jsxs("h3", { className: "font-display text-4xl text-white", children: [getPlayerModeLabel(activeMode), " Canvas"] }), _jsx("p", { className: "mt-2 max-w-3xl text-sm leading-7 text-white/72", children: "Keep the layer stack on the right, zoom directly in the main workspace, and use the hover readout to see exactly which cell and color you are over before painting." })] }), _jsxs("div", { className: "flex flex-wrap gap-2", children: [_jsx(Badge, { tone: isCurrentModeDirty ? 'accent' : 'success', children: isCurrentModeDirty ? 'Unsaved Changes' : 'Saved' }), _jsx(Badge, { tone: currentLayer.visible ? 'success' : 'danger', children: currentLayer.visible ? 'Layer Visible' : 'Layer Hidden' }), _jsxs(Badge, { tone: "default", children: [currentConfig.gridCols, " x ", currentConfig.gridRows] })] })] }), _jsxs("div", { className: "grid gap-3 lg:grid-cols-[minmax(0,1fr)_300px]", children: [_jsxs("div", { className: "grid gap-3 sm:grid-cols-2 xl:grid-cols-4", children: [_jsxs("div", { className: "game-stat px-4 py-4", children: [_jsx("p", { className: "font-display text-[10px] tracking-[0.22em] text-[#ffd44a]", children: "Tool" }), _jsx("p", { className: "mt-2 font-display text-2xl text-white", children: getSkinToolLabel(tool) })] }), _jsxs("div", { className: "game-stat px-4 py-4", children: [_jsx("p", { className: "font-display text-[10px] tracking-[0.22em] text-[#ffd44a]", children: "Pixels" }), _jsx("p", { className: "mt-2 font-display text-2xl text-white", children: currentDraft.pixels.length })] }), _jsxs("div", { className: "game-stat px-4 py-4", children: [_jsx("p", { className: "font-display text-[10px] tracking-[0.22em] text-[#ffd44a]", children: "Hover Cell" }), _jsx("p", { className: "mt-2 font-display text-2xl text-white", children: currentHoverCell ? `${currentHoverCell.x + 1}, ${currentHoverCell.y + 1}` : 'Off Canvas' }), _jsx("p", { className: "mt-2 text-xs uppercase tracking-[0.16em] text-white/56", children: currentHoverCell?.selected ? 'Inside Selection' : 'Free Cell' })] }), _jsxs("div", { className: "game-stat px-4 py-4", children: [_jsx("p", { className: "font-display text-[10px] tracking-[0.22em] text-[#ffd44a]", children: "Hover Color" }), _jsxs("div", { className: "mt-2 flex items-center gap-3", children: [_jsx("span", { className: cn('h-10 w-10 rounded-[14px] border-[3px] border-white/14', currentHoverCell?.compositeColor ? '' : 'bg-[linear-gradient(135deg,#0d1324,#1b2440)]'), style: currentHoverCell?.compositeColor ? { backgroundColor: currentHoverCell.compositeColor } : undefined, "aria-hidden": "true" }), _jsxs("div", { children: [_jsx("p", { className: "font-display text-lg text-white", children: currentHoverCell?.compositeColor ?? 'Empty' }), _jsx("p", { className: "text-xs uppercase tracking-[0.16em] text-white/56", children: currentHoverCell?.activeLayerColor ? 'Active Layer Hit' : 'Visible Stack' })] })] })] })] }), _jsxs("div", { className: "rounded-[26px] border-[4px] border-[#163057] bg-[#0f1b31] px-4 py-4", children: [_jsxs("div", { className: "flex items-center justify-between gap-3", children: [_jsxs("div", { children: [_jsx("p", { className: "arcade-eyebrow", children: "Zoom" }), _jsxs("p", { className: "font-display text-3xl text-white", children: [canvasZoom.toFixed(2), "x"] })] }), _jsx(Button, { variant: "secondary", onClick: handleOpenCanvasFullscreen, children: "Fullscreen" })] }), _jsxs("div", { className: "mt-4 flex flex-wrap items-center gap-3", children: [_jsx(Button, { variant: "ghost", onClick: () => handleAdjustWorkspaceZoom(-0.2), children: "-" }), _jsx("input", { type: "range", min: MIN_SKIN_CANVAS_ZOOM, max: MAX_SKIN_CANVAS_ZOOM, step: "0.05", value: canvasZoom, onChange: (event) => handleWorkspaceZoomChange(Number(event.target.value)), className: "h-4 min-w-[180px] flex-1 accent-[#caff45]" }), _jsx(Button, { variant: "primary", onClick: () => handleAdjustWorkspaceZoom(0.2), children: "+" })] }), _jsxs("div", { className: "mt-4 flex flex-wrap gap-2", children: [_jsx(Button, { variant: "secondary", onClick: () => handleWorkspaceZoomChange(DEFAULT_SKIN_CANVAS_ZOOM), children: "Reset Zoom" }), _jsx(Button, { variant: "ghost", onClick: handleOpenPreview, children: "Test Level" })] }), _jsx("p", { className: "mt-3 text-sm leading-7 text-white/68", children: "`Ctrl/Cmd + wheel` zooms here too, so fullscreen is optional instead of required." })] })] }), _jsx(PlayerSkinPaintCanvas, { mode: activeMode, skinData: currentDraft, activeLayerId: currentLayer.id, tool: tool, selection: currentSelection, cellSize: canvasCellSize, containerClassName: "min-h-[56vh]", onCanvasWheel: handleWorkspaceCanvasWheel, onUseTool: handleUseTool, onPickColor: handlePickColor, onSelectionChange: handleSelectionChange, onHoverCellChange: handleHoverCellChange, onGestureStart: handleCanvasGestureStart, onGestureEnd: handleCanvasGestureEnd }), _jsxs("div", { className: "flex flex-wrap gap-3", children: [_jsx(Button, { variant: "secondary", onClick: () => undoMode(activeMode), disabled: !canUndo, children: "Undo" }), _jsx(Button, { variant: "secondary", onClick: () => redoMode(activeMode), disabled: !canRedo, children: "Redo" }), _jsx(Button, { onClick: handleSaveMode, disabled: saveMutation.isPending, children: saveMutation.isPending ? 'Saving...' : 'Save Mode' }), _jsx(Button, { variant: "secondary", onClick: handleResetMode, disabled: !isCurrentModeDirty, children: "Reset Mode" }), _jsx(Button, { variant: "ghost", onClick: handleClearMode, children: "Use Built-In" })] }), message ? (_jsx("div", { className: "rounded-[22px] border-[3px] border-[#163057] bg-[#0f1b31] px-4 py-4 text-sm leading-7 text-white/82", children: message })) : null] }) }), _jsxs("div", { className: "space-y-4", children: [_jsx(Panel, { className: "game-screen min-h-0 bg-transparent", children: _jsxs("div", { className: "space-y-4", children: [_jsxs("div", { className: "flex items-center justify-between gap-3", children: [_jsxs("div", { children: [_jsx("p", { className: "arcade-eyebrow", children: "Layers" }), _jsx("h3", { className: "font-display text-3xl text-white", children: "Stack" })] }), _jsxs(Badge, { tone: "accent", children: [currentLayers.length, " / ", MAX_SKIN_LAYERS] })] }), _jsxs("div", { className: "rounded-[22px] border-[3px] border-[#163057] bg-[#0f1b31] px-4 py-4", children: [_jsx("p", { className: "text-xs uppercase tracking-[0.18em] text-white/56", children: "Active Layer" }), _jsxs("div", { className: "mt-2 flex items-start justify-between gap-3", children: [_jsxs("div", { children: [_jsx("p", { className: "font-display text-2xl text-white", children: currentLayer.name }), _jsxs("p", { className: "mt-1 text-sm leading-7 text-white/68", children: [currentLayer.pixels.length, " px | ", currentLayer.visible ? 'Visible in stack' : 'Hidden but still editable'] })] }), _jsx(Badge, { tone: currentLayer.visible ? 'success' : 'danger', children: currentLayer.visible ? 'Visible' : 'Hidden' })] })] }), _jsx("div", { className: "space-y-2 pr-1", children: orderedLayers.map((layer, index) => {
+                                                    : 'border-[#152545] bg-[#0c1630] text-white/84 hover:border-[#335d95]'), children: [_jsxs("div", { className: "flex items-center justify-between gap-3", children: [_jsx("span", { className: "font-display text-xl", children: option.label }), _jsx("span", { className: "rounded-[12px] border-[2px] border-white/12 px-2 py-1 text-xs uppercase tracking-[0.18em] text-white/64", children: option.hotkey })] }), _jsx("p", { className: "mt-2 text-sm leading-6 text-white/68", children: option.description })] }, option.tool))) })] }), _jsxs("div", { className: "rounded-[26px] border-[4px] border-[#0f1b31] bg-[#101a30] px-5 py-5", children: [_jsxs("div", { className: "flex items-start justify-between gap-3", children: [_jsxs("div", { children: [_jsx("p", { className: "arcade-eyebrow", children: "Brush Color" }), _jsx("h4", { className: "font-display text-2xl text-white", children: activeColor })] }), _jsx("span", { className: "h-12 w-12 rounded-[16px] border-[3px] border-white/18 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]", style: { backgroundColor: activeColor }, "aria-hidden": "true" })] }), _jsxs("div", { className: "mt-4 flex flex-wrap items-center gap-3", children: [_jsx(Input, { type: "color", value: activeColor, onChange: (event) => applyActiveColor(event.target.value), className: "h-14 w-24 cursor-pointer p-1" }), _jsx(Input, { value: colorDraft, onChange: (event) => handleColorDraftChange(event.target.value), onBlur: handleColorDraftBlur, className: "h-14 min-w-[148px] flex-1 text-base" })] }), _jsx("div", { className: "mt-4 grid grid-cols-6 gap-2", children: colorPresets.map((color) => (_jsx("button", { type: "button", className: cn('h-10 rounded-[12px] border-[3px] transition', activeColor === color
+                                                    ? 'border-white scale-[1.04] shadow-[0_0_0_1px_rgba(255,255,255,0.2)]'
+                                                    : shouldUseContrastStroke(color)
+                                                        ? 'border-white/20 hover:border-white/42'
+                                                        : 'border-[#0f1b31] hover:border-white/18'), style: { backgroundColor: color }, onClick: () => applyActiveColor(color), "aria-label": `Use ${color}`, title: color }, color))) }), _jsx("p", { className: "mt-3 text-sm leading-7 text-white/68", children: "`Alt + click` or the Picker tool samples a visible pixel and jumps straight back to Brush. The swatch rack now exposes the full editor palette, and the browser picker / hex field still allow any custom color." })] }), _jsxs("div", { className: "rounded-[26px] border-[4px] border-[#0f1b31] bg-[#101a30] px-5 py-5", children: [_jsxs("div", { className: "flex items-center justify-between gap-3", children: [_jsxs("div", { children: [_jsx("p", { className: "arcade-eyebrow", children: "Selection" }), _jsx("h4", { className: "font-display text-2xl text-white", children: hasSelection ? `${selectedCellCount} Cells` : 'No Box Yet' })] }), _jsx(Badge, { tone: hasSelection ? 'accent' : 'default', children: hasSelection ? 'Ready' : 'Idle' })] }), _jsx("p", { className: "mt-3 text-sm leading-7 text-white/72", children: "Use Select, hold `Shift` while dragging, or right-drag if you prefer the old flow. Clicking inside an existing selection applies Brush or Eraser to the whole box." }), _jsxs("div", { className: "mt-4 grid gap-2", children: [_jsx(Button, { variant: "primary", onClick: () => handleApplySelectionTool('paint'), disabled: !hasSelection, children: "Paint Selection" }), _jsx(Button, { variant: "danger", onClick: () => handleApplySelectionTool('erase'), disabled: !hasSelection, children: "Erase Selection" }), _jsx(Button, { variant: "ghost", onClick: () => handleSelectionChange(null), disabled: !hasSelection, children: "Clear Selection" })] })] }), _jsxs("div", { className: "rounded-[26px] border-[4px] border-[#0f1b31] bg-[#101a30] px-5 py-5", children: [_jsx("p", { className: "arcade-eyebrow", children: "Quick Keys" }), _jsxs("div", { className: "mt-3 space-y-2 text-sm leading-7 text-white/76", children: [_jsx("p", { children: "`B / E / F / C / V / I` switches Brush, Eraser, Fill, Circle, Select, and Picker." }), _jsx("p", { children: "`Ctrl/Cmd + Z`, `Ctrl/Cmd + Y`, and `Ctrl/Cmd + Shift + Z` handle undo and redo." }), _jsx("p", { children: "`Ctrl/Cmd + wheel`, `+`, `-`, and `0` zoom the workbench canvas without opening fullscreen." }), _jsx("p", { children: "`Delete` clears the active selection, and `Esc` clears the box or exits Select/Circle." })] })] })] }) }), _jsx(Panel, { className: "game-screen min-h-0 bg-transparent", children: _jsxs("div", { className: "space-y-5", children: [_jsxs("div", { className: "flex flex-wrap items-start justify-between gap-4", children: [_jsxs("div", { children: [_jsx("p", { className: "arcade-eyebrow", children: "Workbench" }), _jsxs("h3", { className: "font-display text-4xl text-white", children: [getPlayerModeLabel(activeMode), " Canvas"] }), _jsx("p", { className: "mt-2 max-w-3xl text-sm leading-7 text-white/72", children: "Keep the layer stack on the right, zoom directly in the main workspace, and use the hover readout to see exactly which cell and color you are over before painting or dragging out circles." })] }), _jsxs("div", { className: "flex flex-wrap gap-2", children: [_jsx(Badge, { tone: isCurrentModeDirty ? 'accent' : 'success', children: isCurrentModeDirty ? 'Unsaved Changes' : 'Saved' }), _jsx(Badge, { tone: currentLayer.visible ? 'success' : 'danger', children: currentLayer.visible ? 'Layer Visible' : 'Layer Hidden' }), _jsxs(Badge, { tone: "default", children: [currentConfig.gridCols, " x ", currentConfig.gridRows] })] })] }), _jsxs("div", { className: "grid gap-3 lg:grid-cols-[minmax(0,1fr)_300px]", children: [_jsxs("div", { className: "grid gap-3 sm:grid-cols-2 xl:grid-cols-4", children: [_jsxs("div", { className: "game-stat px-4 py-4", children: [_jsx("p", { className: "font-display text-[10px] tracking-[0.22em] text-[#ffd44a]", children: "Tool" }), _jsx("p", { className: "mt-2 font-display text-2xl text-white", children: getSkinToolLabel(tool) })] }), _jsxs("div", { className: "game-stat px-4 py-4", children: [_jsx("p", { className: "font-display text-[10px] tracking-[0.22em] text-[#ffd44a]", children: "Pixels" }), _jsx("p", { className: "mt-2 font-display text-2xl text-white", children: currentDraft.pixels.length })] }), _jsxs("div", { className: "game-stat px-4 py-4", children: [_jsx("p", { className: "font-display text-[10px] tracking-[0.22em] text-[#ffd44a]", children: "Hover Cell" }), _jsx("p", { className: "mt-2 font-display text-2xl text-white", children: currentHoverCell ? `${currentHoverCell.x + 1}, ${currentHoverCell.y + 1}` : 'Off Canvas' }), _jsx("p", { className: "mt-2 text-xs uppercase tracking-[0.16em] text-white/56", children: currentHoverCell?.selected ? 'Inside Selection' : 'Free Cell' })] }), _jsxs("div", { className: "game-stat px-4 py-4", children: [_jsx("p", { className: "font-display text-[10px] tracking-[0.22em] text-[#ffd44a]", children: "Hover Color" }), _jsxs("div", { className: "mt-2 flex items-center gap-3", children: [_jsx("span", { className: cn('h-10 w-10 rounded-[14px] border-[3px] border-white/14', currentHoverCell?.compositeColor ? '' : 'bg-[linear-gradient(135deg,#0d1324,#1b2440)]'), style: currentHoverCell?.compositeColor ? { backgroundColor: currentHoverCell.compositeColor } : undefined, "aria-hidden": "true" }), _jsxs("div", { children: [_jsx("p", { className: "font-display text-lg text-white", children: currentHoverCell?.compositeColor ?? 'Empty' }), _jsx("p", { className: "text-xs uppercase tracking-[0.16em] text-white/56", children: currentHoverCell?.activeLayerColor ? 'Active Layer Hit' : 'Visible Stack' })] })] })] })] }), _jsxs("div", { className: "rounded-[26px] border-[4px] border-[#163057] bg-[#0f1b31] px-4 py-4", children: [_jsxs("div", { className: "flex items-center justify-between gap-3", children: [_jsxs("div", { children: [_jsx("p", { className: "arcade-eyebrow", children: "Zoom" }), _jsxs("p", { className: "font-display text-3xl text-white", children: [canvasZoom.toFixed(2), "x"] })] }), _jsx(Button, { variant: "secondary", onClick: handleOpenCanvasFullscreen, children: "Fullscreen" })] }), _jsxs("div", { className: "mt-4 flex flex-wrap items-center gap-3", children: [_jsx(Button, { variant: "ghost", onClick: () => handleAdjustWorkspaceZoom(-0.2), children: "-" }), _jsx("input", { type: "range", min: MIN_SKIN_CANVAS_ZOOM, max: MAX_SKIN_CANVAS_ZOOM, step: "0.05", value: canvasZoom, onChange: (event) => handleWorkspaceZoomChange(Number(event.target.value)), className: "h-4 min-w-[180px] flex-1 accent-[#caff45]" }), _jsx(Button, { variant: "primary", onClick: () => handleAdjustWorkspaceZoom(0.2), children: "+" })] }), _jsxs("div", { className: "mt-4 flex flex-wrap gap-2", children: [_jsx(Button, { variant: "secondary", onClick: () => handleWorkspaceZoomChange(DEFAULT_SKIN_CANVAS_ZOOM), children: "Reset Zoom" }), _jsx(Button, { variant: "ghost", onClick: handleOpenPreview, children: "Test Level" })] }), _jsx("p", { className: "mt-3 text-sm leading-7 text-white/68", children: "`Ctrl/Cmd + wheel` zooms here too, so fullscreen is optional instead of required." })] })] }), _jsx(PlayerSkinPaintCanvas, { mode: activeMode, skinData: currentDraft, activeLayerId: currentLayer.id, tool: tool, selection: currentSelection, cellSize: canvasCellSize, containerClassName: "min-h-[56vh]", onCanvasWheel: handleWorkspaceCanvasWheel, onUseTool: handleUseTool, onApplyCircle: handleApplyCircle, onPickColor: handlePickColor, onSelectionChange: handleSelectionChange, onHoverCellChange: handleHoverCellChange, onGestureStart: handleCanvasGestureStart, onGestureEnd: handleCanvasGestureEnd }), _jsxs("div", { className: "flex flex-wrap gap-3", children: [_jsx(Button, { variant: "secondary", onClick: () => undoMode(activeMode), disabled: !canUndo, children: "Undo" }), _jsx(Button, { variant: "secondary", onClick: () => redoMode(activeMode), disabled: !canRedo, children: "Redo" }), _jsx(Button, { onClick: handleSaveMode, disabled: saveMutation.isPending, children: saveMutation.isPending ? 'Saving...' : 'Save Mode' }), _jsx(Button, { variant: "secondary", onClick: handleResetMode, disabled: !isCurrentModeDirty, children: "Reset Mode" }), _jsx(Button, { variant: "ghost", onClick: handleClearMode, children: "Use Built-In" })] }), message ? (_jsx("div", { className: "rounded-[22px] border-[3px] border-[#163057] bg-[#0f1b31] px-4 py-4 text-sm leading-7 text-white/82", children: message })) : null] }) }), _jsxs("div", { className: "space-y-4", children: [_jsx(Panel, { className: "game-screen min-h-0 bg-transparent", children: _jsxs("div", { className: "space-y-4", children: [_jsxs("div", { className: "flex items-center justify-between gap-3", children: [_jsxs("div", { children: [_jsx("p", { className: "arcade-eyebrow", children: "Layers" }), _jsx("h3", { className: "font-display text-3xl text-white", children: "Stack" })] }), _jsxs(Badge, { tone: "accent", children: [currentLayers.length, " / ", MAX_SKIN_LAYERS] })] }), _jsxs("div", { className: "rounded-[22px] border-[3px] border-[#163057] bg-[#0f1b31] px-4 py-4", children: [_jsx("p", { className: "text-xs uppercase tracking-[0.18em] text-white/56", children: "Active Layer" }), _jsxs("div", { className: "mt-2 flex items-start justify-between gap-3", children: [_jsxs("div", { children: [_jsx("p", { className: "font-display text-2xl text-white", children: currentLayer.name }), _jsxs("p", { className: "mt-1 text-sm leading-7 text-white/68", children: [currentLayer.pixels.length, " px | ", currentLayer.visible ? 'Visible in stack' : 'Hidden but still editable'] })] }), _jsx(Badge, { tone: currentLayer.visible ? 'success' : 'danger', children: currentLayer.visible ? 'Visible' : 'Hidden' })] })] }), _jsx("div", { className: "space-y-2 pr-1", children: orderedLayers.map((layer, index) => {
                                                 const isActive = layer.id === currentLayer.id;
                                                 const stackPosition = currentLayers.length - index;
                                                 return (_jsxs("div", { className: cn('flex items-center gap-2 rounded-[18px] border-[3px] px-3 py-3', isActive
@@ -1176,5 +1417,5 @@ export function AdminPlayerSkinsPage() {
                                                                         : entry),
                                                                 }));
                                                             }, children: layer.visible ? 'Hide' : 'Show' })] }, layer.id));
-                                            }) }), _jsxs("div", { className: "space-y-3", children: [_jsxs("div", { children: [_jsx(FieldLabel, { children: "Skin Name" }), _jsx(Input, { className: "h-14 text-base", value: currentDraft.name, maxLength: 64, placeholder: createDefaultPlayerSkinName(activeMode), onChange: (event) => handleRenameSkin(event.target.value) }), _jsx("p", { className: "mt-2 text-sm leading-7 text-white/66", children: "This is the published name shown when the player equips the skin in Character Select." })] }), _jsxs("div", { children: [_jsx(FieldLabel, { children: "Selected Layer Name" }), _jsx(Input, { className: "h-14 text-base", value: currentLayer.name, onChange: (event) => handleRenameLayer(event.target.value) })] }), _jsxs("div", { className: "grid gap-2 sm:grid-cols-2", children: [_jsx(Button, { variant: "primary", onClick: handleAddLayer, disabled: !canAddLayer, children: "Add Layer" }), _jsx(Button, { variant: "secondary", onClick: () => handleMoveLayer(1), disabled: activeLayerIsTop, children: "Move Up" }), _jsx(Button, { variant: "secondary", onClick: () => handleMoveLayer(-1), disabled: activeLayerIsBottom, children: "Move Down" }), _jsx(Button, { variant: "ghost", onClick: handleToggleActiveLayerVisibility, children: currentLayer.visible ? 'Hide Layer' : 'Show Layer' }), _jsx(Button, { variant: "danger", onClick: handleDeleteLayer, disabled: currentLayers.length <= 1, className: "sm:col-span-2", children: "Delete Layer" })] })] })] }) }), _jsx(Panel, { className: "game-screen bg-transparent", children: _jsxs("div", { className: "space-y-4", children: [_jsxs("div", { className: "flex items-center justify-between gap-3", children: [_jsxs("div", { children: [_jsx("p", { className: "arcade-eyebrow", children: "Preview Lab" }), _jsx("h3", { className: "font-display text-3xl text-white", children: "Live Checks" })] }), _jsxs(Badge, { tone: "accent", children: [currentDraft.pixels.length, " px"] })] }), _jsxs("div", { className: "grid gap-4 sm:grid-cols-2 xl:grid-cols-1", children: [_jsxs("div", { className: "rounded-[26px] border-[4px] border-[#0f1b31] bg-[#101a30] px-4 py-4 text-center", children: [_jsx("p", { className: "text-sm uppercase tracking-[0.18em] text-white/56", children: "Sprite" }), _jsx("div", { className: "mt-4 flex justify-center", children: _jsx(PlayerModelCanvas, { mode: activeMode, width: 220, height: 220, skinOverride: currentDraft, className: "rounded-[20px] bg-[#09101e]" }) }), _jsx("p", { className: "mt-3 text-sm leading-7 text-white/68", children: "Unsaved edits render here immediately." })] }), _jsxs("div", { className: "rounded-[26px] border-[4px] border-[#0f1b31] bg-[#101a30] px-4 py-4 text-center", children: [_jsx("p", { className: "text-sm uppercase tracking-[0.18em] text-white/56", children: "Hitbox" }), _jsx("div", { className: "mt-4 flex justify-center", children: _jsx(PlayerModelCanvas, { mode: activeMode, width: 220, height: 220, skinOverride: currentDraft, showHitboxOverlay: true, className: "rounded-[20px] bg-[#09101e]" }) }), _jsx("p", { className: "mt-3 text-sm leading-7 text-white/68", children: "Yellow is contact. Cyan dashed is the solid core." })] })] }), _jsxs("div", { className: "flex flex-wrap gap-3", children: [_jsx(Button, { onClick: handleOpenPreview, children: "Run Test Level" }), _jsx(Button, { variant: "secondary", onClick: handleOpenCanvasFullscreen, children: "Fullscreen Canvas" })] }), _jsxs("div", { className: "rounded-[22px] border-[3px] border-[#163057] bg-[#0f1b31] px-4 py-4", children: [_jsx("p", { className: "arcade-eyebrow", children: "Notes" }), _jsxs("div", { className: "mt-3 space-y-2 text-sm leading-7 text-white/76", children: [_jsx("p", { children: "Fill and erase operate on the active layer only, so the stack stays predictable." }), _jsx("p", { children: "Hidden active layers stay ghosted in the editor, which makes alignment easier while still showing intent." }), _jsx("p", { children: "The runtime preview always uses the current draft, so you can test before pressing Save." })] })] })] }) })] })] }), isCanvasFullscreenOpen ? (_jsx("div", { className: "fixed inset-0 z-[75] bg-[rgba(4,8,20,0.88)] p-4 backdrop-blur-[8px] md:p-6", role: "dialog", "aria-modal": "true", "aria-label": "Fullscreen skin canvas", onClick: () => setIsCanvasFullscreenOpen(false), children: _jsxs("div", { className: "mx-auto flex h-full w-full max-w-[1800px] flex-col rounded-[32px] border-[4px] border-[#163057] bg-[linear-gradient(180deg,rgba(43,20,80,0.98),rgba(10,17,34,0.98))] shadow-[0_30px_120px_rgba(0,0,0,0.45)]", onClick: (event) => event.stopPropagation(), children: [_jsxs("div", { className: "flex flex-wrap items-center justify-between gap-4 border-b-[3px] border-white/10 px-5 py-4 md:px-7 md:py-5", children: [_jsxs("div", { children: [_jsx("p", { className: "arcade-eyebrow", children: "Canvas Focus" }), _jsxs("h3", { className: "font-display text-3xl text-white md:text-4xl", children: [getPlayerModeLabel(activeMode), " Fullscreen Canvas"] }), _jsx("p", { className: "mt-2 text-sm leading-7 text-white/72 md:text-base", children: "Draw on the full workspace, use Select or `Shift + drag` to box-select, `Alt + click` to sample colors, and `Ctrl/Cmd + wheel` to zoom." })] }), _jsxs("div", { className: "flex flex-wrap items-center gap-3", children: [_jsxs("div", { className: "rounded-[20px] border-[3px] border-[#163057] bg-[#0e1d36] px-4 py-3 text-sm uppercase tracking-[0.16em] text-white/86", children: ["Zoom ", fullscreenCanvasZoom.toFixed(2), "x"] }), _jsx(Button, { className: "min-h-[50px] px-5 text-sm", variant: "ghost", onClick: () => handleAdjustFullscreenCanvasZoom(-0.2), children: "-" }), _jsx("input", { type: "range", min: MIN_SKIN_CANVAS_ZOOM, max: MAX_SKIN_CANVAS_ZOOM, step: "0.05", value: fullscreenCanvasZoom, onChange: (event) => handleFullscreenCanvasZoomChange(Number(event.target.value)), className: "h-4 w-[220px] accent-[#caff45]" }), _jsx(Button, { className: "min-h-[50px] px-5 text-sm", variant: "secondary", onClick: () => handleFullscreenCanvasZoomChange(DEFAULT_FULLSCREEN_SKIN_CANVAS_ZOOM), children: "Reset Zoom" }), _jsx(Button, { className: "min-h-[50px] px-5 text-sm", variant: "primary", onClick: () => handleAdjustFullscreenCanvasZoom(0.2), children: "+" }), _jsx(Button, { className: "min-h-[50px] px-5 text-sm", variant: "danger", onClick: () => setIsCanvasFullscreenOpen(false), children: "Close" })] })] }), _jsx("div", { className: "min-h-0 flex-1 px-4 pb-4 pt-4 md:px-6 md:pb-6", children: _jsx(PlayerSkinPaintCanvas, { mode: activeMode, skinData: currentDraft, activeLayerId: currentLayer.id, tool: tool, selection: currentSelection, cellSize: fullscreenCanvasCellSize, containerClassName: "h-full min-h-0 p-4 md:p-5", canvasClassName: "rounded-[22px]", onCanvasWheel: handleFullscreenCanvasWheel, onUseTool: handleUseTool, onPickColor: handlePickColor, onSelectionChange: handleSelectionChange, onHoverCellChange: handleHoverCellChange, onGestureStart: handleCanvasGestureStart, onGestureEnd: handleCanvasGestureEnd }) })] }) })) : null, isPreviewOpen ? (_jsxs("div", { className: "gd-draft-view-preview-shell", role: "dialog", "aria-modal": "true", "aria-label": "Skin preview run", children: [_jsxs("div", { className: "gd-draft-view-preview-actions", "aria-label": "Preview controls", children: [_jsx("button", { type: "button", className: "gd-draft-view-preview-action", onClick: handleOpenPreview, "aria-label": "Restart preview", title: "Restart preview", children: "Restart" }), _jsx("button", { type: "button", className: "gd-draft-view-preview-action gd-draft-view-preview-action--close", onClick: () => setIsPreviewOpen(false), "aria-label": "Close preview", title: "Close preview", children: "Close" })] }), _jsx(GameCanvas, { levelData: previewLevelData, attemptNumber: 1, runId: `skin-preview-${activeMode}-${previewRunSeed}`, autoRestartOnFail: true, fullscreen: true, className: "gd-draft-view-preview-fullscreen", playerSkinOverrides: previewSkinOverrides, onExitToMenu: () => setIsPreviewOpen(false) }, `skin-preview-${activeMode}-${previewRunSeed}`)] })) : null] }));
+                                            }) }), _jsxs("div", { className: "space-y-3", children: [_jsxs("div", { children: [_jsx(FieldLabel, { children: "Skin Name" }), _jsx(Input, { className: "h-14 text-base", value: currentDraft.name, maxLength: 64, placeholder: createDefaultPlayerSkinName(activeMode), onChange: (event) => handleRenameSkin(event.target.value) }), _jsx("p", { className: "mt-2 text-sm leading-7 text-white/66", children: "This is the published name shown when the player equips the skin in Character Select." })] }), _jsxs("div", { children: [_jsx(FieldLabel, { children: "Selected Layer Name" }), _jsx(Input, { className: "h-14 text-base", value: currentLayer.name, onChange: (event) => handleRenameLayer(event.target.value) })] }), _jsxs("div", { className: "grid gap-2 sm:grid-cols-2", children: [_jsx(Button, { variant: "primary", onClick: handleAddLayer, disabled: !canAddLayer, children: "Add Layer" }), _jsx(Button, { variant: "secondary", onClick: () => handleMoveLayer(1), disabled: activeLayerIsTop, children: "Move Up" }), _jsx(Button, { variant: "secondary", onClick: () => handleMoveLayer(-1), disabled: activeLayerIsBottom, children: "Move Down" }), _jsx(Button, { variant: "ghost", onClick: handleToggleActiveLayerVisibility, children: currentLayer.visible ? 'Hide Layer' : 'Show Layer' }), _jsx(Button, { variant: "danger", onClick: handleDeleteLayer, disabled: currentLayers.length <= 1, className: "sm:col-span-2", children: "Delete Layer" })] })] })] }) }), _jsx(Panel, { className: "game-screen bg-transparent", children: _jsxs("div", { className: "space-y-4", children: [_jsxs("div", { className: "flex items-center justify-between gap-3", children: [_jsxs("div", { children: [_jsx("p", { className: "arcade-eyebrow", children: "Preview Lab" }), _jsx("h3", { className: "font-display text-3xl text-white", children: "Live Checks" })] }), _jsxs(Badge, { tone: "accent", children: [currentDraft.pixels.length, " px"] })] }), _jsxs("div", { className: "grid gap-4 sm:grid-cols-2 xl:grid-cols-1", children: [_jsxs("div", { className: "rounded-[26px] border-[4px] border-[#0f1b31] bg-[#101a30] px-4 py-4 text-center", children: [_jsx("p", { className: "text-sm uppercase tracking-[0.18em] text-white/56", children: "Sprite" }), _jsx("div", { className: "mt-4 flex justify-center", children: _jsx(PlayerModelCanvas, { mode: activeMode, width: 220, height: 220, skinOverride: currentDraft, className: "rounded-[20px] bg-[#09101e]" }) }), _jsx("p", { className: "mt-3 text-sm leading-7 text-white/68", children: "Unsaved edits render here immediately." })] }), _jsxs("div", { className: "rounded-[26px] border-[4px] border-[#0f1b31] bg-[#101a30] px-4 py-4 text-center", children: [_jsx("p", { className: "text-sm uppercase tracking-[0.18em] text-white/56", children: "Hitbox" }), _jsx("div", { className: "mt-4 flex justify-center", children: _jsx(PlayerModelCanvas, { mode: activeMode, width: 220, height: 220, skinOverride: currentDraft, showHitboxOverlay: true, className: "rounded-[20px] bg-[#09101e]" }) }), _jsx("p", { className: "mt-3 text-sm leading-7 text-white/68", children: "Yellow is contact. Cyan dashed is the solid core." })] })] }), _jsxs("div", { className: "flex flex-wrap gap-3", children: [_jsx(Button, { onClick: handleOpenPreview, children: "Run Test Level" }), _jsx(Button, { variant: "secondary", onClick: handleOpenCanvasFullscreen, children: "Fullscreen Canvas" })] }), _jsxs("div", { className: "rounded-[22px] border-[3px] border-[#163057] bg-[#0f1b31] px-4 py-4", children: [_jsx("p", { className: "arcade-eyebrow", children: "Notes" }), _jsxs("div", { className: "mt-3 space-y-2 text-sm leading-7 text-white/76", children: [_jsx("p", { children: "Fill and erase operate on the active layer only, so the stack stays predictable." }), _jsx("p", { children: "Hidden active layers stay ghosted in the editor, which makes alignment easier while still showing intent." }), _jsx("p", { children: "The runtime preview always uses the current draft, so you can test before pressing Save." })] })] })] }) })] })] }), isCanvasFullscreenOpen ? (_jsx("div", { className: "fixed inset-0 z-[75] bg-[rgba(4,8,20,0.88)] p-4 backdrop-blur-[8px] md:p-6", role: "dialog", "aria-modal": "true", "aria-label": "Fullscreen skin canvas", onClick: () => setIsCanvasFullscreenOpen(false), children: _jsxs("div", { className: "mx-auto flex h-full w-full max-w-[1800px] flex-col rounded-[32px] border-[4px] border-[#163057] bg-[linear-gradient(180deg,rgba(43,20,80,0.98),rgba(10,17,34,0.98))] shadow-[0_30px_120px_rgba(0,0,0,0.45)]", onClick: (event) => event.stopPropagation(), children: [_jsxs("div", { className: "flex flex-wrap items-center justify-between gap-4 border-b-[3px] border-white/10 px-5 py-4 md:px-7 md:py-5", children: [_jsxs("div", { children: [_jsx("p", { className: "arcade-eyebrow", children: "Canvas Focus" }), _jsxs("h3", { className: "font-display text-3xl text-white md:text-4xl", children: [getPlayerModeLabel(activeMode), " Fullscreen Canvas"] }), _jsx("p", { className: "mt-2 text-sm leading-7 text-white/72 md:text-base", children: "Draw on the full workspace, drag Circle for rounded silhouettes, use Select or `Shift + drag` to box-select, `Alt + click` to sample colors, and `Ctrl/Cmd + wheel` to zoom." })] }), _jsxs("div", { className: "flex flex-wrap items-center gap-3", children: [_jsxs("div", { className: "rounded-[20px] border-[3px] border-[#163057] bg-[#0e1d36] px-4 py-3 text-sm uppercase tracking-[0.16em] text-white/86", children: ["Zoom ", fullscreenCanvasZoom.toFixed(2), "x"] }), _jsx(Button, { className: "min-h-[50px] px-5 text-sm", variant: "ghost", onClick: () => handleAdjustFullscreenCanvasZoom(-0.2), children: "-" }), _jsx("input", { type: "range", min: MIN_SKIN_CANVAS_ZOOM, max: MAX_SKIN_CANVAS_ZOOM, step: "0.05", value: fullscreenCanvasZoom, onChange: (event) => handleFullscreenCanvasZoomChange(Number(event.target.value)), className: "h-4 w-[220px] accent-[#caff45]" }), _jsx(Button, { className: "min-h-[50px] px-5 text-sm", variant: "secondary", onClick: () => handleFullscreenCanvasZoomChange(DEFAULT_FULLSCREEN_SKIN_CANVAS_ZOOM), children: "Reset Zoom" }), _jsx(Button, { className: "min-h-[50px] px-5 text-sm", variant: "primary", onClick: () => handleAdjustFullscreenCanvasZoom(0.2), children: "+" }), _jsx(Button, { className: "min-h-[50px] px-5 text-sm", variant: "danger", onClick: () => setIsCanvasFullscreenOpen(false), children: "Close" })] })] }), _jsx("div", { className: "min-h-0 flex-1 px-4 pb-4 pt-4 md:px-6 md:pb-6", children: _jsx(PlayerSkinPaintCanvas, { mode: activeMode, skinData: currentDraft, activeLayerId: currentLayer.id, tool: tool, selection: currentSelection, cellSize: fullscreenCanvasCellSize, containerClassName: "h-full min-h-0 p-4 md:p-5", canvasClassName: "rounded-[22px]", onCanvasWheel: handleFullscreenCanvasWheel, onUseTool: handleUseTool, onApplyCircle: handleApplyCircle, onPickColor: handlePickColor, onSelectionChange: handleSelectionChange, onHoverCellChange: handleHoverCellChange, onGestureStart: handleCanvasGestureStart, onGestureEnd: handleCanvasGestureEnd }) })] }) })) : null, isPreviewOpen ? (_jsxs("div", { className: "gd-draft-view-preview-shell", role: "dialog", "aria-modal": "true", "aria-label": "Skin preview run", children: [_jsxs("div", { className: "gd-draft-view-preview-actions", "aria-label": "Preview controls", children: [_jsx("button", { type: "button", className: "gd-draft-view-preview-action", onClick: handleOpenPreview, "aria-label": "Restart preview", title: "Restart preview", children: "Restart" }), _jsx("button", { type: "button", className: "gd-draft-view-preview-action gd-draft-view-preview-action--close", onClick: () => setIsPreviewOpen(false), "aria-label": "Close preview", title: "Close preview", children: "Close" })] }), _jsx(GameCanvas, { levelData: previewLevelData, attemptNumber: 1, runId: `skin-preview-${activeMode}-${previewRunSeed}`, autoRestartOnFail: true, fullscreen: true, className: "gd-draft-view-preview-fullscreen", playerSkinOverrides: previewSkinOverrides, onExitToMenu: () => setIsPreviewOpen(false) }, `skin-preview-${activeMode}-${previewRunSeed}`)] })) : null] }));
 }

@@ -26,7 +26,7 @@ import { apiRequest } from '../services/api';
 import type { LevelData, PlayerMode, PlayerSkinData, PlayerSkinLayer, PlayerSkinRecord } from '../types/models';
 import { cn } from '../utils/cn';
 
-type SkinTool = 'paint' | 'erase' | 'fill' | 'select' | 'pick';
+type SkinTool = 'paint' | 'erase' | 'fill' | 'circle' | 'select' | 'pick';
 
 type SkinHistoryState = {
   past: PlayerSkinData[];
@@ -56,7 +56,6 @@ type SkinHoverCell = {
   selected: boolean;
 };
 
-const colorPresets = ['#F4F7FF', '#182133', '#FFD44A', '#63FFBD', '#79F7FF', '#FF6B9E', '#FF8F3D', '#845CFF'];
 const playerModes: PlayerMode[] = ['cube', 'ball', 'ship', 'arrow'];
 const MAX_SKIN_LAYERS = 32;
 const MAX_HISTORY_STEPS = 120;
@@ -66,6 +65,9 @@ const MAX_SKIN_CANVAS_ZOOM = 4;
 const DEFAULT_SKIN_CANVAS_ZOOM = 1.6;
 const DEFAULT_FULLSCREEN_SKIN_CANVAS_ZOOM = 2.25;
 const PLAYER_SKIN_DRAFTS_STORAGE_KEY = 'dashforge-player-skin-studio-drafts-v1';
+const SKIN_CANVAS_BASE_COLOR = '#10192f';
+const SKIN_CANVAS_CHECKER_COLOR = 'rgba(255,255,255,0.05)';
+const SKIN_CANVAS_CONTRAST_STROKE = 'rgba(244,247,255,0.34)';
 const skinToolOptions: Array<{
   tool: SkinTool;
   label: string;
@@ -95,6 +97,13 @@ const skinToolOptions: Array<{
     activeVariant: 'secondary',
   },
   {
+    tool: 'circle',
+    label: 'Circle',
+    hotkey: 'C',
+    description: 'Drag out a filled circle or ellipse on the active layer.',
+    activeVariant: 'secondary',
+  },
+  {
     tool: 'select',
     label: 'Select',
     hotkey: 'V',
@@ -114,8 +123,94 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
+function hslToHex(hue: number, saturation: number, lightness: number) {
+  const normalizedHue = ((hue % 360) + 360) % 360;
+  const normalizedSaturation = clamp(saturation, 0, 100) / 100;
+  const normalizedLightness = clamp(lightness, 0, 100) / 100;
+  const chroma = (1 - Math.abs(2 * normalizedLightness - 1)) * normalizedSaturation;
+  const hueSection = normalizedHue / 60;
+  const match = normalizedLightness - chroma / 2;
+  const secondary = chroma * (1 - Math.abs((hueSection % 2) - 1));
+
+  let red = 0;
+  let green = 0;
+  let blue = 0;
+
+  if (hueSection >= 0 && hueSection < 1) {
+    red = chroma;
+    green = secondary;
+  } else if (hueSection < 2) {
+    red = secondary;
+    green = chroma;
+  } else if (hueSection < 3) {
+    green = chroma;
+    blue = secondary;
+  } else if (hueSection < 4) {
+    green = secondary;
+    blue = chroma;
+  } else if (hueSection < 5) {
+    red = secondary;
+    blue = chroma;
+  } else {
+    red = chroma;
+    blue = secondary;
+  }
+
+  const toHex = (channel: number) =>
+    Math.round((channel + match) * 255)
+      .toString(16)
+      .padStart(2, '0')
+      .toUpperCase();
+
+  return `#${toHex(red)}${toHex(green)}${toHex(blue)}`;
+}
+
+function buildSkinColorPalette() {
+  const grayscale = ['#FFFFFF', '#EFF3FA', '#D2DBEA', '#AAB7D0', '#76839F', '#4A5670', '#2A344D', '#182133', '#090D16'];
+  const paletteRows = [
+    { saturation: 92, lightness: 72 },
+    { saturation: 90, lightness: 58 },
+    { saturation: 84, lightness: 46 },
+    { saturation: 78, lightness: 34 },
+  ];
+  const hues = [0, 16, 28, 42, 56, 78, 110, 146, 176, 204, 228, 254, 282, 316];
+
+  return Array.from(
+    new Set([
+      ...grayscale,
+      ...paletteRows.flatMap((row) => hues.map((hue) => hslToHex(hue, row.saturation, row.lightness))),
+    ]),
+  );
+}
+
+const colorPresets = buildSkinColorPalette();
+
 function isHexColor(value: string) {
   return /^#[0-9A-F]{6}$/.test(value.trim().toUpperCase());
+}
+
+function getHexColorLuminance(value: string) {
+  const normalized = value.trim().toUpperCase();
+
+  if (!isHexColor(normalized)) {
+    return null;
+  }
+
+  const red = Number.parseInt(normalized.slice(1, 3), 16);
+  const green = Number.parseInt(normalized.slice(3, 5), 16);
+  const blue = Number.parseInt(normalized.slice(5, 7), 16);
+
+  return (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255;
+}
+
+function shouldUseContrastStroke(color: string) {
+  const luminance = getHexColorLuminance(color);
+
+  if (luminance === null) {
+    return false;
+  }
+
+  return luminance <= 0.18;
 }
 
 function getSkinToolLabel(tool: SkinTool) {
@@ -432,6 +527,73 @@ function applyToolToSelection(
   });
 }
 
+function getEllipseCells(selection: SkinSelection) {
+  const width = selection.right - selection.left + 1;
+  const height = selection.bottom - selection.top + 1;
+  const radiusX = width / 2;
+  const radiusY = height / 2;
+  const centerX = selection.left + radiusX - 0.5;
+  const centerY = selection.top + radiusY - 0.5;
+  const cells: Array<{ x: number; y: number }> = [];
+
+  for (let y = selection.top; y <= selection.bottom; y += 1) {
+    for (let x = selection.left; x <= selection.right; x += 1) {
+      const dx = (x - centerX) / radiusX;
+      const dy = (y - centerY) / radiusY;
+
+      if (dx * dx + dy * dy <= 1) {
+        cells.push({ x, y });
+      }
+    }
+  }
+
+  return cells;
+}
+
+function applyEllipseToLayer(
+  skinData: PlayerSkinData,
+  layerId: string,
+  selection: SkinSelection,
+  color: string | null,
+) {
+  const nextColor = color?.toUpperCase() ?? null;
+  const ellipseCells = getEllipseCells(selection);
+
+  return updateLayerPixels(skinData, layerId, (layer, pixelMap) => {
+    let changed = false;
+
+    for (const cell of ellipseCells) {
+      const key = `${cell.x}:${cell.y}`;
+      const currentColor = pixelMap.get(key)?.color ?? null;
+
+      if (currentColor === nextColor) {
+        continue;
+      }
+
+      changed = true;
+
+      if (nextColor) {
+        pixelMap.set(key, {
+          x: cell.x,
+          y: cell.y,
+          color: nextColor,
+        });
+      } else {
+        pixelMap.delete(key);
+      }
+    }
+
+    if (!changed) {
+      return null;
+    }
+
+    return {
+      ...layer,
+      pixels: Array.from(pixelMap.values()),
+    };
+  });
+}
+
 function createLayerDraft(existingLayers: PlayerSkinLayer[]) {
   let nextIndex = existingLayers.length + 1;
 
@@ -509,6 +671,40 @@ function drawSelectionOverlay(
   context.restore();
 }
 
+function drawEllipseOverlay(
+  context: CanvasRenderingContext2D,
+  selection: SkinSelection,
+  cellSize: number,
+  options: {
+    fill: string;
+    stroke: string;
+    lineDash?: number[];
+    lineWidth?: number;
+  },
+) {
+  const x = selection.left * cellSize;
+  const y = selection.top * cellSize;
+  const width = (selection.right - selection.left + 1) * cellSize;
+  const height = (selection.bottom - selection.top + 1) * cellSize;
+  const centerX = x + width / 2;
+  const centerY = y + height / 2;
+  const radiusX = Math.max(cellSize / 2, width / 2 - 1.5);
+  const radiusY = Math.max(cellSize / 2, height / 2 - 1.5);
+
+  context.save();
+  context.fillStyle = options.fill;
+  for (const cell of getEllipseCells(selection)) {
+    context.fillRect(cell.x * cellSize, cell.y * cellSize, cellSize, cellSize);
+  }
+  context.strokeStyle = options.stroke;
+  context.lineWidth = options.lineWidth ?? 3;
+  context.setLineDash(options.lineDash ?? [12, 8]);
+  context.beginPath();
+  context.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, Math.PI * 2);
+  context.stroke();
+  context.restore();
+}
+
 function PlayerSkinPaintCanvas({
   mode,
   skinData,
@@ -520,6 +716,7 @@ function PlayerSkinPaintCanvas({
   canvasClassName,
   onCanvasWheel,
   onUseTool,
+  onApplyCircle,
   onPickColor,
   onSelectionChange,
   onHoverCellChange,
@@ -536,6 +733,7 @@ function PlayerSkinPaintCanvas({
   canvasClassName?: string;
   onCanvasWheel?: (event: ReactWheelEvent<HTMLDivElement>) => void;
   onUseTool: (x: number, y: number, options?: { applySelection: boolean }) => void;
+  onApplyCircle: (selection: SkinSelection) => void;
   onPickColor: (x: number, y: number) => void;
   onSelectionChange: (selection: SkinSelection | null) => void;
   onHoverCellChange?: (cell: SkinHoverCell | null) => void;
@@ -544,8 +742,9 @@ function PlayerSkinPaintCanvas({
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [selectionDraft, setSelectionDraft] = useState<SkinSelectionDraft | null>(null);
+  const [circleDraft, setCircleDraft] = useState<SkinSelectionDraft | null>(null);
   const pointerStateRef = useRef<{
-    mode: 'paint' | 'select' | null;
+    mode: 'paint' | 'select' | 'circle' | null;
     lastCellKey: string | null;
     selectionStart: { x: number; y: number } | null;
   }>({
@@ -584,15 +783,16 @@ function PlayerSkinPaintCanvas({
     const width = skinData.gridCols * cellSize;
     const height = skinData.gridRows * cellSize;
     const normalizedSelectionDraft = selectionDraft ? normalizeSkinSelection(selectionDraft) : null;
+    const normalizedCircleDraft = circleDraft ? normalizeSkinSelection(circleDraft) : null;
 
     canvas.width = width;
     canvas.height = height;
 
     context.clearRect(0, 0, width, height);
-    context.fillStyle = '#09101e';
+    context.fillStyle = SKIN_CANVAS_BASE_COLOR;
     context.fillRect(0, 0, width, height);
 
-    context.fillStyle = 'rgba(255,255,255,0.03)';
+    context.fillStyle = SKIN_CANVAS_CHECKER_COLOR;
     for (let row = 0; row < skinData.gridRows; row += 1) {
       for (let column = 0; column < skinData.gridCols; column += 1) {
         if ((row + column) % 2 === 0) {
@@ -609,10 +809,24 @@ function PlayerSkinPaintCanvas({
       }
 
       context.globalAlpha = shouldGhostHiddenLayer ? 0.32 : 1;
+      const contrastPixels: PlayerSkinLayer['pixels'] = [];
 
       for (const pixel of layer.pixels) {
         context.fillStyle = pixel.color;
         context.fillRect(pixel.x * cellSize, pixel.y * cellSize, cellSize, cellSize);
+
+        if (shouldUseContrastStroke(pixel.color)) {
+          contrastPixels.push(pixel);
+        }
+      }
+
+      if (contrastPixels.length > 0) {
+        context.strokeStyle = SKIN_CANVAS_CONTRAST_STROKE;
+        context.lineWidth = Math.max(1, Math.min(2, cellSize * 0.08));
+
+        for (const pixel of contrastPixels) {
+          context.strokeRect(pixel.x * cellSize + 1.25, pixel.y * cellSize + 1.25, cellSize - 2.5, cellSize - 2.5);
+        }
       }
     }
 
@@ -660,6 +874,15 @@ function PlayerSkinPaintCanvas({
       });
     }
 
+    if (normalizedCircleDraft) {
+      drawEllipseOverlay(context, normalizedCircleDraft, cellSize, {
+        fill: 'rgba(255, 212, 74, 0.18)',
+        stroke: 'rgba(255, 212, 74, 0.96)',
+        lineDash: [10, 6],
+        lineWidth: 3.5,
+      });
+    }
+
     const contactLayout = getPlayerHitboxLayout(mode, 'contact');
     const solidLayout = getPlayerHitboxLayout(mode, 'solid');
     const scaleX = width / PLAYER_HITBOX_SIZE;
@@ -688,7 +911,7 @@ function PlayerSkinPaintCanvas({
     context.strokeStyle = 'rgba(255,255,255,0.2)';
     context.lineWidth = 2;
     context.strokeRect(1, 1, width - 2, height - 2);
-  }, [activeLayer, cellSize, mode, selection, selectionDraft, skinData]);
+  }, [activeLayer, cellSize, circleDraft, mode, selection, selectionDraft, skinData]);
 
   const getGridPosition = (event: React.PointerEvent<HTMLCanvasElement>, clampToBounds = false) => {
     const canvas = canvasRef.current;
@@ -748,6 +971,23 @@ function PlayerSkinPaintCanvas({
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
+  const startCircleGesture = (
+    event: React.PointerEvent<HTMLCanvasElement>,
+    position: { x: number; y: number },
+  ) => {
+    pointerStateRef.current.mode = 'circle';
+    pointerStateRef.current.lastCellKey = null;
+    pointerStateRef.current.selectionStart = position;
+    setCircleDraft({
+      startX: position.x,
+      startY: position.y,
+      endX: position.x,
+      endY: position.y,
+    });
+    emitHoverCell(position);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
   return (
     <div
       className={cn(
@@ -794,7 +1034,12 @@ function PlayerSkinPaintCanvas({
             onSelectionChange(null);
           }
 
-          const applySelection = Boolean(tool !== 'fill' && isInsideSelection);
+          if (tool === 'circle') {
+            startCircleGesture(event, position);
+            return;
+          }
+
+          const applySelection = Boolean((tool === 'paint' || tool === 'erase') && isInsideSelection);
 
           if (tool === 'fill' || applySelection) {
             onUseTool(position.x, position.y, { applySelection });
@@ -819,6 +1064,22 @@ function PlayerSkinPaintCanvas({
             }
 
             setSelectionDraft({
+              startX: pointerStateRef.current.selectionStart.x,
+              startY: pointerStateRef.current.selectionStart.y,
+              endX: position.x,
+              endY: position.y,
+            });
+            return;
+          }
+
+          if (pointerStateRef.current.mode === 'circle') {
+            const position = getGridPosition(event, true);
+
+            if (!position || !pointerStateRef.current.selectionStart) {
+              return;
+            }
+
+            setCircleDraft({
               startX: pointerStateRef.current.selectionStart.x,
               startY: pointerStateRef.current.selectionStart.y,
               endX: position.x,
@@ -863,6 +1124,33 @@ function PlayerSkinPaintCanvas({
             setSelectionDraft(null);
           }
 
+          if (pointerStateRef.current.mode === 'circle') {
+            const finalDraft =
+              (pointerStateRef.current.selectionStart && finalPosition
+                ? {
+                    startX: pointerStateRef.current.selectionStart.x,
+                    startY: pointerStateRef.current.selectionStart.y,
+                    endX: finalPosition.x,
+                    endY: finalPosition.y,
+                  }
+                : null) ??
+              circleDraft ??
+              (pointerStateRef.current.selectionStart
+                ? {
+                    startX: pointerStateRef.current.selectionStart.x,
+                    startY: pointerStateRef.current.selectionStart.y,
+                    endX: pointerStateRef.current.selectionStart.x,
+                    endY: pointerStateRef.current.selectionStart.y,
+                  }
+                : null);
+
+            if (finalDraft) {
+              onApplyCircle(normalizeSkinSelection(finalDraft));
+            }
+
+            setCircleDraft(null);
+          }
+
           if (pointerStateRef.current.mode === 'paint') {
             onGestureEnd();
           }
@@ -890,6 +1178,7 @@ function PlayerSkinPaintCanvas({
           pointerStateRef.current.lastCellKey = null;
           pointerStateRef.current.selectionStart = null;
           setSelectionDraft(null);
+          setCircleDraft(null);
 
           if (event.currentTarget.hasPointerCapture(event.pointerId)) {
             event.currentTarget.releasePointerCapture(event.pointerId);
@@ -1164,7 +1453,7 @@ export function AdminPlayerSkinsPage() {
   };
 
   const handleCanvasGestureStart = () => {
-    if (tool === 'fill' || tool === 'pick' || tool === 'select' || gestureBaseRef.current[activeMode]) {
+    if (tool === 'fill' || tool === 'pick' || tool === 'select' || tool === 'circle' || gestureBaseRef.current[activeMode]) {
       return;
     }
 
@@ -1246,7 +1535,7 @@ export function AdminPlayerSkinsPage() {
   };
 
   const handleUseTool = (x: number, y: number, options?: { applySelection: boolean }) => {
-    if (tool === 'select' || tool === 'pick') {
+    if (tool === 'select' || tool === 'pick' || tool === 'circle') {
       return;
     }
 
@@ -1278,6 +1567,10 @@ export function AdminPlayerSkinsPage() {
     }
 
     applyActiveColor(nextColor);
+  };
+
+  const handleApplyCircle = (selection: SkinSelection) => {
+    commitModeChange(activeMode, (current) => applyEllipseToLayer(current, currentLayer.id, selection, activeColor));
   };
 
   const handleHoverCellChange = (cell: SkinHoverCell | null) => {
@@ -1548,6 +1841,11 @@ export function AdminPlayerSkinsPage() {
         return;
       }
 
+      if (code === 'KeyC') {
+        setTool('circle');
+        return;
+      }
+
       if (code === 'KeyV') {
         setTool('select');
         return;
@@ -1740,14 +2038,18 @@ export function AdminPlayerSkinsPage() {
                 />
               </div>
 
-              <div className="mt-4 grid grid-cols-4 gap-2">
+              <div className="mt-4 grid grid-cols-6 gap-2">
                 {colorPresets.map((color) => (
                   <button
                     key={color}
                     type="button"
                     className={cn(
-                      'h-12 rounded-[14px] border-[3px] transition',
-                      activeColor === color ? 'border-white scale-[1.04]' : 'border-[#0f1b31]',
+                      'h-10 rounded-[12px] border-[3px] transition',
+                      activeColor === color
+                        ? 'border-white scale-[1.04] shadow-[0_0_0_1px_rgba(255,255,255,0.2)]'
+                        : shouldUseContrastStroke(color)
+                          ? 'border-white/20 hover:border-white/42'
+                          : 'border-[#0f1b31] hover:border-white/18',
                     )}
                     style={{ backgroundColor: color }}
                     onClick={() => applyActiveColor(color)}
@@ -1758,7 +2060,9 @@ export function AdminPlayerSkinsPage() {
               </div>
 
               <p className="mt-3 text-sm leading-7 text-white/68">
-                `Alt + click` or the Picker tool samples a visible pixel and jumps straight back to Brush.
+                `Alt + click` or the Picker tool samples a visible pixel and jumps straight back to Brush. The swatch
+                rack now exposes the full editor palette, and the browser picker / hex field still allow any custom
+                color.
               </p>
             </div>
 
@@ -1794,10 +2098,10 @@ export function AdminPlayerSkinsPage() {
             <div className="rounded-[26px] border-[4px] border-[#0f1b31] bg-[#101a30] px-5 py-5">
               <p className="arcade-eyebrow">Quick Keys</p>
               <div className="mt-3 space-y-2 text-sm leading-7 text-white/76">
-                <p>`B / E / F / V / I` switches Brush, Eraser, Fill, Select, and Picker.</p>
+                <p>`B / E / F / C / V / I` switches Brush, Eraser, Fill, Circle, Select, and Picker.</p>
                 <p>`Ctrl/Cmd + Z`, `Ctrl/Cmd + Y`, and `Ctrl/Cmd + Shift + Z` handle undo and redo.</p>
                 <p>`Ctrl/Cmd + wheel`, `+`, `-`, and `0` zoom the workbench canvas without opening fullscreen.</p>
-                <p>`Delete` clears the active selection, and `Esc` clears the box or exits Select.</p>
+                <p>`Delete` clears the active selection, and `Esc` clears the box or exits Select/Circle.</p>
               </div>
             </div>
           </div>
@@ -1811,7 +2115,7 @@ export function AdminPlayerSkinsPage() {
                 <h3 className="font-display text-4xl text-white">{getPlayerModeLabel(activeMode)} Canvas</h3>
                 <p className="mt-2 max-w-3xl text-sm leading-7 text-white/72">
                   Keep the layer stack on the right, zoom directly in the main workspace, and use the hover readout to
-                  see exactly which cell and color you are over before painting.
+                  see exactly which cell and color you are over before painting or dragging out circles.
                 </p>
               </div>
 
@@ -1922,6 +2226,7 @@ export function AdminPlayerSkinsPage() {
               containerClassName="min-h-[56vh]"
               onCanvasWheel={handleWorkspaceCanvasWheel}
               onUseTool={handleUseTool}
+              onApplyCircle={handleApplyCircle}
               onPickColor={handlePickColor}
               onSelectionChange={handleSelectionChange}
               onHoverCellChange={handleHoverCellChange}
@@ -2167,8 +2472,8 @@ export function AdminPlayerSkinsPage() {
                   {getPlayerModeLabel(activeMode)} Fullscreen Canvas
                 </h3>
                 <p className="mt-2 text-sm leading-7 text-white/72 md:text-base">
-                  Draw on the full workspace, use Select or `Shift + drag` to box-select, `Alt + click` to sample
-                  colors, and `Ctrl/Cmd + wheel` to zoom.
+                  Draw on the full workspace, drag Circle for rounded silhouettes, use Select or `Shift + drag` to
+                  box-select, `Alt + click` to sample colors, and `Ctrl/Cmd + wheel` to zoom.
                 </p>
               </div>
 
@@ -2212,6 +2517,7 @@ export function AdminPlayerSkinsPage() {
                 canvasClassName="rounded-[22px]"
                 onCanvasWheel={handleFullscreenCanvasWheel}
                 onUseTool={handleUseTool}
+                onApplyCircle={handleApplyCircle}
                 onPickColor={handlePickColor}
                 onSelectionChange={handleSelectionChange}
                 onHoverCellChange={handleHoverCellChange}
