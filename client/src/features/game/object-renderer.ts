@@ -103,7 +103,7 @@ export function drawStageObjectSprite({
   context.save();
   context.globalAlpha = alpha;
 
-  const normalizedRotationDegrees = normalizeQuarterRotationDegrees(object.rotation ?? 0);
+  const normalizedRotationDegrees = normalizeObjectRotationDegrees(object.rotation ?? 0);
   const normalizedRotation = normalizeRotation(normalizedRotationDegrees);
   if (normalizedRotation !== 0) {
     context.translate(x + w / 2, y + h / 2);
@@ -130,7 +130,12 @@ export function drawStageObjectSprite({
     return;
   }
 
-  if (object.type === 'JUMP_ORB' || object.type === 'BLUE_ORB' || object.type === 'GRAVITY_ORB') {
+  if (
+    object.type === 'JUMP_ORB' ||
+    object.type === 'DASH_ORB' ||
+    object.type === 'BLUE_ORB' ||
+    object.type === 'GRAVITY_ORB'
+  ) {
     drawJumpOrbSprite(
       context,
       x,
@@ -141,7 +146,13 @@ export function drawStageObjectSprite({
       strokeColor,
       isUsedOrb,
       animationTimeMs,
-      object.type === 'GRAVITY_ORB' ? 'greenGravity' : object.type === 'BLUE_ORB' ? 'blueGravity' : 'jump',
+      object.type === 'GRAVITY_ORB'
+        ? 'greenGravity'
+        : object.type === 'BLUE_ORB'
+          ? 'blueGravity'
+          : object.type === 'DASH_ORB'
+            ? 'dash'
+            : 'jump',
     );
     context.restore();
     return;
@@ -171,6 +182,7 @@ export function drawStageObjectSprite({
 
   if (
     object.type === 'MOVE_TRIGGER' ||
+    object.type === 'ROTATE_TRIGGER' ||
     object.type === 'ALPHA_TRIGGER' ||
     object.type === 'TOGGLE_TRIGGER' ||
     object.type === 'PULSE_TRIGGER' ||
@@ -193,8 +205,8 @@ export function drawStageObjectSprite({
     return;
   }
 
-  if (object.type === 'DASH_BLOCK') {
-    drawDashBlockSprite(context, x, y, w, h);
+  if (object.type === 'DASH_BLOCK' || object.type === 'S_BLOCK') {
+    drawLetterBlockSprite(context, x, y, w, h, object.type === 'DASH_BLOCK' ? 'D' : 'S');
     context.restore();
     return;
   }
@@ -504,16 +516,22 @@ function drawArrowRampSprite(
   context.stroke();
 }
 
-function drawDashBlockSprite(
+function drawLetterBlockSprite(
   context: CanvasRenderingContext2D,
   x: number,
   y: number,
   w: number,
   h: number,
+  letter: 'D' | 'S',
 ) {
   const gradient = context.createLinearGradient(x, y, x, y + h);
-  gradient.addColorStop(0, 'rgba(120, 182, 255, 0.34)');
-  gradient.addColorStop(1, 'rgba(38, 96, 187, 0.22)');
+  if (letter === 'D') {
+    gradient.addColorStop(0, 'rgba(120, 182, 255, 0.34)');
+    gradient.addColorStop(1, 'rgba(38, 96, 187, 0.22)');
+  } else {
+    gradient.addColorStop(0, 'rgba(255, 198, 107, 0.34)');
+    gradient.addColorStop(1, 'rgba(186, 88, 34, 0.24)');
+  }
   context.fillStyle = gradient;
   context.fillRect(x, y, w, h);
 
@@ -528,11 +546,11 @@ function drawDashBlockSprite(
   context.lineWidth = 1.1;
   context.strokeRect(x + 5, y + 5, Math.max(0, w - 10), Math.max(0, h - 10));
 
-  context.fillStyle = '#18345d';
+  context.fillStyle = letter === 'D' ? '#18345d' : '#5a2408';
   context.font = `${Math.max(10, Math.min(w, h) * 0.36)}px Arial Black`;
   context.textAlign = 'center';
   context.textBaseline = 'middle';
-  context.fillText('D', x + w / 2, y + h / 2 + 0.5);
+  context.fillText(letter, x + w / 2, y + h / 2 + 0.5);
 }
 
 function drawSawSprite(
@@ -674,12 +692,13 @@ function drawJumpOrbSprite(
   strokeColor: string,
   isUsedOrb: boolean,
   _animationTimeMs: number,
-  variant: 'jump' | 'blueGravity' | 'greenGravity',
+  variant: 'jump' | 'dash' | 'blueGravity' | 'greenGravity',
 ) {
   const centerX = x + w / 2;
   const centerY = y + h / 2;
   const radius = Math.max(8, Math.min(w, h) * 0.42);
   const isGravityVariant = variant === 'blueGravity' || variant === 'greenGravity';
+  const isDashVariant = variant === 'dash';
   const orbGradient = context.createLinearGradient(centerX, y + h * 0.08, centerX, y + h * 0.92);
   orbGradient.addColorStop(0, lightenColor(fillColor, isUsedOrb ? 0.18 : 0.1));
   orbGradient.addColorStop(1, darkenColor(fillColor, isUsedOrb ? 0.18 : 0.08));
@@ -700,7 +719,22 @@ function drawJumpOrbSprite(
   context.arc(centerX, centerY, radius * 0.62, 0, Math.PI * 2);
   context.stroke();
 
-  if (isGravityVariant) {
+  if (isDashVariant) {
+    context.strokeStyle = strokeColor;
+    context.lineWidth = Math.max(2, radius * 0.12);
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+    context.beginPath();
+    context.moveTo(centerX - radius * 0.36, centerY);
+    context.lineTo(centerX + radius * 0.06, centerY);
+    context.moveTo(centerX - radius * 0.02, centerY - radius * 0.22);
+    context.lineTo(centerX + radius * 0.24, centerY);
+    context.lineTo(centerX - radius * 0.02, centerY + radius * 0.22);
+    context.moveTo(centerX + radius * 0.14, centerY - radius * 0.22);
+    context.lineTo(centerX + radius * 0.4, centerY);
+    context.lineTo(centerX + radius * 0.14, centerY + radius * 0.22);
+    context.stroke();
+  } else if (isGravityVariant) {
     context.strokeStyle = strokeColor;
     context.lineWidth = Math.max(2, radius * 0.12);
     context.lineCap = 'round';
@@ -1414,6 +1448,11 @@ function drawCompactTriggerPreviewGlyph(
     drawChevronOutline(context, centerX + radius * 0.28, centerY, radius * 0.48, radius * 0.42);
     context.moveTo(centerX - radius * 0.52, centerY);
     context.lineTo(centerX + radius * 0.52, centerY);
+  } else if (type === 'ROTATE_TRIGGER') {
+    context.arc(centerX, centerY, radius * 0.42, Math.PI * 0.18, Math.PI * 1.48);
+    context.moveTo(centerX + radius * 0.14, centerY - radius * 0.5);
+    context.lineTo(centerX + radius * 0.48, centerY - radius * 0.42);
+    context.lineTo(centerX + radius * 0.3, centerY - radius * 0.1);
   } else if (type === 'ALPHA_TRIGGER') {
     context.arc(centerX, centerY, radius * 0.4, 0, Math.PI * 2);
     context.moveTo(centerX, centerY - radius * 0.58);
@@ -2189,6 +2228,10 @@ function getTriggerEditorLabelLines(object: Pick<LevelData['objects'][number], '
     return ['MOVE'];
   }
 
+  if (object.type === 'ROTATE_TRIGGER') {
+    return ['ROT'];
+  }
+
   if (object.type === 'ALPHA_TRIGGER') {
     return ['ALPHA'];
   }
@@ -2291,12 +2334,12 @@ function normalizeRotation(degrees: number) {
   return (degrees * Math.PI) / 180;
 }
 
-function normalizeQuarterRotationDegrees(degrees: number) {
+function normalizeObjectRotationDegrees(degrees: number) {
   if (!Number.isFinite(degrees)) {
     return 0;
   }
 
-  return ((Math.round(degrees / 90) * 90) % 360 + 360) % 360;
+  return ((degrees % 360) + 360) % 360;
 }
 
 function parseHexColor(hex: string) {

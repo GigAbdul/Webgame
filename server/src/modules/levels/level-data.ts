@@ -18,6 +18,7 @@ export const levelObjectTypes = [
   'ARROW_RAMP_ASC',
   'ARROW_RAMP_DESC',
   'DASH_BLOCK',
+  'S_BLOCK',
   'SPIKE',
   'SPIKE_FLAT',
   'SPIKE_SMALL',
@@ -36,6 +37,7 @@ export const levelObjectTypes = [
   'SAW_GLOW_LARGE',
   'JUMP_PAD',
   'JUMP_ORB',
+  'DASH_ORB',
   'BLUE_ORB',
   'GRAVITY_ORB',
   'GRAVITY_FLIP_PORTAL',
@@ -48,6 +50,7 @@ export const levelObjectTypes = [
   'ARROW_PORTAL',
   'FINISH_PORTAL',
   'MOVE_TRIGGER',
+  'ROTATE_TRIGGER',
   'ALPHA_TRIGGER',
   'TOGGLE_TRIGGER',
   'PULSE_TRIGGER',
@@ -133,6 +136,7 @@ export const levelObjectDefinitions: Record<
     effect:
       | 'jumpPad'
       | 'jumpOrb'
+      | 'dashOrb'
       | 'gravityOrb'
       | 'gravity'
       | 'speed'
@@ -142,6 +146,7 @@ export const levelObjectDefinitions: Record<
       | 'arrowMode'
       | 'finish'
       | 'moveTrigger'
+      | 'rotateTrigger'
       | 'alphaTrigger'
       | 'toggleTrigger'
       | 'pulseTrigger'
@@ -263,6 +268,13 @@ export const levelObjectDefinitions: Record<
   },
   DASH_BLOCK: {
     label: 'Dash Block',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: null,
+  },
+  S_BLOCK: {
+    label: 'Stop Block',
     defaultSize: { w: 1, h: 1 },
     collides: false,
     lethal: false,
@@ -394,6 +406,13 @@ export const levelObjectDefinitions: Record<
     lethal: false,
     effect: 'jumpOrb',
   },
+  DASH_ORB: {
+    label: 'Dash Orb',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: 'dashOrb',
+  },
   BLUE_ORB: {
     label: 'Blue Orb',
     defaultSize: { w: 1, h: 1 },
@@ -477,6 +496,13 @@ export const levelObjectDefinitions: Record<
     collides: false,
     lethal: false,
     effect: 'moveTrigger',
+  },
+  ROTATE_TRIGGER: {
+    label: 'Rotate Trigger',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: 'rotateTrigger',
   },
   ALPHA_TRIGGER: {
     label: 'Alpha Trigger',

@@ -33,6 +33,7 @@ import {
   ARROW_VERTICAL_SPEED_FACTOR,
   BASE_GRAVITY_ACCELERATION,
   BASE_HORIZONTAL_SPEED,
+  DASH_ORB_SPEED,
   DEFAULT_JUMP_VELOCITY,
   DEFAULT_JUMP_ORB_VELOCITY,
   PLAYER_HITBOX_SIZE,
@@ -157,7 +158,13 @@ type PlayerCollisionRect = {
   offsetY: number;
 };
 
-const orbTypes = new Set(['JUMP_ORB', 'BLUE_ORB', 'GRAVITY_ORB']);
+type DashOrbState = {
+  directionX: number;
+  directionY: number;
+  speed: number;
+};
+
+const orbTypes = new Set(['JUMP_ORB', 'DASH_ORB', 'BLUE_ORB', 'GRAVITY_ORB']);
 const portalTypes = new Set([
   'GRAVITY_FLIP_PORTAL',
   'GRAVITY_RETURN_PORTAL',
@@ -595,6 +602,28 @@ export function GameCanvas({
         startedAt: number;
         durationMs: number;
         easing: MoveTriggerEasing;
+        lockToPlayerX: boolean;
+        lockToPlayerY: boolean;
+        playerStartX: number;
+        playerStartY: number;
+      }
+    >();
+    const rotateAnimations = new Map<
+      string,
+      {
+        startCenterX: number;
+        startCenterY: number;
+        width: number;
+        height: number;
+        centerGroupId: number;
+        fallbackPivotX: number;
+        fallbackPivotY: number;
+        startRotation: number;
+        totalDegrees: number;
+        startedAt: number;
+        durationMs: number;
+        easing: MoveTriggerEasing;
+        lockObjectRotation: boolean;
       }
     >();
     let animationFrame = 0;
@@ -617,6 +646,7 @@ export function GameCanvas({
     let shakePower = 0;
     let restartTimeout = 0;
     let jumpCount = 0;
+    let dashOrbState: DashOrbState | null = null;
     let ballFlipQueuedUntilRelease = false;
     let ballGravityPortalFlipLockedUntil = 0;
 
@@ -625,6 +655,12 @@ export function GameCanvas({
 
       if (!inputHeldRef.current) {
         ballFlipQueuedUntilRelease = false;
+        if (dashOrbState) {
+          dashOrbState = null;
+          player.vy = 0;
+          player.grounded = false;
+          lastGroundedAt = -Infinity;
+        }
       }
     };
 
@@ -700,6 +736,7 @@ export function GameCanvas({
       disabledObjectIds.clear();
       pulseOverrides.clear();
       moveAnimations.clear();
+      rotateAnimations.clear();
       activePostFxEffects.length = 0;
       clearRuntimePostFx(stageElement, canvas, postFxOverlayRef.current);
     };
@@ -717,6 +754,29 @@ export function GameCanvas({
 
     const getRuntimeObject = (objectId: string) => runtimeObjectMap.get(objectId) ?? null;
     const getObjectsInPaintGroup = (groupId: number) => runtimePaintGroups.get(groupId) ?? [];
+    const getPaintGroupRotationCenter = (groupId: number, fallbackX: number, fallbackY: number) => {
+      const groupObjects = getObjectsInPaintGroup(groupId);
+
+      if (!groupObjects.length) {
+        return {
+          x: fallbackX,
+          y: fallbackY,
+        };
+      }
+
+      let totalCenterX = 0;
+      let totalCenterY = 0;
+
+      for (const object of groupObjects) {
+        totalCenterX += object.x + object.w / 2;
+        totalCenterY += object.y + object.h / 2;
+      }
+
+      return {
+        x: totalCenterX / groupObjects.length,
+        y: totalCenterY / groupObjects.length,
+      };
+    };
     const isRuntimeObjectDisabled = (object: LevelObject) => disabledObjectIds.has(object.id);
     const getRuntimeAlpha = (object: LevelObject) => clamp(alphaOverrides.get(object.id) ?? 1, 0, 1);
     const getRuntimeVisuals = (object: LevelObject) => {
@@ -763,6 +823,7 @@ export function GameCanvas({
       airborneStartedAtMs = null;
       invertedGravityFlippedAtMs = null;
       ballGravityPortalFlipLockedUntil = 0;
+      dashOrbState = null;
       player.x = previewBootstrap.startX;
       player.y = previewBootstrap.startY;
       player.vy = 0;
@@ -812,6 +873,30 @@ export function GameCanvas({
       jumpCount += 1;
     };
 
+    const stopDashOrb = () => {
+      dashOrbState = null;
+      player.vy = 0;
+      player.grounded = false;
+      lastGroundedAt = -Infinity;
+    };
+
+    const startDashOrb = (orb: LevelObject) => {
+      const angleRadians = ((Number(orb.rotation ?? 0) % 360) * Math.PI) / 180;
+      const directionX = Math.cos(angleRadians);
+      const directionY = Math.sin(angleRadians);
+      const magnitude = Math.hypot(directionX, directionY) || 1;
+      const speed = Math.max(0.5, Number(orb.props.dashSpeed ?? DASH_ORB_SPEED) || DASH_ORB_SPEED);
+
+      dashOrbState = {
+        directionX: directionX / magnitude,
+        directionY: directionY / magnitude,
+        speed,
+      };
+      player.vy = dashOrbState.directionY * dashOrbState.speed * player.speedMultiplier;
+      player.grounded = false;
+      lastGroundedAt = -Infinity;
+    };
+
     const trackAutoFinishGravityFlip = (previousGravity: number, nextGravity: number) => {
       const previousDirection = Math.sign(previousGravity || 1) || 1;
       const nextDirection = Math.sign(nextGravity || 1) || 1;
@@ -824,12 +909,14 @@ export function GameCanvas({
     };
 
     const launchPlayer = (velocity: number) => {
+      stopDashOrb();
       player.vy = velocity;
       player.grounded = false;
       lastGroundedAt = -Infinity;
     };
 
     const applyBlueOrbGravityFlip = () => {
+      stopDashOrb();
       const previousGravity = player.gravity === 0 ? 1 : player.gravity;
       const nextGravity = -previousGravity;
       trackAutoFinishGravityFlip(previousGravity, nextGravity);
@@ -839,6 +926,7 @@ export function GameCanvas({
     };
 
     const applyGreenOrbLaunch = () => {
+      stopDashOrb();
       const previousGravity = player.gravity === 0 ? 1 : player.gravity;
       const nextGravity = -previousGravity;
       const desiredVelocity = GREEN_ORB_LAUNCH_VELOCITY * Math.sign(nextGravity || 1);
@@ -856,6 +944,7 @@ export function GameCanvas({
     };
 
     const releasePlayerFromGravityPortalSurface = (nextGravity: number) => {
+      stopDashOrb();
       const direction = Math.sign(nextGravity || 1) || 1;
       player.y += GRAVITY_PORTAL_SURFACE_RELEASE_UNITS * direction;
       player.grounded = false;
@@ -1291,34 +1380,14 @@ export function GameCanvas({
       const isPaused = pauseMenuOpenRef.current && currentStatus === 'running';
 
       if (currentStatus === 'running' && !isPaused && !finishSequence) {
-        if (player.mode === 'cube' && inputHeldRef.current) {
+        if (dashOrbState && !inputHeldRef.current) {
+          stopDashOrb();
+        }
+
+        const dashOrbActive = dashOrbState !== null;
+
+        if (player.mode === 'cube' && inputHeldRef.current && !dashOrbActive) {
           jumpBufferedUntil = Math.max(jumpBufferedUntil, timestamp + JUMP_BUFFER_MS);
-        }
-
-        let movedRuntimeObjects = false;
-
-        for (const [objectId, animation] of moveAnimations) {
-          const runtimeObject = getRuntimeObject(objectId);
-
-          if (!runtimeObject) {
-            moveAnimations.delete(objectId);
-            continue;
-          }
-
-          const durationMs = Math.max(1, animation.durationMs);
-          const progress = clamp((elapsedMs - animation.startedAt) / durationMs, 0, 1);
-          const easedProgress = applyMoveTriggerEasing(progress, animation.easing);
-          runtimeObject.x = animation.startX + (animation.targetX - animation.startX) * easedProgress;
-          runtimeObject.y = animation.startY + (animation.targetY - animation.startY) * easedProgress;
-          movedRuntimeObjects = true;
-
-          if (progress >= 1) {
-            moveAnimations.delete(objectId);
-          }
-        }
-
-        if (movedRuntimeObjects) {
-          rebuildRuntimeObjectBuckets();
         }
 
         for (const [objectId, pulse] of pulseOverrides) {
@@ -1336,15 +1405,23 @@ export function GameCanvas({
         }
 
         const horizontalSpeed = BASE_HORIZONTAL_SPEED * player.speedMultiplier;
+        const dashSpeed = (dashOrbState?.speed ?? DASH_ORB_SPEED) * player.speedMultiplier;
         const previousX = player.x;
         const previousY = player.y;
         const gravityDirection = Math.sign(player.gravity || 1);
         const previousCollisionRect = getPlayerCollisionRect(player, 'contact', { x: previousX, y: previousY });
         const previousSolidCollisionRect = getPlayerCollisionRect(player, 'solid', { x: previousX, y: previousY });
 
-        player.x += horizontalSpeed * deltaSeconds;
+        if (dashOrbState) {
+          player.x += dashOrbState.directionX * dashSpeed * deltaSeconds;
+          player.vy = dashOrbState.directionY * dashSpeed;
+        } else {
+          player.x += horizontalSpeed * deltaSeconds;
+        }
 
-        if (player.mode === 'ship') {
+        if (dashOrbState) {
+          player.grounded = false;
+        } else if (player.mode === 'ship') {
           const shipAcceleration = inputHeldRef.current ? -SHIP_THRUST_ACCELERATION : SHIP_FALL_ACCELERATION;
           player.vy += shipAcceleration * gravityDirection * deltaSeconds;
           player.vy = clamp(player.vy, -SHIP_MAX_VERTICAL_SPEED, SHIP_MAX_VERTICAL_SPEED);
@@ -1379,6 +1456,74 @@ export function GameCanvas({
             player.vy = Math.min(0, player.vy);
             syncCurrentCollisionRects();
           }
+        }
+
+        let movedRuntimeObjects = false;
+
+        for (const [objectId, animation] of moveAnimations) {
+          const runtimeObject = getRuntimeObject(objectId);
+
+          if (!runtimeObject) {
+            moveAnimations.delete(objectId);
+            continue;
+          }
+
+          const durationMs = Math.max(1, animation.durationMs);
+          const progress = clamp((elapsedMs - animation.startedAt) / durationMs, 0, 1);
+          const easedProgress = applyMoveTriggerEasing(progress, animation.easing);
+          const playerOffsetX = animation.lockToPlayerX ? player.x - animation.playerStartX : 0;
+          const playerOffsetY = animation.lockToPlayerY ? player.y - animation.playerStartY : 0;
+          runtimeObject.x =
+            animation.startX + (animation.targetX - animation.startX) * easedProgress + playerOffsetX;
+          runtimeObject.y =
+            animation.startY + (animation.targetY - animation.startY) * easedProgress + playerOffsetY;
+          movedRuntimeObjects = true;
+
+          if (progress >= 1) {
+            moveAnimations.delete(objectId);
+          }
+        }
+
+        for (const [objectId, animation] of rotateAnimations) {
+          const runtimeObject = getRuntimeObject(objectId);
+
+          if (!runtimeObject) {
+            rotateAnimations.delete(objectId);
+            continue;
+          }
+
+          const durationMs = Math.max(1, animation.durationMs);
+          const progress = clamp((elapsedMs - animation.startedAt) / durationMs, 0, 1);
+          const easedProgress = applyMoveTriggerEasing(progress, animation.easing);
+          const angleDegrees = animation.totalDegrees * easedProgress;
+          const angleRadians = (angleDegrees * Math.PI) / 180;
+          const pivot = getPaintGroupRotationCenter(
+            animation.centerGroupId,
+            animation.fallbackPivotX,
+            animation.fallbackPivotY,
+          );
+          const rotatedCenter = rotatePointAroundPivot(
+            animation.startCenterX,
+            animation.startCenterY,
+            pivot.x,
+            pivot.y,
+            angleRadians,
+          );
+
+          runtimeObject.x = rotatedCenter.x - animation.width / 2;
+          runtimeObject.y = rotatedCenter.y - animation.height / 2;
+          runtimeObject.rotation = animation.lockObjectRotation
+            ? animation.startRotation
+            : animation.startRotation + angleDegrees;
+          movedRuntimeObjects = true;
+
+          if (progress >= 1) {
+            rotateAnimations.delete(objectId);
+          }
+        }
+
+        if (movedRuntimeObjects) {
+          rebuildRuntimeObjectBuckets();
         }
 
         const collisionRangeMinX = Math.min(previousCollisionRect.x, currentCollisionRect.x) - 3;
@@ -1584,7 +1729,7 @@ export function GameCanvas({
           }
         }
 
-        if (player.mode === 'cube' && currentStatus === 'running' && jumpBufferedUntil >= timestamp) {
+        if (!dashOrbState && player.mode === 'cube' && currentStatus === 'running' && jumpBufferedUntil >= timestamp) {
           const jumpVelocity = -DEFAULT_JUMP_VELOCITY * Math.sign(player.gravity || 1);
           const canGroundJump =
             player.grounded || timestamp - lastGroundedAt <= COYOTE_TIME_MS;
@@ -1598,20 +1743,28 @@ export function GameCanvas({
           }
         }
 
-        if (player.mode === 'ball' && currentStatus === 'running' && ballFlipQueuedUntilRelease && inputHeldRef.current) {
+        if (!dashOrbState && player.mode === 'ball' && currentStatus === 'running' && ballFlipQueuedUntilRelease && inputHeldRef.current) {
           if (tryImmediateBallFlip(timestamp)) {
             ballFlipQueuedUntilRelease = false;
           }
         }
 
-        if ((player.mode === 'cube' || player.mode === 'ball') && currentStatus === 'running' && orbBufferedUntil >= timestamp) {
+        if (
+          !dashOrbState &&
+          (player.mode === 'cube' || player.mode === 'ball') &&
+          currentStatus === 'running' &&
+          orbBufferedUntil >= timestamp
+        ) {
           let orb: LevelObject | null = null;
 
           for (const object of interactionObjects) {
             const canUseOrb =
               player.mode === 'ball'
-                ? object.type === 'BLUE_ORB' || object.type === 'GRAVITY_ORB'
-                : object.type === 'JUMP_ORB' || object.type === 'BLUE_ORB' || object.type === 'GRAVITY_ORB';
+                ? object.type === 'DASH_ORB' || object.type === 'BLUE_ORB' || object.type === 'GRAVITY_ORB'
+                : object.type === 'JUMP_ORB' ||
+                  object.type === 'DASH_ORB' ||
+                  object.type === 'BLUE_ORB' ||
+                  object.type === 'GRAVITY_ORB';
 
             if (!canUseOrb || isRuntimeObjectDisabled(object) || usedOrbs.has(object.id)) {
               continue;
@@ -1626,7 +1779,9 @@ export function GameCanvas({
           if (orb) {
             usedOrbs.add(orb.id);
             registerJump();
-            if (orb.type === 'BLUE_ORB') {
+            if (orb.type === 'DASH_ORB') {
+              startDashOrb(orb);
+            } else if (orb.type === 'BLUE_ORB') {
               applyBlueOrbGravityFlip();
             } else if (orb.type === 'GRAVITY_ORB') {
               applyGreenOrbLaunch();
@@ -1647,7 +1802,25 @@ export function GameCanvas({
             continue;
           }
 
-          if (object.type === 'DASH_BLOCK') {
+          if (
+            dashOrbState &&
+            object.type === 'S_BLOCK' &&
+            aabbIntersects(
+              currentCollisionRect.x,
+              currentCollisionRect.y,
+              currentCollisionRect.w,
+              currentCollisionRect.h,
+              object.x,
+              object.y,
+              object.w,
+              object.h,
+            )
+          ) {
+            stopDashOrb();
+            continue;
+          }
+
+          if (object.type === 'DASH_BLOCK' || object.type === 'S_BLOCK') {
             continue;
           }
 
@@ -1684,6 +1857,7 @@ export function GameCanvas({
               object.type === 'GRAVITY_RETURN_PORTAL' ||
               object.type === 'GRAVITY_PORTAL'
             ) {
+              stopDashOrb();
               const previousGravity = player.gravity === 0 ? 1 : player.gravity;
               const nextGravity =
                 object.type === 'GRAVITY_FLIP_PORTAL'
@@ -1707,10 +1881,12 @@ export function GameCanvas({
             }
 
             if (object.type === 'SPEED_PORTAL') {
+              stopDashOrb();
               player.speedMultiplier = Number(object.props.multiplier ?? 1.4);
             }
 
             if (object.type === 'SHIP_PORTAL') {
+              stopDashOrb();
               player.mode = 'ship';
               player.grounded = false;
               const shipLayout = getPlayerHitboxLayout('ship');
@@ -1724,12 +1900,14 @@ export function GameCanvas({
             }
 
             if (object.type === 'BALL_PORTAL') {
+              stopDashOrb();
               player.mode = 'ball';
               player.grounded = false;
               syncCurrentCollisionRects();
             }
 
             if (object.type === 'CUBE_PORTAL') {
+              stopDashOrb();
               player.mode = 'cube';
               player.grounded = false;
               player.rotation = snapCubeRotation(player.rotation);
@@ -1737,6 +1915,7 @@ export function GameCanvas({
             }
 
             if (object.type === 'ARROW_PORTAL') {
+              stopDashOrb();
               player.mode = 'arrow';
               player.grounded = false;
               player.vy =
@@ -1754,6 +1933,7 @@ export function GameCanvas({
 
             if (
               object.type === 'MOVE_TRIGGER' ||
+              object.type === 'ROTATE_TRIGGER' ||
               object.type === 'ALPHA_TRIGGER' ||
               object.type === 'TOGGLE_TRIGGER' ||
               object.type === 'PULSE_TRIGGER'
@@ -1768,6 +1948,8 @@ export function GameCanvas({
                   const moveY = Number(object.props.moveY ?? 0);
                   const durationMs = Math.max(1, Number(object.props.durationMs ?? 650));
                   const easing = getMoveTriggerEasing(object.props.easing);
+                  const lockToPlayerX = object.props.lockToPlayerX === true;
+                  const lockToPlayerY = object.props.lockToPlayerY === true;
 
                   for (const target of targetObjects) {
                     moveAnimations.set(target.id, {
@@ -1778,6 +1960,41 @@ export function GameCanvas({
                       startedAt: elapsedMs,
                       durationMs,
                       easing,
+                      lockToPlayerX,
+                      lockToPlayerY,
+                      playerStartX: player.x,
+                      playerStartY: player.y,
+                    });
+                  }
+                }
+
+                if (object.type === 'ROTATE_TRIGGER') {
+                  const degrees = Number(object.props.degrees ?? 90);
+                  const times360 = Math.max(0, Math.trunc(Number(object.props.times360 ?? 0)));
+                  const durationMs = Math.max(1, Number(object.props.durationMs ?? 650));
+                  const easing = getMoveTriggerEasing(object.props.easing);
+                  const centerGroupId = Math.max(1, Number(object.props.centerGroupId ?? targetGroupId));
+                  const lockObjectRotation = object.props.lockObjectRotation === true;
+                  const extraTurnsDirection = degrees < 0 ? -1 : 1;
+                  const totalDegrees = degrees + times360 * 360 * extraTurnsDirection;
+                  const fallbackPivotX = object.x + object.w / 2;
+                  const fallbackPivotY = object.y + object.h / 2;
+
+                  for (const target of targetObjects) {
+                    rotateAnimations.set(target.id, {
+                      startCenterX: target.x + target.w / 2,
+                      startCenterY: target.y + target.h / 2,
+                      width: target.w,
+                      height: target.h,
+                      centerGroupId,
+                      fallbackPivotX,
+                      fallbackPivotY,
+                      startRotation: Number(target.rotation ?? 0),
+                      totalDegrees,
+                      startedAt: elapsedMs,
+                      durationMs,
+                      easing,
+                      lockObjectRotation,
                     });
                   }
                 }
@@ -1905,7 +2122,9 @@ export function GameCanvas({
             }
           }
 
-          if (player.mode === 'ship') {
+          if (dashOrbState) {
+            player.rotation = Math.atan2(dashOrbState.directionY, dashOrbState.directionX);
+          } else if (player.mode === 'ship') {
             const targetRotation = clamp(player.vy * 0.07, -0.58, 0.58);
             player.rotation += (targetRotation - player.rotation) * Math.min(1, deltaSeconds * 10);
           } else if (player.mode === 'arrow') {
@@ -2460,7 +2679,12 @@ function drawObject(
     triggerGuideBottom?: number;
   },
 ) {
-  if (object.type === 'DASH_BLOCK' || object.type === 'START_MARKER' || object.type === 'START_POS') {
+  if (
+    object.type === 'DASH_BLOCK' ||
+    object.type === 'S_BLOCK' ||
+    object.type === 'START_MARKER' ||
+    object.type === 'START_POS'
+  ) {
     return;
   }
 
@@ -2555,7 +2779,12 @@ function drawRuntimeHitboxes(
   );
 
   for (const object of objects) {
-    if (object.type === 'DASH_BLOCK' || object.type === 'START_MARKER' || object.type === 'START_POS') {
+    if (
+      object.type === 'DASH_BLOCK' ||
+      object.type === 'S_BLOCK' ||
+      object.type === 'START_MARKER' ||
+      object.type === 'START_POS'
+    ) {
       continue;
     }
 
@@ -3029,6 +3258,18 @@ function applyMoveTriggerEasing(progress: number, easing: MoveTriggerEasing) {
     default:
       return clampedProgress;
   }
+}
+
+function rotatePointAroundPivot(pointX: number, pointY: number, pivotX: number, pivotY: number, angleRadians: number) {
+  const offsetX = pointX - pivotX;
+  const offsetY = pointY - pivotY;
+  const cos = Math.cos(angleRadians);
+  const sin = Math.sin(angleRadians);
+
+  return {
+    x: pivotX + offsetX * cos - offsetY * sin,
+    y: pivotY + offsetX * sin + offsetY * cos,
+  };
 }
 
 function getRuntimeFxColor(value: unknown, fallback: string) {

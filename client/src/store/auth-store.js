@@ -9,22 +9,40 @@ function readStoredAuth() {
         return { token: null, user: null };
     }
     try {
-        return JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        if (!parsed.token || !parsed.user) {
+            return { token: null, user: null };
+        }
+        return parsed;
     }
     catch {
         return { token: null, user: null };
     }
 }
 const initialAuth = readStoredAuth();
-export const useAuthStore = create((set) => ({
+const hasStoredSession = Boolean(initialAuth.token && initialAuth.user);
+export const useAuthStore = create((set, get) => ({
     token: initialAuth.token,
     user: initialAuth.user,
+    isAuthResolved: !hasStoredSession,
     setAuth: (token, user) => {
         window.localStorage.setItem(storageKey, JSON.stringify({ token, user }));
-        set({ token, user });
+        set({ token, user, isAuthResolved: true });
+    },
+    syncAuthUser: (user) => {
+        const token = get().token;
+        if (!token) {
+            set({ user: null, isAuthResolved: true });
+            return;
+        }
+        window.localStorage.setItem(storageKey, JSON.stringify({ token, user }));
+        set({ user, isAuthResolved: true });
+    },
+    markAuthResolved: () => {
+        set({ isAuthResolved: true });
     },
     clearAuth: () => {
         window.localStorage.removeItem(storageKey);
-        set({ token: null, user: null });
+        set({ token: null, user: null, isAuthResolved: true });
     },
 }));

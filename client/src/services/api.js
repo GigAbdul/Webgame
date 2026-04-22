@@ -45,11 +45,18 @@ function createApiClientError(statusCode, rawText) {
     const payload = parseApiPayload(rawText);
     return new ApiClientError(statusCode, typeof payload.message === 'string' ? payload.message : 'Request failed', payload.details);
 }
+function shouldClearStoredAuthOnUnauthorized(path, statusCode, hasAuthToken) {
+    if (statusCode !== 401 || !hasAuthToken) {
+        return false;
+    }
+    return path !== '/api/auth/login' && path !== '/api/auth/register';
+}
 function requestViaXhrWithProgress(path, init, headers) {
     return new Promise((resolve, reject) => {
         const request = new XMLHttpRequest();
         const method = init.method ?? 'GET';
         const totalBytes = getRequestBodySize(init.body);
+        const hasAuthToken = Boolean(useAuthStore.getState().token);
         let removeAbortListener = () => { };
         const emitProgress = (loaded, total) => {
             const percent = total === 0 ? 100 : total ? Math.min(100, Math.round((loaded / total) * 100)) : null;
@@ -91,6 +98,9 @@ function requestViaXhrWithProgress(path, init, headers) {
                 resolve(parseApiPayload(request.responseText ?? ''));
                 return;
             }
+            if (shouldClearStoredAuthOnUnauthorized(path, request.status, hasAuthToken)) {
+                useAuthStore.getState().clearAuth();
+            }
             reject(createApiClientError(request.status, request.responseText ?? ''));
         };
         request.send(init.body ?? null);
@@ -115,6 +125,9 @@ export async function apiRequest(path, init = {}) {
     const rawText = await response.text();
     const payload = parseApiPayload(rawText);
     if (!response.ok) {
+        if (shouldClearStoredAuthOnUnauthorized(path, response.status, Boolean(token))) {
+            useAuthStore.getState().clearAuth();
+        }
         throw createApiClientError(response.status, rawText);
     }
     return payload;

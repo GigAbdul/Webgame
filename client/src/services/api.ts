@@ -73,11 +73,20 @@ function createApiClientError(statusCode: number, rawText: string) {
   );
 }
 
+function shouldClearStoredAuthOnUnauthorized(path: string, statusCode: number, hasAuthToken: boolean) {
+  if (statusCode !== 401 || !hasAuthToken) {
+    return false;
+  }
+
+  return path !== '/api/auth/login' && path !== '/api/auth/register';
+}
+
 function requestViaXhrWithProgress<T>(path: string, init: ApiRequestInit, headers: Headers) {
   return new Promise<T>((resolve, reject) => {
     const request = new XMLHttpRequest();
     const method = init.method ?? 'GET';
     const totalBytes = getRequestBodySize(init.body);
+    const hasAuthToken = Boolean(useAuthStore.getState().token);
     let removeAbortListener = () => {};
 
     const emitProgress = (loaded: number, total: number | null) => {
@@ -130,6 +139,10 @@ function requestViaXhrWithProgress<T>(path: string, init: ApiRequestInit, header
         return;
       }
 
+      if (shouldClearStoredAuthOnUnauthorized(path, request.status, hasAuthToken)) {
+        useAuthStore.getState().clearAuth();
+      }
+
       reject(createApiClientError(request.status, request.responseText ?? ''));
     };
 
@@ -162,6 +175,10 @@ export async function apiRequest<T>(path: string, init: ApiRequestInit = {}) {
   const payload = parseApiPayload(rawText);
 
   if (!response.ok) {
+    if (shouldClearStoredAuthOnUnauthorized(path, response.status, Boolean(token))) {
+      useAuthStore.getState().clearAuth();
+    }
+
     throw createApiClientError(response.status, rawText);
   }
 

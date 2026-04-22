@@ -1,7 +1,8 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams } from 'react-router-dom';
 import { LevelEditor } from '../features/editor/level-editor';
+import { readLocalEditorDraft } from '../features/editor/local-draft-storage';
 import { apiRequest, type ApiUploadProgress } from '../services/api';
 import { useAuthStore } from '../store/auth-store';
 import type { Level } from '../types/models';
@@ -12,6 +13,7 @@ export function EditorPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const user = useAuthStore((state) => state.user);
+  const [forceLocalDraftMode, setForceLocalDraftMode] = useState(false);
 
   const levelQuery = useQuery({
     queryKey: ['level-editor', id],
@@ -61,6 +63,13 @@ export function EditorPage() {
     };
   }, []);
 
+  useEffect(() => {
+    setForceLocalDraftMode(false);
+  }, [id]);
+
+  const localDraft = useMemo(() => (id ? readLocalEditorDraft(id) : null), [id]);
+  const hasLocalDraft = Boolean(localDraft);
+
   if (id && levelQuery.isLoading) {
     return (
       <ViewportFit className="viewport-fit-frame--editor">
@@ -79,7 +88,50 @@ export function EditorPage() {
     );
   }
 
-  const level = levelQuery.data?.level ?? null;
+  if (id && levelQuery.isError && !forceLocalDraftMode) {
+    const errorMessage = levelQuery.error instanceof Error ? levelQuery.error.message : 'Failed to load the editor.';
+
+    return (
+      <ViewportFit className="viewport-fit-frame--editor">
+        <div className="editor-page-shell">
+          <div className="editor-page-loading-screen">
+            <div className="play-screen-loading-card">
+              <p className="play-screen-loading-kicker">Editor Error</p>
+              <p>We couldn't load this level into the editor.</p>
+              <p className="text-sm text-white/70">{errorMessage}</p>
+              <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
+                <button
+                  type="button"
+                  className="arcade-button bg-cyan-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-cyan-200"
+                  onClick={() => void levelQuery.refetch()}
+                >
+                  Retry
+                </button>
+                {hasLocalDraft ? (
+                  <button
+                    type="button"
+                    className="arcade-button bg-white/12 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/18"
+                    onClick={() => setForceLocalDraftMode(true)}
+                  >
+                    Open Local Draft
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="arcade-button bg-white/12 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/18"
+                  onClick={() => navigate('/my-levels')}
+                >
+                  Back
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </ViewportFit>
+    );
+  }
+
+  const level = forceLocalDraftMode ? null : (levelQuery.data?.level ?? null);
   const handleCloseEditor = () => {
     if (window.history.length > 1) {
       navigate(-1);

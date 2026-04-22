@@ -152,6 +152,15 @@ export const levelObjectDefinitions = {
         lethal: false,
         effect: null,
     },
+    S_BLOCK: {
+        label: 'Stop Block',
+        color: '#ffb347',
+        strokeColor: '#41230c',
+        defaultSize: { w: 1, h: 1 },
+        collides: false,
+        lethal: false,
+        effect: null,
+    },
     SPIKE: {
         label: 'Spike',
         color: '#000000',
@@ -314,6 +323,15 @@ export const levelObjectDefinitions = {
         lethal: false,
         effect: 'jumpOrb',
     },
+    DASH_ORB: {
+        label: 'Dash Orb',
+        color: '#ff58d6',
+        strokeColor: '#ffffff',
+        defaultSize: { w: 1, h: 1 },
+        collides: false,
+        lethal: false,
+        effect: 'dashOrb',
+    },
     BLUE_ORB: {
         label: 'Blue Orb',
         color: '#60f55a',
@@ -421,6 +439,15 @@ export const levelObjectDefinitions = {
         collides: false,
         lethal: false,
         effect: 'moveTrigger',
+    },
+    ROTATE_TRIGGER: {
+        label: 'Rotate Trigger',
+        color: '#45e3a1',
+        strokeColor: '#ffffff',
+        defaultSize: { w: 1, h: 1 },
+        collides: false,
+        lethal: false,
+        effect: 'rotateTrigger',
     },
     ALPHA_TRIGGER: {
         label: 'Alpha Trigger',
@@ -725,6 +752,7 @@ export const decorationObjectTypes = [
 ];
 const triggerObjectTypes = new Set([
     'MOVE_TRIGGER',
+    'ROTATE_TRIGGER',
     'ALPHA_TRIGGER',
     'TOGGLE_TRIGGER',
     'PULSE_TRIGGER',

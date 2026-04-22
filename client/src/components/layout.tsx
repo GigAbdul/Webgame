@@ -17,7 +17,12 @@ const signedInNavigation = [
 
 export function AppLayout() {
   const location = useLocation();
-  const { user, clearAuth } = useAuthStore();
+  const token = useAuthStore((state) => state.token);
+  const user = useAuthStore((state) => state.user);
+  const isAuthResolved = useAuthStore((state) => state.isAuthResolved);
+  const clearAuth = useAuthStore((state) => state.clearAuth);
+  const showAuthenticatedUi = Boolean(user && isAuthResolved);
+  const showGuestUi = !token || isAuthResolved;
   const isHomeRoute = location.pathname === '/';
   const isWorkshopDetailRoute = location.pathname.startsWith('/my-levels/');
   const isSkinStudioRoute = location.pathname === '/admin/player-skins';
@@ -73,21 +78,21 @@ export function AppLayout() {
             <div className="app-home-toolbar">
               <div className="app-corner-chip">Arcade Title Screen</div>
               <div className="flex flex-wrap items-center gap-3">
-                {user ? (
+                {showAuthenticatedUi ? (
                   <>
                     <NavLink to="/profile" className="app-user-card">
                       <span className="app-user-label">Pilot</span>
-                      <span className="app-user-name">{user.username}</span>
+                      <span className="app-user-name">{user!.username}</span>
                     </NavLink>
                     <div className="app-star-card">
                       <span className="app-user-label">Stars</span>
-                      <span className="app-user-name">{user.totalStars}</span>
+                      <span className="app-user-name">{user!.totalStars}</span>
                     </div>
                     <Button variant="ghost" onClick={() => clearAuth()}>
                       Log Out
                     </Button>
                   </>
-                ) : (
+                ) : showGuestUi ? (
                   <>
                     <NavLink to="/login">
                       <Button variant="ghost">Login</Button>
@@ -96,7 +101,7 @@ export function AppLayout() {
                       <Button>Register</Button>
                     </NavLink>
                   </>
-                )}
+                ) : null}
               </div>
             </div>
           ) : (
@@ -123,21 +128,21 @@ export function AppLayout() {
                   </div>
 
                   <div className="app-toolbar-group">
-                    {user ? (
+                    {showAuthenticatedUi ? (
                       <>
                         <NavLink to="/profile" className="app-user-card">
                           <span className="app-user-label">Pilot</span>
-                          <span className="app-user-name">{user.username}</span>
+                          <span className="app-user-name">{user!.username}</span>
                         </NavLink>
                         <div className="app-star-card">
                           <span className="app-user-label">Stars</span>
-                          <span className="app-user-name">{user.totalStars}</span>
+                          <span className="app-user-name">{user!.totalStars}</span>
                         </div>
                         <Button variant="ghost" onClick={() => clearAuth()}>
                           Log Out
                         </Button>
                       </>
-                    ) : (
+                    ) : showGuestUi ? (
                       <>
                         <NavLink to="/login">
                           <Button variant="ghost">Login</Button>
@@ -146,7 +151,7 @@ export function AppLayout() {
                           <Button>Register</Button>
                         </NavLink>
                       </>
-                    )}
+                    ) : null}
                   </div>
                 </div>
               </div>
@@ -161,7 +166,7 @@ export function AppLayout() {
                     </NavLink>
                   ))}
 
-                  {user
+                  {showAuthenticatedUi
                     ? signedInNavigation.map((item) => (
                         <NavLink key={item.to} to={item.to} className={({ isActive }) => getNavClass(isActive)}>
                           {item.label}
@@ -169,7 +174,7 @@ export function AppLayout() {
                       ))
                     : null}
 
-                  {user?.role === 'ADMIN' ? (
+                  {showAuthenticatedUi && user?.role === 'ADMIN' ? (
                     <NavLink to="/admin" className={({ isActive }) => getNavClass(isActive)}>
                       Admin
                     </NavLink>

@@ -5,7 +5,12 @@ import { ViewportFit } from './viewport-fit';
 
 export function ArcadeScreenLayout() {
   const location = useLocation();
-  const { user, clearAuth } = useAuthStore();
+  const token = useAuthStore((state) => state.token);
+  const user = useAuthStore((state) => state.user);
+  const isAuthResolved = useAuthStore((state) => state.isAuthResolved);
+  const clearAuth = useAuthStore((state) => state.clearAuth);
+  const showAuthenticatedUi = Boolean(user && isAuthResolved);
+  const showGuestUi = !token || isAuthResolved;
   const isHomeRoute = location.pathname === '/';
   const routeMode = location.pathname.startsWith('/editor')
     ? 'Forge Mode'
@@ -57,17 +62,17 @@ export function ArcadeScreenLayout() {
                     </NavLink>
                   )}
 
-                  {user ? (
+                  {showAuthenticatedUi ? (
                     <>
                       <NavLink to="/profile" className="app-user-card">
                         <span className="app-user-label">Pilot</span>
-                        <span className="app-user-name">{user.username}</span>
+                        <span className="app-user-name">{user!.username}</span>
                       </NavLink>
                       <Button variant="ghost" onClick={() => clearAuth()}>
                         Log Out
                       </Button>
                     </>
-                  ) : (
+                  ) : showGuestUi ? (
                     <>
                       <NavLink to="/login">
                         <Button variant="ghost">Login</Button>
@@ -76,7 +81,7 @@ export function ArcadeScreenLayout() {
                         <Button>Register</Button>
                       </NavLink>
                     </>
-                  )}
+                  ) : null}
                 </div>
               </div>
             </div>

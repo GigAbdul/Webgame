@@ -19,6 +19,7 @@ export const levelObjectDefinitions: Record<
     effect:
       | 'jumpPad'
       | 'jumpOrb'
+      | 'dashOrb'
       | 'gravityOrb'
       | 'gravity'
       | 'speed'
@@ -28,6 +29,7 @@ export const levelObjectDefinitions: Record<
       | 'arrowMode'
       | 'finish'
       | 'moveTrigger'
+      | 'rotateTrigger'
       | 'alphaTrigger'
       | 'toggleTrigger'
       | 'pulseTrigger'
@@ -183,6 +185,15 @@ export const levelObjectDefinitions: Record<
     label: 'Dash Block',
     color: '#6ff9ff',
     strokeColor: '#0f1b31',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: null,
+  },
+  S_BLOCK: {
+    label: 'Stop Block',
+    color: '#ffb347',
+    strokeColor: '#41230c',
     defaultSize: { w: 1, h: 1 },
     collides: false,
     lethal: false,
@@ -350,6 +361,15 @@ export const levelObjectDefinitions: Record<
     lethal: false,
     effect: 'jumpOrb',
   },
+  DASH_ORB: {
+    label: 'Dash Orb',
+    color: '#ff58d6',
+    strokeColor: '#ffffff',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: 'dashOrb',
+  },
   BLUE_ORB: {
     label: 'Blue Orb',
     color: '#60f55a',
@@ -457,6 +477,15 @@ export const levelObjectDefinitions: Record<
     collides: false,
     lethal: false,
     effect: 'moveTrigger',
+  },
+  ROTATE_TRIGGER: {
+    label: 'Rotate Trigger',
+    color: '#45e3a1',
+    strokeColor: '#ffffff',
+    defaultSize: { w: 1, h: 1 },
+    collides: false,
+    lethal: false,
+    effect: 'rotateTrigger',
   },
   ALPHA_TRIGGER: {
     label: 'Alpha Trigger',
@@ -775,6 +804,7 @@ export const decorationObjectTypes = [
 ] as const satisfies readonly LevelObjectType[];
 const triggerObjectTypes = new Set<LevelObjectType>([
   'MOVE_TRIGGER',
+  'ROTATE_TRIGGER',
   'ALPHA_TRIGGER',
   'TOGGLE_TRIGGER',
   'PULSE_TRIGGER',

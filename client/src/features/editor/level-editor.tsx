@@ -27,7 +27,7 @@ import {
 } from '../game/object-definitions';
 import { readStoredMusicVolume, resolveLevelMusic } from '../game/level-music';
 import { drawStageObjectSprite, getStageObjectPreviewSpriteImage } from '../game/object-renderer';
-import { getPlayerHitboxLayout } from '../game/player-physics';
+import { DASH_ORB_SPEED, getPlayerHitboxLayout } from '../game/player-physics';
 import { SHIP_FLIGHT_CEILING_Y, SHIP_FLIGHT_FLOOR_Y, getPlayerModeLabel } from '../game/player-mode-config';
 import { getDefaultStageGroundColor, getStageGroundPalette, getStageThemePalette } from '../game/stage-theme-palette';
 import { readLocalEditorDraft, writeLocalEditorDraft } from './local-draft-storage';
@@ -126,6 +126,8 @@ function getTriggerSetupTitle(type: LevelObjectType) {
   switch (type) {
     case 'MOVE_TRIGGER':
       return 'Setup Move Command';
+    case 'ROTATE_TRIGGER':
+      return 'Setup Rotate Trigger';
     case 'ALPHA_TRIGGER':
       return 'Setup Alpha Trigger';
     case 'TOGGLE_TRIGGER':
@@ -140,7 +142,7 @@ function getTriggerSetupTitle(type: LevelObjectType) {
 }
 
 function getDefaultTriggerDurationMs(type: LevelObjectType) {
-  return type === 'MOVE_TRIGGER' ? 650 : 900;
+  return type === 'MOVE_TRIGGER' || type === 'ROTATE_TRIGGER' ? 650 : 900;
 }
 
 function EditorStageBackIcon() {
@@ -305,7 +307,7 @@ const moveTriggerEasingOptions: Array<{ value: MoveTriggerEasing; label: string 
   { value: 'easeInOut', label: 'Ease In Out' },
 ];
 
-const editorOrbHitboxTypes = new Set<LevelObjectType>(['JUMP_ORB', 'BLUE_ORB', 'GRAVITY_ORB']);
+const editorOrbHitboxTypes = new Set<LevelObjectType>(['JUMP_ORB', 'DASH_ORB', 'BLUE_ORB', 'GRAVITY_ORB']);
 
 const editorPortalHitboxTypes = new Set<LevelObjectType>([
   'GRAVITY_FLIP_PORTAL',
@@ -358,7 +360,7 @@ const paletteGroups: Array<{ title: string; items: EditorTool[] }> = [
       'DECOR_COMET',
     ],
   },
-  { title: 'Helpers', items: ['DASH_BLOCK'] },
+  { title: 'Helpers', items: ['DASH_BLOCK', 'S_BLOCK'] },
   {
     title: 'Obstacles',
     items: [
@@ -380,12 +382,15 @@ const paletteGroups: Array<{ title: string; items: EditorTool[] }> = [
       'SAW_GLOW_LARGE',
     ],
   },
-  { title: 'Boosts', items: ['JUMP_PAD', 'JUMP_ORB', 'BLUE_ORB', 'GRAVITY_ORB'] },
+  { title: 'Boosts', items: ['JUMP_PAD', 'JUMP_ORB', 'DASH_ORB', 'BLUE_ORB', 'GRAVITY_ORB'] },
   {
     title: 'Portals',
     items: ['GRAVITY_FLIP_PORTAL', 'GRAVITY_RETURN_PORTAL', 'SPEED_PORTAL', 'SHIP_PORTAL', 'BALL_PORTAL', 'CUBE_PORTAL', 'ARROW_PORTAL'],
   },
-  { title: 'Triggers', items: ['MOVE_TRIGGER', 'ALPHA_TRIGGER', 'TOGGLE_TRIGGER', 'PULSE_TRIGGER', 'POST_FX_TRIGGER'] },
+  {
+    title: 'Triggers',
+    items: ['MOVE_TRIGGER', 'ROTATE_TRIGGER', 'ALPHA_TRIGGER', 'TOGGLE_TRIGGER', 'PULSE_TRIGGER', 'POST_FX_TRIGGER'],
+  },
   { title: 'Preview', items: ['START_POS'] },
 ];
 
@@ -411,6 +416,7 @@ const toolDescriptions: Record<EditorTool, string> = {
   ARROW_RAMP_ASC: 'Diagonal wall for arrow routes',
   ARROW_RAMP_DESC: 'Opposite diagonal wall for arrow routes',
   DASH_BLOCK: 'Editor-only safe zone for arrow contact on floor and ceiling blocks',
+  S_BLOCK: 'Stops an active dash orb when the player reaches it',
   SPIKE: 'Primary hazard',
   SPIKE_FLAT: 'Wide low-profile spike',
   SPIKE_SMALL: 'Compact spike hazard',
@@ -429,6 +435,7 @@ const toolDescriptions: Record<EditorTool, string> = {
   SAW_GLOW_LARGE: 'Large glow saw',
   JUMP_PAD: 'Forces an upward bounce',
   JUMP_ORB: 'Mid-air extra jump',
+  DASH_ORB: 'Starts a held dash until release or until the player touches an S block',
   BLUE_ORB: 'Flips gravity without giving a jump boost',
   GRAVITY_ORB: 'Flips gravity, then launches the player in the new direction',
   GRAVITY_FLIP_PORTAL: 'Flips gravity relative to the current direction',
@@ -440,7 +447,8 @@ const toolDescriptions: Record<EditorTool, string> = {
   CUBE_PORTAL: 'Returns to cube mode',
   ARROW_PORTAL: 'Switches into arrow mode',
   FINISH_PORTAL: 'Legacy finish marker',
-  MOVE_TRIGGER: 'Moves a paint group during the run',
+  MOVE_TRIGGER: 'Moves a paint group during the run and can follow the player on X/Y',
+  ROTATE_TRIGGER: 'Rotates a paint group around a center group with GD-style timing and easing',
   ALPHA_TRIGGER: 'Changes group opacity',
   TOGGLE_TRIGGER: 'Shows or hides a group',
   PULSE_TRIGGER: 'Pulses a group color for a short burst',
@@ -610,6 +618,7 @@ function canUseDragPlacementTool(tool: EditorTool): tool is LevelObjectType {
     tool !== 'START_POS' &&
     tool !== 'FINISH_PORTAL' &&
     tool !== 'MOVE_TRIGGER' &&
+    tool !== 'ROTATE_TRIGGER' &&
     tool !== 'ALPHA_TRIGGER' &&
     tool !== 'TOGGLE_TRIGGER' &&
     tool !== 'PULSE_TRIGGER' &&
@@ -1152,7 +1161,8 @@ export function LevelEditor({
   const selectedPaintStrokeColor = paintableSelectedObject
     ? getObjectStrokeColor(paintableSelectedObject, colorGroups)
     : '#ffffff';
-  const normalizedSelectedRotation = normalizeQuarterRotation(selectedObject?.rotation ?? 0);
+  const normalizedSelectedRotation = normalizeObjectRotationDegrees(selectedObject?.rotation ?? 0);
+  const selectedRotationLabel = formatRotationDegrees(normalizedSelectedRotation);
   const activePaintTool =
     selectedTool !== 'select' && selectedTool !== 'pan' && isPaintableObjectType(selectedTool) ? selectedTool : null;
   const canOpenPaintPopup = Boolean(paintableSelectedObjects.length > 0 || activePaintTool);
@@ -2017,7 +2027,27 @@ export function LevelEditor({
     const definition = levelObjectDefinitions[type];
     const triggerDefaults: Record<string, unknown> =
       type === 'MOVE_TRIGGER'
-        ? { activationMode: 'zone', groupId: 1, moveX: 2, moveY: 0, durationMs: 650, easing: 'none' }
+        ? {
+            activationMode: 'zone',
+            groupId: 1,
+            moveX: 2,
+            moveY: 0,
+            durationMs: 650,
+            easing: 'none',
+            lockToPlayerX: false,
+            lockToPlayerY: false,
+          }
+        : type === 'ROTATE_TRIGGER'
+          ? {
+              activationMode: 'zone',
+              groupId: 1,
+              centerGroupId: 1,
+              degrees: 90,
+              times360: 0,
+              durationMs: 650,
+              easing: 'none',
+              lockObjectRotation: false,
+            }
         : type === 'ALPHA_TRIGGER'
           ? { activationMode: 'zone', groupId: 1, alpha: 0.35 }
           : type === 'TOGGLE_TRIGGER'
@@ -2036,9 +2066,11 @@ export function LevelEditor({
                     scanlineDensity: 0.45,
                     shakePower: 0.85,
                   }
-              : isSawObjectType(type)
-                ? { rotationSpeed: 240 }
-                : {};
+                : type === 'DASH_ORB'
+                  ? { dashSpeed: DASH_ORB_SPEED }
+                  : isSawObjectType(type)
+                    ? { rotationSpeed: 240 }
+                    : {};
     const object: LevelObject = {
       id: `${type.toLowerCase()}-${Date.now()}`,
       type,
@@ -2222,6 +2254,26 @@ export function LevelEditor({
     });
   };
 
+  const updateSelectedObjectRotation = (rawValue: string) => {
+    const numericValue = Number(rawValue);
+
+    if (!Number.isFinite(numericValue)) {
+      return;
+    }
+
+    const snappedValue = roundToStep(numericValue, 1);
+
+    updateSelectedObject((object) => {
+      object.rotation = normalizeObjectRotationDegrees(snappedValue);
+    });
+  };
+
+  const nudgeSelectedObjectRotation = (deltaDegrees: number) => {
+    updateSelectedObject((object) => {
+      object.rotation = normalizeObjectRotationDegrees((Number(object.rotation ?? 0) || 0) + deltaDegrees);
+    });
+  };
+
   const rotateSelectedObject = (direction: -1 | 1) => {
     if (selectedObjects.length > 1) {
       updateSelectedObjects((objects) => {
@@ -2230,11 +2282,16 @@ export function LevelEditor({
         const pivotY = (bounds.top + bounds.bottom) / 2;
 
         for (const object of objects) {
-          const previousRotation = normalizeQuarterRotation(object.rotation);
-          const nextRotation = normalizeQuarterRotation(previousRotation + 90 * direction);
-          const previousQuarterTurns = ((previousRotation / 90) % 4 + 4) % 4;
-          const nextQuarterTurns = ((nextRotation / 90) % 4 + 4) % 4;
-          const toggledOrientation = previousQuarterTurns % 2 !== nextQuarterTurns % 2;
+          const previousRotation = normalizeObjectRotationDegrees(object.rotation ?? 0);
+          const nextRotation = normalizeObjectRotationDegrees(previousRotation + 90 * direction);
+          const previousQuarterRotation = normalizeQuarterRotation(previousRotation);
+          const nextQuarterRotation = normalizeQuarterRotation(nextRotation);
+          const previousQuarterTurns = ((previousQuarterRotation / 90) % 4 + 4) % 4;
+          const nextQuarterTurns = ((nextQuarterRotation / 90) % 4 + 4) % 4;
+          const toggledOrientation =
+            isQuarterAlignedRotation(previousRotation) &&
+            isQuarterAlignedRotation(nextRotation) &&
+            previousQuarterTurns % 2 !== nextQuarterTurns % 2;
           const centerX = object.x + object.w / 2;
           const centerY = object.y + object.h / 2;
           const rotatedCenter = rotateObjectCenterAroundPivot(centerX, centerY, pivotX, pivotY, direction);
@@ -2252,11 +2309,16 @@ export function LevelEditor({
     }
 
     updateSelectedObject((object) => {
-      const previousRotation = normalizeQuarterRotation(object.rotation);
-      const nextRotation = normalizeQuarterRotation(previousRotation + 90 * direction);
-      const previousQuarterTurns = ((previousRotation / 90) % 4 + 4) % 4;
-      const nextQuarterTurns = ((nextRotation / 90) % 4 + 4) % 4;
-      const toggledOrientation = previousQuarterTurns % 2 !== nextQuarterTurns % 2;
+      const previousRotation = normalizeObjectRotationDegrees(object.rotation ?? 0);
+      const nextRotation = normalizeObjectRotationDegrees(previousRotation + 90 * direction);
+      const previousQuarterRotation = normalizeQuarterRotation(previousRotation);
+      const nextQuarterRotation = normalizeQuarterRotation(nextRotation);
+      const previousQuarterTurns = ((previousQuarterRotation / 90) % 4 + 4) % 4;
+      const nextQuarterTurns = ((nextQuarterRotation / 90) % 4 + 4) % 4;
+      const toggledOrientation =
+        isQuarterAlignedRotation(previousRotation) &&
+        isQuarterAlignedRotation(nextRotation) &&
+        previousQuarterTurns % 2 !== nextQuarterTurns % 2;
 
       object.rotation = nextRotation;
 
@@ -3999,6 +4061,168 @@ export function LevelEditor({
                             ))}
                           </select>
                         </div>
+                        <div className="editor-trigger-field editor-trigger-field--wide">
+                          <span className="editor-trigger-field-label">Follow Player</span>
+                          <div className="editor-trigger-check-grid">
+                            <button
+                              type="button"
+                              className={cn(
+                                'editor-trigger-check-button',
+                                selectedTriggerObject.props.lockToPlayerX ? 'is-active' : '',
+                              )}
+                              onClick={() =>
+                                updateSelectedTriggerBooleanProp(
+                                  'lockToPlayerX',
+                                  !Boolean(selectedTriggerObject.props.lockToPlayerX),
+                                )
+                              }
+                            >
+                              <span className="editor-trigger-check-box" />
+                              <span>Player X</span>
+                            </button>
+                            <button
+                              type="button"
+                              className={cn(
+                                'editor-trigger-check-button',
+                                selectedTriggerObject.props.lockToPlayerY ? 'is-active' : '',
+                              )}
+                              onClick={() =>
+                                updateSelectedTriggerBooleanProp(
+                                  'lockToPlayerY',
+                                  !Boolean(selectedTriggerObject.props.lockToPlayerY),
+                                )
+                              }
+                            >
+                              <span className="editor-trigger-check-box" />
+                              <span>Player Y</span>
+                            </button>
+                          </div>
+                        </div>
+                      </>
+                    ) : null}
+
+                    {selectedTriggerObject.type === 'ROTATE_TRIGGER' ? (
+                      <>
+                        <div className="editor-trigger-field editor-trigger-field--wide">
+                          <span className="editor-trigger-field-label">Center Group</span>
+                          <div className="editor-trigger-stepper">
+                            <button
+                              type="button"
+                              className="editor-trigger-stepper-button"
+                              onClick={() =>
+                                updateSelectedTriggerNumericProp(
+                                  'centerGroupId',
+                                  String(Number(selectedTriggerObject.props.centerGroupId ?? 1) - 1),
+                                  { min: 1 },
+                                )
+                              }
+                            >
+                              {'<'}
+                            </button>
+                            <input
+                              className="editor-trigger-input editor-trigger-input--stepper"
+                              type="number"
+                              min="1"
+                              value={Number(selectedTriggerObject.props.centerGroupId ?? 1)}
+                              onChange={(event) =>
+                                updateSelectedTriggerNumericProp('centerGroupId', event.target.value, {
+                                  min: 1,
+                                })
+                              }
+                            />
+                            <button
+                              type="button"
+                              className="editor-trigger-stepper-button"
+                              onClick={() =>
+                                updateSelectedTriggerNumericProp(
+                                  'centerGroupId',
+                                  String(Number(selectedTriggerObject.props.centerGroupId ?? 1) + 1),
+                                  { min: 1 },
+                                )
+                              }
+                            >
+                              {'>'}
+                            </button>
+                          </div>
+                        </div>
+                        <div className="editor-trigger-field">
+                          <span className="editor-trigger-field-label">Degrees</span>
+                          <input
+                            className="editor-trigger-input"
+                            type="number"
+                            step="15"
+                            value={Number(selectedTriggerObject.props.degrees ?? 90)}
+                            onChange={(event) => updateSelectedTriggerNumericProp('degrees', event.target.value)}
+                          />
+                        </div>
+                        <div className="editor-trigger-field">
+                          <span className="editor-trigger-field-label">Times 360</span>
+                          <input
+                            className="editor-trigger-input"
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={Number(selectedTriggerObject.props.times360 ?? 0)}
+                            onChange={(event) =>
+                              updateSelectedTriggerNumericProp('times360', event.target.value, { min: 0 })
+                            }
+                          />
+                        </div>
+                        <div className="editor-trigger-field editor-trigger-field--wide">
+                          <span className="editor-trigger-field-label">Rotate Time</span>
+                          <input
+                            className="editor-trigger-input"
+                            type="number"
+                            min="0.01"
+                            step="0.05"
+                            value={Number(
+                              (
+                                Number(
+                                  selectedTriggerObject.props.durationMs ??
+                                    getDefaultTriggerDurationMs(selectedTriggerObject.type),
+                                ) / 1000
+                              ).toFixed(2),
+                            )}
+                            onChange={(event) => updateSelectedTriggerDurationSeconds(event.target.value)}
+                          />
+                        </div>
+                        <div className="editor-trigger-field editor-trigger-field--wide">
+                          <span className="editor-trigger-field-label">Easing</span>
+                          <select
+                            className="editor-trigger-select"
+                            value={String(selectedTriggerObject.props.easing ?? 'none')}
+                            onChange={(event) =>
+                              updateSelectedTriggerStringProp('easing', event.target.value as MoveTriggerEasing)
+                            }
+                          >
+                            {moveTriggerEasingOptions.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="editor-trigger-field editor-trigger-field--wide">
+                          <span className="editor-trigger-field-label">Object Angle</span>
+                          <div className="editor-trigger-check-grid">
+                            <button
+                              type="button"
+                              className={cn(
+                                'editor-trigger-check-button',
+                                selectedTriggerObject.props.lockObjectRotation ? 'is-active' : '',
+                              )}
+                              onClick={() =>
+                                updateSelectedTriggerBooleanProp(
+                                  'lockObjectRotation',
+                                  !Boolean(selectedTriggerObject.props.lockObjectRotation),
+                                )
+                              }
+                            >
+                              <span className="editor-trigger-check-box" />
+                              <span>Keep Original Angle</span>
+                            </button>
+                          </div>
+                        </div>
                       </>
                     ) : null}
 
@@ -4800,7 +5024,7 @@ export function LevelEditor({
                             </div>
                             <div className="editor-stage-quick-stat">
                               <span>Rotate</span>
-                              <strong>{normalizedSelectedRotation}deg</strong>
+                              <strong>{selectedRotationLabel}</strong>
                             </div>
                           </div>
 
@@ -5175,7 +5399,28 @@ export function LevelEditor({
               <div className="editor-inline-card">
                 <div className="flex items-center justify-between gap-3">
                   <span className="editor-color-control-label">Rotation</span>
-                  <Badge tone="default">{normalizedSelectedRotation}deg</Badge>
+                  <Badge tone="default">{selectedRotationLabel}</Badge>
+                </div>
+                <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
+                  <div>
+                    <FieldLabel>Angle (deg)</FieldLabel>
+                    <Input
+                      type="number"
+                      step="1"
+                      value={normalizedSelectedRotation}
+                      onChange={(event) => updateSelectedObjectRotation(event.target.value)}
+                    />
+                  </div>
+                  <div className="flex items-end">
+                    <Button variant="ghost" onClick={() => nudgeSelectedObjectRotation(-15)}>
+                      -15
+                    </Button>
+                  </div>
+                  <div className="flex items-end">
+                    <Button variant="ghost" onClick={() => nudgeSelectedObjectRotation(15)}>
+                      +15
+                    </Button>
+                  </div>
                 </div>
                 <div className="editor-inline-actions">
                   <Button variant="ghost" onClick={() => rotateSelectedObject(-1)}>
@@ -5291,6 +5536,28 @@ export function LevelEditor({
                         boost: Number(event.target.value),
                       };
                     })}
+                  />
+                </div>
+              </div>
+            ) : null}
+
+            {selectedObject.type === 'DASH_ORB' ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <FieldLabel>Dash Speed</FieldLabel>
+                  <Input
+                    type="number"
+                    step="0.5"
+                    min="0.5"
+                    value={Number(selectedObject.props.dashSpeed ?? DASH_ORB_SPEED)}
+                    onChange={(event) =>
+                      updateSelectedObject((object) => {
+                        object.props = {
+                          ...object.props,
+                          dashSpeed: Math.max(0.5, Number(event.target.value) || DASH_ORB_SPEED),
+                        };
+                      })
+                    }
                   />
                 </div>
               </div>
@@ -5428,6 +5695,129 @@ export function LevelEditor({
                             </option>
                           ))}
                         </Select>
+                      </div>
+                      <div className="sm:col-span-2 lg:col-span-3">
+                        <FieldLabel>Follow Player</FieldLabel>
+                        <div className="editor-trigger-check-grid mt-2">
+                          <button
+                            type="button"
+                            className={cn(
+                              'editor-trigger-check-button',
+                              selectedTriggerObject.props.lockToPlayerX ? 'is-active' : '',
+                            )}
+                            onClick={() =>
+                              updateSelectedTriggerBooleanProp(
+                                'lockToPlayerX',
+                                !Boolean(selectedTriggerObject.props.lockToPlayerX),
+                              )
+                            }
+                          >
+                            <span className="editor-trigger-check-box" />
+                            <span>Player X</span>
+                          </button>
+                          <button
+                            type="button"
+                            className={cn(
+                              'editor-trigger-check-button',
+                              selectedTriggerObject.props.lockToPlayerY ? 'is-active' : '',
+                            )}
+                            onClick={() =>
+                              updateSelectedTriggerBooleanProp(
+                                'lockToPlayerY',
+                                !Boolean(selectedTriggerObject.props.lockToPlayerY),
+                              )
+                            }
+                          >
+                            <span className="editor-trigger-check-box" />
+                            <span>Player Y</span>
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  ) : null}
+
+                  {selectedTriggerObject.type === 'ROTATE_TRIGGER' ? (
+                    <>
+                      <div>
+                        <FieldLabel>Center Group</FieldLabel>
+                        <Input
+                          type="number"
+                          min="1"
+                          value={Number(selectedTriggerObject.props.centerGroupId ?? 1)}
+                          onChange={(event) =>
+                            updateSelectedTriggerNumericProp('centerGroupId', event.target.value, {
+                              min: 1,
+                            })
+                          }
+                        />
+                      </div>
+                      <div>
+                        <FieldLabel>Degrees</FieldLabel>
+                        <Input
+                          type="number"
+                          step="15"
+                          value={Number(selectedTriggerObject.props.degrees ?? 90)}
+                          onChange={(event) => updateSelectedTriggerNumericProp('degrees', event.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <FieldLabel>Times 360</FieldLabel>
+                        <Input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={Number(selectedTriggerObject.props.times360 ?? 0)}
+                          onChange={(event) =>
+                            updateSelectedTriggerNumericProp('times360', event.target.value, { min: 0 })
+                          }
+                        />
+                      </div>
+                      <div>
+                        <FieldLabel>Duration (ms)</FieldLabel>
+                        <Input
+                          type="number"
+                          min="1"
+                          value={Number(selectedTriggerObject.props.durationMs ?? 650)}
+                          onChange={(event) =>
+                            updateSelectedTriggerNumericProp('durationMs', event.target.value, { min: 1 })
+                          }
+                        />
+                      </div>
+                      <div>
+                        <FieldLabel>Easing</FieldLabel>
+                        <Select
+                          value={String(selectedTriggerObject.props.easing ?? 'none')}
+                          onChange={(event) =>
+                            updateSelectedTriggerStringProp('easing', event.target.value as MoveTriggerEasing)
+                          }
+                        >
+                          {moveTriggerEasingOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </Select>
+                      </div>
+                      <div className="sm:col-span-2 lg:col-span-3">
+                        <FieldLabel>Object Angle</FieldLabel>
+                        <div className="editor-trigger-check-grid mt-2">
+                          <button
+                            type="button"
+                            className={cn(
+                              'editor-trigger-check-button',
+                              selectedTriggerObject.props.lockObjectRotation ? 'is-active' : '',
+                            )}
+                            onClick={() =>
+                              updateSelectedTriggerBooleanProp(
+                                'lockObjectRotation',
+                                !Boolean(selectedTriggerObject.props.lockObjectRotation),
+                              )
+                            }
+                          >
+                            <span className="editor-trigger-check-box" />
+                            <span>Keep Original Angle</span>
+                          </button>
+                        </div>
                       </div>
                     </>
                   ) : null}
@@ -6643,6 +7033,24 @@ function roundToStep(value: number, step: number) {
   }
 
   return Math.round(value / step) * step;
+}
+
+function normalizeObjectRotationDegrees(value: number) {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  const normalized = ((value % 360) + 360) % 360;
+  return roundToStep(normalized, 0.01);
+}
+
+function formatRotationDegrees(value: number) {
+  const normalized = normalizeObjectRotationDegrees(value);
+  return Number.isInteger(normalized) ? `${normalized}deg` : `${normalized.toFixed(2).replace(/\.?0+$/, '')}deg`;
+}
+
+function isQuarterAlignedRotation(value: number) {
+  return Math.abs(normalizeObjectRotationDegrees(value) - normalizeQuarterRotation(value)) <= 0.001;
 }
 
 function normalizeQuarterRotation(value: number) {
