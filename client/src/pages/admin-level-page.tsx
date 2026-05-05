@@ -12,6 +12,7 @@ import {
 } from '../features/levels/level-presentation';
 import { apiRequest } from '../services/api';
 import type { Difficulty, Level, LevelStatus } from '../types/models';
+import { SystemStatePage } from './system-state-page';
 
 const statuses: LevelStatus[] = ['DRAFT', 'SUBMITTED', 'OFFICIAL', 'ARCHIVED'];
 
@@ -108,11 +109,25 @@ export function AdminLevelPage() {
   const displayedLevelStars = level ? getDisplayedStars(level) : previewStars;
 
   if (levelQuery.isLoading) {
-    return <p className="text-white/70">Loading admin level...</p>;
+    return (
+      <SystemStatePage
+        eyebrow="Control Room"
+        title="Loading"
+        description="Fetching moderation controls, preview data, current status, and reward settings."
+      />
+    );
   }
 
   if (!level) {
-    return <p className="text-white/70">Level not found.</p>;
+    return (
+      <SystemStatePage
+        eyebrow="Control Room"
+        title="Level Missing"
+        description="This admin level record could not be opened. Return to the queue and choose another submission."
+        primaryAction={{ label: 'Admin Levels', to: '/admin/levels' }}
+        secondaryAction={{ label: 'Dashboard', to: '/admin' }}
+      />
+    );
   }
 
   return (

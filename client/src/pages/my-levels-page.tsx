@@ -37,22 +37,6 @@ function getLevelStatusCopy(level: Level) {
   return 'Draft';
 }
 
-function getLevelMetaBadge(level: Level) {
-  if (level.status === 'DRAFT') {
-    return `v${level.versionNumber}`;
-  }
-
-  if (level.isOfficial || level.status === 'OFFICIAL') {
-    return `${level.starsReward} stars`;
-  }
-
-  if (level.status === 'ARCHIVED') {
-    return 'Stored';
-  }
-
-  return 'Waiting';
-}
-
 function getVerificationCopy(level: Level) {
   if (level.isOfficial || level.status === 'OFFICIAL') {
     return 'Official';
@@ -457,8 +441,11 @@ export function MyLevelsPage() {
             ) : null}
 
             {levelsQuery.isError ? (
-              <div className="gd-my-levels-feedback">
+              <div className="gd-my-levels-feedback gd-my-levels-feedback--action">
                 <p>Could not load your levels.</p>
+                <button type="button" className="gd-my-levels-empty-button" onClick={() => void levelsQuery.refetch()}>
+                  Retry
+                </button>
               </div>
             ) : null}
 

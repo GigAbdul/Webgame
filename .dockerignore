@@ -1,0 +1,14 @@
+.git
+.env
+.env.local
+node_modules
+client/dist
+server/dist
+coverage
+*.log
+*.tsbuildinfo
+.eslintcache
+.turbo
+.vite
+chatgpt-upload
+design-review-pack

@@ -928,7 +928,8 @@ function normalizeQuarterRotation(value: number) {
 
 function normalizeObjectPlacement(object: LevelObject): LevelObject {
   if (object.type === 'GRAVITY_PORTAL') {
-    const { gravity: _legacyGravity, ...nextProps } = object.props;
+    const nextProps = { ...object.props };
+    delete nextProps.gravity;
 
     return {
       ...object,
@@ -1038,23 +1039,6 @@ export function getObjectStrokeColor(
   return typeof customStrokeColor === 'string' && customStrokeColor.trim().length > 0
     ? customStrokeColor
     : levelObjectDefinitions[object.type].strokeColor;
-}
-
-function makeObject(id: string, type: LevelObjectType, x: number, y: number) {
-  const definition = levelObjectDefinitions[type];
-
-  return {
-    id,
-    type,
-    x,
-    y,
-    w: definition.defaultSize.w,
-    h: definition.defaultSize.h,
-    rotation: 0,
-    layer: isDecorationObjectType(type) ? ('decoration' as const) : ('gameplay' as const),
-    editorLayer: 1 as const,
-    props: {},
-  };
 }
 
 export function createEmptyLevelData(theme = 'neon-grid'): LevelData {

@@ -1139,7 +1139,6 @@ function drawTriggerSprite(
   editorGuideTop?: number,
   editorGuideBottom?: number,
 ) {
-  const type = object.type;
   const activationMode = getTriggerActivationMode(object.props.activationMode);
   const hasGuideBounds = hasFiniteGuideBounds(editorGuideTop, editorGuideBottom);
 
@@ -1303,22 +1302,6 @@ function drawStartMarkerSprite(
   context.moveTo(x + w * 0.3, y + h * 0.22);
   context.lineTo(x + w * 0.7, y + h * 0.5);
   context.lineTo(x + w * 0.3, y + h * 0.78);
-  context.closePath();
-  context.fill();
-}
-
-function drawChevron(
-  context: CanvasRenderingContext2D,
-  centerX: number,
-  centerY: number,
-  width: number,
-  height: number,
-) {
-  context.beginPath();
-  context.moveTo(centerX - width / 2, centerY);
-  context.lineTo(centerX, centerY - height / 2);
-  context.lineTo(centerX + width / 2, centerY);
-  context.lineTo(centerX, centerY + height / 2);
   context.closePath();
   context.fill();
 }
@@ -1936,7 +1919,6 @@ function drawSatelliteDecoration(
   strokeColor: string,
   animationTimeMs: number,
 ) {
-  const centerX = x + w / 2;
   const centerY = y + h / 2;
   const bodyX = x + w * 0.36;
   const bodyY = y + h * 0.24;

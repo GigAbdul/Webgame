@@ -74,10 +74,10 @@ export function ArcadeScreenLayout() {
                     </>
                   ) : showGuestUi ? (
                     <>
-                      <NavLink to="/login">
+                      <NavLink to="/?auth=login">
                         <Button variant="ghost">Login</Button>
                       </NavLink>
-                      <NavLink to="/register">
+                      <NavLink to="/?auth=register">
                         <Button>Register</Button>
                       </NavLink>
                     </>

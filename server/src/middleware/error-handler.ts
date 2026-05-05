@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import { ZodError } from 'zod';
+import { env } from '../config/env';
 import { ApiError } from '../utils/api-error';
 
 export function errorHandler(
@@ -35,7 +36,12 @@ export function errorHandler(
     });
   }
 
-  const message = error instanceof Error ? error.message : 'Unexpected error';
+  const message =
+    env.NODE_ENV === 'production'
+      ? 'Internal server error'
+      : error instanceof Error
+        ? error.message
+        : 'Unexpected error';
 
   return response.status(500).json({
     message,

@@ -1,5 +1,86 @@
 import { z } from 'zod';
 
+const MAX_LEVEL_OBJECTS = 5000;
+const MAX_COLOR_GROUPS = 128;
+const MAX_OBJECT_ID_LENGTH = 80;
+const MAX_THEME_LENGTH = 50;
+const MAX_BACKGROUND_LENGTH = 80;
+const MAX_MUSIC_SOURCE_LENGTH = 2048;
+const MAX_MUSIC_LABEL_LENGTH = 120;
+const MAX_COORDINATE_ABS = 20_000;
+const MAX_OBJECT_SIZE = 1000;
+const MAX_LEVEL_LENGTH_UNITS = 20_000;
+const MAX_GRID_SIZE = 256;
+const MAX_PROP_JSON_LENGTH = 4096;
+const MAX_PROP_DEPTH = 6;
+const MAX_PROP_ARRAY_ITEMS = 64;
+const MAX_PROP_OBJECT_KEYS = 64;
+
+const unsafeJsonKeys = new Set(['__proto__', 'constructor', 'prototype']);
+
+function isSafeJsonValue(value: unknown, depth = 0): boolean {
+  if (depth > MAX_PROP_DEPTH) {
+    return false;
+  }
+
+  if (value === null || typeof value === 'boolean') {
+    return true;
+  }
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value) && Math.abs(value) <= MAX_COORDINATE_ABS;
+  }
+
+  if (typeof value === 'string') {
+    return value.length <= 512;
+  }
+
+  if (Array.isArray(value)) {
+    return (
+      value.length <= MAX_PROP_ARRAY_ITEMS &&
+      value.every((item) => isSafeJsonValue(item, depth + 1))
+    );
+  }
+
+  if (typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>);
+
+    return (
+      entries.length <= MAX_PROP_OBJECT_KEYS &&
+      entries.every(
+        ([key, item]) =>
+          key.length <= 64 &&
+          !unsafeJsonKeys.has(key) &&
+          isSafeJsonValue(item, depth + 1),
+      )
+    );
+  }
+
+  return false;
+}
+
+const boundedNumberSchema = z.number().finite().min(-MAX_COORDINATE_ABS).max(MAX_COORDINATE_ABS);
+const positiveSizeSchema = z.number().finite().positive().max(MAX_OBJECT_SIZE);
+const objectPropsSchema = z.record(z.unknown()).superRefine((value, context) => {
+  if (!isSafeJsonValue(value)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Object props contain unsupported or unsafe values',
+    });
+    return;
+  }
+
+  if (JSON.stringify(value).length > MAX_PROP_JSON_LENGTH) {
+    context.addIssue({
+      code: z.ZodIssueCode.too_big,
+      maximum: MAX_PROP_JSON_LENGTH,
+      type: 'string',
+      inclusive: true,
+      message: 'Object props are too large',
+    });
+  }
+});
+
 export const levelObjectTypes = [
   'GROUND_BLOCK',
   'GROUND_BLOCK_TOP',
@@ -73,50 +154,51 @@ export const levelObjectTypes = [
 export type LevelObjectType = (typeof levelObjectTypes)[number];
 
 export const levelObjectSchema = z.object({
-  id: z.string().min(1),
+  id: z.string().trim().min(1).max(MAX_OBJECT_ID_LENGTH),
   type: z.enum(levelObjectTypes),
-  x: z.number(),
-  y: z.number(),
-  w: z.number().positive(),
-  h: z.number().positive(),
-  rotation: z.number().default(0),
+  x: boundedNumberSchema,
+  y: boundedNumberSchema,
+  w: positiveSizeSchema,
+  h: positiveSizeSchema,
+  rotation: z.number().finite().min(-36000).max(36000).default(0),
   layer: z.enum(['gameplay', 'decoration']).default('gameplay'),
   editorLayer: z.number().int().min(1).max(10).default(1),
-  props: z.record(z.any()).default({}),
+  props: objectPropsSchema.default({}),
 });
 
 export const levelDataSchema = z.object({
   meta: z.object({
-    gridSize: z.number().positive().default(32),
-    lengthUnits: z.number().int().positive(),
-    theme: z.string().min(1).default('neon-grid'),
-    background: z.string().min(1).default('default'),
-    groundColor: z.string().min(1).optional(),
-    music: z.string().min(1).default('placeholder-track-01'),
-    musicLabel: z.string().min(1).optional(),
-    musicOffsetMs: z.number().min(0).default(0),
+    gridSize: z.number().finite().positive().max(MAX_GRID_SIZE).default(32),
+    lengthUnits: z.number().int().positive().max(MAX_LEVEL_LENGTH_UNITS),
+    theme: z.string().trim().min(1).max(MAX_THEME_LENGTH).default('neon-grid'),
+    background: z.string().trim().min(1).max(MAX_BACKGROUND_LENGTH).default('default'),
+    groundColor: z.string().trim().min(1).max(64).optional(),
+    music: z.string().trim().min(1).max(MAX_MUSIC_SOURCE_LENGTH).default('placeholder-track-01'),
+    musicLabel: z.string().trim().min(1).max(MAX_MUSIC_LABEL_LENGTH).optional(),
+    musicOffsetMs: z.number().finite().min(0).max(60 * 60 * 1000).default(0),
     version: z.number().int().default(1),
     colorGroups: z
       .array(
         z.object({
           id: z.number().int().positive(),
-          fillColor: z.string().min(1),
-          strokeColor: z.string().min(1),
+          fillColor: z.string().trim().min(1).max(64),
+          strokeColor: z.string().trim().min(1).max(64),
         }),
       )
+      .max(MAX_COLOR_GROUPS)
       .default([]),
   }),
   player: z.object({
-    startX: z.number(),
-    startY: z.number(),
+    startX: boundedNumberSchema,
+    startY: boundedNumberSchema,
     mode: z.enum(['cube', 'ball', 'ship', 'arrow']).default('cube'),
-    baseSpeed: z.number().positive().default(1),
-    gravity: z.number().default(1),
+    baseSpeed: z.number().finite().positive().max(5).default(1),
+    gravity: z.number().finite().min(-10).max(10).default(1),
   }),
-  objects: z.array(levelObjectSchema),
+  objects: z.array(levelObjectSchema).max(MAX_LEVEL_OBJECTS),
   finish: z.object({
-    x: z.number(),
-    y: z.number(),
+    x: boundedNumberSchema,
+    y: boundedNumberSchema,
   }),
 });
 

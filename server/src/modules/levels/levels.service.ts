@@ -1,4 +1,4 @@
-import { Role } from '@prisma/client';
+import { Prisma, Role } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
 import { ApiError } from '../../utils/api-error';
 import { slugifyValue, withSlugSuffix } from '../../utils/slugify';
@@ -46,7 +46,8 @@ function normalizeLegacyGravityPortals(data: LevelData): LevelData {
         return object;
       }
 
-      const { gravity: _legacyGravity, ...nextProps } = object.props;
+      const nextProps = { ...object.props };
+      delete nextProps.gravity;
 
       return {
         ...object,
@@ -59,6 +60,10 @@ function normalizeLegacyGravityPortals(data: LevelData): LevelData {
 
 function normalizeLevelData(data: LevelData) {
   return normalizeLegacyGravityPortals(levelDataSchema.parse(data));
+}
+
+function toPrismaJson(data: LevelData) {
+  return normalizeLevelData(data) as unknown as Prisma.InputJsonValue;
 }
 
 function normalizeLevelRecordData<TLevel extends { dataJson: unknown }>(
@@ -160,7 +165,7 @@ export const levelsService = {
         description: input.description,
         authorId: user.id,
         theme: input.theme,
-        dataJson: normalizeLevelData(input.dataJson),
+        dataJson: toPrismaJson(input.dataJson),
       },
     });
   },
@@ -191,7 +196,7 @@ export const levelsService = {
         description: input.description,
         theme: input.theme,
         slug,
-        dataJson: input.dataJson ? normalizeLevelData(input.dataJson) : undefined,
+        dataJson: input.dataJson ? toPrismaJson(input.dataJson) : undefined,
         versionNumber: input.dataJson ? level.versionNumber + 1 : level.versionNumber,
       },
     });

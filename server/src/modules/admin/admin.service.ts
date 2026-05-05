@@ -110,7 +110,7 @@ export const adminService = {
           featured: input.featured,
           isVisible: input.isVisible,
           theme: input.theme,
-          dataJson: input.dataJson,
+          dataJson: input.dataJson as unknown as Prisma.InputJsonValue,
           publishedAt: input.publishNow ? new Date() : null,
         },
       });

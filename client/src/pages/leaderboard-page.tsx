@@ -1,26 +1,28 @@
 import type { CSSProperties } from 'react';
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { CalendarDays, Flag, Hammer, Star, Trophy, UserRound, type LucideIcon } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { apiRequest } from '../services/api';
 import { useAuthStore } from '../store/auth-store';
 import type { LeaderboardEntry } from '../types/models';
 
-type LeaderboardTab = 'TOP_100' | 'FRIENDS' | 'GLOBAL' | 'CREATORS';
-type LeaderboardMetric = 'stars' | 'clears' | 'creators' | 'recent';
+type LeaderboardTab = 'TOP_100' | 'GLOBAL' | 'CREATORS';
+type LeaderboardMetric = 'stars' | 'clears' | 'creators';
+type LeaderboardSideMetric = 'stars' | 'clears';
+type LeaderboardSideIconName = 'star' | 'flag';
+type LeaderboardPrimaryStatIconName = 'star' | 'flag';
+type LeaderboardMiniStatIconName = 'rank' | 'builder' | 'calendar' | 'user';
 
 const TAB_OPTIONS: Array<{ id: LeaderboardTab; label: string }> = [
   { id: 'TOP_100', label: 'Top 100' },
-  { id: 'FRIENDS', label: 'Friends' },
   { id: 'GLOBAL', label: 'Global' },
   { id: 'CREATORS', label: 'Creators' },
 ];
 
-const METRIC_OPTIONS: Array<{ id: LeaderboardMetric; label: string; icon: string }> = [
+const METRIC_OPTIONS: Array<{ id: LeaderboardSideMetric; label: string; icon: LeaderboardSideIconName }> = [
   { id: 'stars', label: 'Stars', icon: 'star' },
-  { id: 'clears', label: 'Clears', icon: 'moon' },
-  { id: 'creators', label: 'Creators', icon: 'tools' },
-  { id: 'recent', label: 'Recent', icon: 'clock' },
+  { id: 'clears', label: 'Clears', icon: 'flag' },
 ];
 
 const numberFormatter = new Intl.NumberFormat('en-US');
@@ -36,10 +38,6 @@ function getMetricValue(entry: LeaderboardEntry, metric: LeaderboardMetric) {
 
   if (metric === 'creators') {
     return entry.officialLevelsAuthored;
-  }
-
-  if (metric === 'recent') {
-    return entry.createdAt ? new Date(entry.createdAt).getTime() : 0;
   }
 
   return entry.totalStars;
@@ -91,22 +89,6 @@ function getAvatarGlyph(entry: LeaderboardEntry) {
   return entry.username.trim().charAt(0).toUpperCase() || '?';
 }
 
-function getNeighborhoodEntries(entries: LeaderboardEntry[], userId: string | undefined) {
-  if (!userId) {
-    return [];
-  }
-
-  const targetIndex = entries.findIndex((entry) => entry.id === userId);
-
-  if (targetIndex === -1) {
-    return [];
-  }
-
-  const start = Math.max(0, targetIndex - 4);
-  const end = Math.min(entries.length, targetIndex + 5);
-  return entries.slice(start, end);
-}
-
 function getJoinedCopy(createdAt?: string) {
   if (!createdAt) {
     return 'Now';
@@ -116,27 +98,15 @@ function getJoinedCopy(createdAt?: string) {
 }
 
 function getFooterCopy(input: {
-  activeTab: LeaderboardTab;
   activeMetric: LeaderboardMetric;
   totalEntries: number;
-  myRank: LeaderboardEntry | null | undefined;
 }) {
-  if (input.activeTab === 'FRIENDS') {
-    return input.myRank
-      ? `Your global star rank is #${input.myRank.rank}.`
-      : 'Sign in to unlock friend comparisons and your saved rank.';
-  }
-
   if (input.activeMetric === 'creators') {
-    return `Showing ${input.totalEntries} players sorted by official levels authored.`;
+    return `Showing ${input.totalEntries} players sorted by rated levels built.`;
   }
 
   if (input.activeMetric === 'clears') {
     return `Showing ${input.totalEntries} players sorted by official clears.`;
-  }
-
-  if (input.activeMetric === 'recent') {
-    return `Showing ${input.totalEntries} players sorted by most recent account creation.`;
   }
 
   return `Showing ${input.totalEntries} players sorted by total stars.`;
@@ -152,32 +122,19 @@ export function LeaderboardPage() {
     queryFn: () => apiRequest<{ leaderboard: LeaderboardEntry[] }>('/api/leaderboard'),
   });
 
-  const myRankQuery = useQuery({
-    queryKey: ['leaderboard-me'],
-    queryFn: () => apiRequest<{ entry: LeaderboardEntry | null }>('/api/leaderboard/me'),
-    enabled: Boolean(user),
-  });
-
   const effectiveMetric = activeTab === 'CREATORS' ? 'creators' : activeMetric;
-  const leaderboard = leaderboardQuery.data?.leaderboard ?? [];
-  const rankedEntries = useMemo(
-    () =>
-      [...leaderboard]
+  const rankedEntries = useMemo(() => {
+    const leaderboard = leaderboardQuery.data?.leaderboard ?? [];
+
+    return [...leaderboard]
         .sort((left, right) => compareEntries(left, right, effectiveMetric))
         .map((entry, index) => ({
           ...entry,
           rank: index + 1,
-        })),
-    [effectiveMetric, leaderboard],
-  );
+        }));
+  }, [effectiveMetric, leaderboardQuery.data?.leaderboard]);
 
-  const visibleEntries = useMemo(() => {
-    if (activeTab === 'FRIENDS') {
-      return getNeighborhoodEntries(rankedEntries, user?.id);
-    }
-
-    return rankedEntries.slice(0, 100);
-  }, [activeTab, rankedEntries, user?.id]);
+  const visibleEntries = useMemo(() => rankedEntries.slice(0, 100), [rankedEntries]);
 
   const currentUserId = user?.id ?? null;
 
@@ -203,11 +160,6 @@ export function LeaderboardPage() {
               className={`gd-arcade-leaderboard-side-button${isActive ? ' is-active' : ''}`}
               onClick={() => {
                 setActiveMetric(metric.id);
-                if (metric.id === 'creators') {
-                  setActiveTab('CREATORS');
-                  return;
-                }
-
                 if (activeTab === 'CREATORS') {
                   setActiveTab('TOP_100');
                 }
@@ -215,7 +167,7 @@ export function LeaderboardPage() {
               aria-label={`Sort by ${metric.label}`}
               aria-pressed={isActive}
             >
-              <span className={`gd-arcade-leaderboard-side-icon gd-arcade-leaderboard-side-icon--${metric.icon}`} />
+              <LeaderboardSideIcon icon={metric.icon} />
             </button>
           );
         })}
@@ -259,25 +211,22 @@ export function LeaderboardPage() {
               </div>
             ) : null}
 
-            {!leaderboardQuery.isLoading && activeTab === 'FRIENDS' && !user ? (
-              <div className="gd-arcade-leaderboard-feedback">
-                <p>Sign in to unlock friend comparisons.</p>
+            {leaderboardQuery.isError ? (
+              <div className="gd-arcade-leaderboard-feedback gd-arcade-leaderboard-feedback--action">
+                <p>Could not load rankings.</p>
+                <button type="button" onClick={() => void leaderboardQuery.refetch()}>
+                  Retry
+                </button>
               </div>
             ) : null}
 
-            {!leaderboardQuery.isLoading && activeTab === 'FRIENDS' && user && !visibleEntries.length ? (
-              <div className="gd-arcade-leaderboard-feedback">
-                <p>Friend list is not wired yet. Your rank card will show here later.</p>
-              </div>
-            ) : null}
-
-            {!leaderboardQuery.isLoading && activeTab !== 'FRIENDS' && !visibleEntries.length ? (
+            {!leaderboardQuery.isLoading && !leaderboardQuery.isError && !visibleEntries.length ? (
               <div className="gd-arcade-leaderboard-feedback">
                 <p>No ranked players yet.</p>
               </div>
             ) : null}
 
-            {!leaderboardQuery.isLoading && visibleEntries.length ? (
+            {!leaderboardQuery.isLoading && !leaderboardQuery.isError && visibleEntries.length ? (
               <div className="gd-arcade-leaderboard-list" role="list">
                 {visibleEntries.map((entry) => {
                   const isCurrentUser = currentUserId === entry.id;
@@ -301,15 +250,19 @@ export function LeaderboardPage() {
 
                           <div className="gd-arcade-leaderboard-primary-stats">
                             <LeaderboardStat icon="star" value={formatNumber(entry.totalStars)} />
-                            <LeaderboardStat icon="moon" value={formatNumber(entry.completedOfficialLevels)} />
+                            <LeaderboardStat icon="flag" value={formatNumber(entry.completedOfficialLevels)} />
                           </div>
                         </div>
 
                         <div className="gd-arcade-leaderboard-secondary-stats">
-                          <LeaderboardMiniStat icon="diamond" value={`#${entry.rank}`} />
-                          <LeaderboardMiniStat icon="coin" value={formatNumber(entry.officialLevelsAuthored)} />
-                          <LeaderboardMiniStat icon="tools" value={getJoinedCopy(entry.createdAt)} />
-                          <LeaderboardMiniStat icon="clock" value={isCurrentUser ? 'You' : 'Pilot'} />
+                          <LeaderboardMiniStat icon="rank" value={`#${entry.rank}`} />
+                          <LeaderboardMiniStat
+                            icon="builder"
+                            value={formatNumber(entry.officialLevelsAuthored)}
+                            label="Rated levels built"
+                          />
+                          <LeaderboardMiniStat icon="calendar" value={getJoinedCopy(entry.createdAt)} />
+                          {isCurrentUser ? <LeaderboardMiniStat icon="user" value="You" /> : null}
                         </div>
                       </div>
                     </article>
@@ -324,10 +277,8 @@ export function LeaderboardPage() {
             <div className="gd-arcade-leaderboard-bottom-core" aria-hidden="true" />
             <div className="gd-arcade-leaderboard-bottom-copy">
               {getFooterCopy({
-                activeTab,
                 activeMetric: effectiveMetric,
                 totalEntries: visibleEntries.length,
-                myRank: myRankQuery.data?.entry,
               })}
             </div>
           </div>
@@ -337,20 +288,73 @@ export function LeaderboardPage() {
   );
 }
 
-function LeaderboardStat({ icon, value }: { icon: string; value: string }) {
+function LeaderboardStat({ icon, value }: { icon: LeaderboardPrimaryStatIconName; value: string }) {
   return (
     <span className="gd-arcade-leaderboard-stat">
-      <span className={`gd-arcade-leaderboard-stat-icon gd-arcade-leaderboard-stat-icon--${icon}`} aria-hidden="true" />
+      <LeaderboardPrimaryStatIcon icon={icon} />
       <span className="gd-arcade-leaderboard-stat-value">{value}</span>
     </span>
   );
 }
 
-function LeaderboardMiniStat({ icon, value }: { icon: string; value: string }) {
+function LeaderboardPrimaryStatIcon({ icon }: { icon: LeaderboardPrimaryStatIconName }) {
+  const Icon = icon === 'star' ? Star : Flag;
+
   return (
-    <span className="gd-arcade-leaderboard-mini-stat">
-      <span className={`gd-arcade-leaderboard-stat-icon gd-arcade-leaderboard-stat-icon--${icon}`} aria-hidden="true" />
+    <Icon
+      className={`gd-arcade-leaderboard-stat-svg gd-arcade-leaderboard-stat-svg--${icon}`}
+      aria-hidden="true"
+      focusable="false"
+      strokeWidth={3}
+    />
+  );
+}
+
+function LeaderboardSideIcon({ icon }: { icon: LeaderboardSideIconName }) {
+  const Icon = icon === 'star' ? Star : Flag;
+
+  return (
+    <Icon
+      className={`gd-arcade-leaderboard-side-svg gd-arcade-leaderboard-side-svg--${icon}`}
+      aria-hidden="true"
+      focusable="false"
+      strokeWidth={3}
+    />
+  );
+}
+
+function LeaderboardMiniStat({
+  icon,
+  value,
+  label,
+}: {
+  icon: LeaderboardMiniStatIconName;
+  value: string;
+  label?: string;
+}) {
+  return (
+    <span className="gd-arcade-leaderboard-mini-stat" aria-label={label} title={label}>
+      <LeaderboardMiniStatIcon icon={icon} />
       <span className="gd-arcade-leaderboard-mini-value">{value}</span>
     </span>
+  );
+}
+
+function LeaderboardMiniStatIcon({ icon }: { icon: LeaderboardMiniStatIconName }) {
+  const icons: Record<LeaderboardMiniStatIconName, LucideIcon> = {
+    rank: Trophy,
+    builder: Hammer,
+    calendar: CalendarDays,
+    user: UserRound,
+  };
+  const Icon = icons[icon];
+
+  return (
+    <Icon
+      className={`gd-arcade-leaderboard-mini-svg gd-arcade-leaderboard-mini-svg--${icon}`}
+      aria-hidden="true"
+      focusable="false"
+      strokeWidth={3}
+    />
   );
 }

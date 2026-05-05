@@ -1,11 +1,19 @@
 import { Router } from 'express';
 import { requireAuth } from '../../middleware/auth';
+import { createRateLimit } from '../../middleware/rate-limit';
 import { asyncHandler } from '../../utils/async-handler';
 import { getSingleParam } from '../../utils/request-param';
 import { createLevelSchema, submitLevelSchema, updateLevelSchema } from './levels.schemas';
 import { levelsService } from './levels.service';
 
 export const levelsRouter = Router();
+
+const levelWriteRateLimit = createRateLimit({
+  keyPrefix: 'levels:write',
+  windowMs: 15 * 60 * 1000,
+  max: 180,
+  message: 'Too many level changes. Slow down and try again.',
+});
 
 levelsRouter.get(
   '/official',
@@ -35,6 +43,7 @@ levelsRouter.get(
 levelsRouter.post(
   '/',
   requireAuth,
+  levelWriteRateLimit,
   asyncHandler(async (request, response) => {
     const payload = createLevelSchema.parse(request.body);
     const level = await levelsService.create(request.authUser!, payload);
@@ -54,6 +63,7 @@ levelsRouter.get(
 levelsRouter.put(
   '/:id',
   requireAuth,
+  levelWriteRateLimit,
   asyncHandler(async (request, response) => {
     const payload = updateLevelSchema.parse(request.body);
     const level = await levelsService.update(
@@ -68,6 +78,7 @@ levelsRouter.put(
 levelsRouter.delete(
   '/:id',
   requireAuth,
+  levelWriteRateLimit,
   asyncHandler(async (request, response) => {
     const level = await levelsService.delete(request.authUser!, getSingleParam(request.params.id, 'id'));
     response.json({ level });
@@ -77,6 +88,7 @@ levelsRouter.delete(
 levelsRouter.post(
   '/:id/submit',
   requireAuth,
+  levelWriteRateLimit,
   asyncHandler(async (request, response) => {
     const payload = submitLevelSchema.parse(request.body ?? {});
     const level = await levelsService.submit(request.authUser!, getSingleParam(request.params.id, 'id'), payload);

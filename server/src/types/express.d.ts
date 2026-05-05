@@ -9,6 +9,11 @@ declare global {
         username: string;
         role: Role;
       };
+      authEmailVerification?: {
+        requiresEmailVerification: true;
+        email: string;
+        expiresAt: string | null;
+      };
     }
   }
 }

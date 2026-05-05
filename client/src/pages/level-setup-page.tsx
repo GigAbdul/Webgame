@@ -137,7 +137,6 @@ export function LevelSetupPage() {
   });
 
   const level = levelQuery.data?.level ?? null;
-  const selectedDifficultyPresentation = getDifficultyPresentation(selectedDifficulty);
   const resolvedMusic = useMemo(
     () =>
       resolveLevelMusic({
@@ -176,8 +175,21 @@ export function LevelSetupPage() {
       return null;
     }
 
-    return buildLevelPayload(null).dataJson;
-  }, [description, isNewLevel, musicLabelInput, musicValue, title]);
+    const levelData = createEmptyLevelData('neon-grid');
+    const trimmedMusicSource = musicValue.trim();
+    const normalizedMusicSource = trimmedMusicSource || 'none';
+    const normalizedMusicLabel =
+      musicLabelInput.trim() || (normalizedMusicSource !== 'none' ? inferMusicLabel(normalizedMusicSource) : '');
+
+    levelData.meta.music = normalizedMusicSource;
+    if (normalizedMusicLabel) {
+      levelData.meta.musicLabel = normalizedMusicLabel;
+    } else {
+      delete levelData.meta.musicLabel;
+    }
+
+    return levelData;
+  }, [isNewLevel, musicLabelInput, musicValue]);
 
   useEffect(() => {
     if (isNewLevel) {
@@ -512,7 +524,12 @@ export function LevelSetupPage() {
   if (!isNewLevel && !level) {
     return (
       <div className="gd-draft-view-page">
-        <div className="gd-draft-view-feedback">Level not found.</div>
+        <div className="gd-draft-view-feedback gd-draft-view-feedback--action">
+          <p>Draft not found.</p>
+          <Link to="/my-levels" className="gd-draft-view-feedback-button">
+            Workshop
+          </Link>
+        </div>
       </div>
     );
   }
@@ -553,24 +570,6 @@ export function LevelSetupPage() {
             <span className="gd-draft-view-side-icon gd-draft-view-side-icon--close" aria-hidden="true" />
           </button>
 
-          <button
-            type="button"
-            className="gd-draft-view-side-button"
-            onClick={() => setIsMusicPanelOpen(true)}
-            aria-label="Open music setup"
-          >
-            <span className="gd-draft-view-side-copy">Music</span>
-          </button>
-
-          <button
-            type="button"
-            className="gd-draft-view-side-button"
-            onClick={handleSaveMetadata}
-            disabled={isBusy}
-            aria-label="Save level details"
-          >
-            <span className="gd-draft-view-side-icon gd-draft-view-side-icon--save" aria-hidden="true" />
-          </button>
         </div>
 
         <div className="gd-draft-view-shell gd-draft-view-shell--arcade">

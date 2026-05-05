@@ -15,3 +15,5 @@ chatgpt-upload
 *.tsbuildinfo
 client/*.js
 client/*.d.ts
+client/src/**/*.js
+client/src/**/*.d.ts

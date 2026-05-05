@@ -9,6 +9,7 @@ import { formatThemeName, getDifficultyPresentation, getDisplayedStars } from '.
 import { apiRequest } from '../services/api';
 import { useAuthStore } from '../store/auth-store';
 import type { Level } from '../types/models';
+import { SystemStatePage } from './system-state-page';
 
 export function LevelDetailPage() {
   const { slugOrId = '' } = useParams();
@@ -25,17 +26,23 @@ export function LevelDetailPage() {
 
   if (levelQuery.isLoading) {
     return (
-      <Panel className="game-screen bg-transparent">
-        <p className="font-display text-sm tracking-[0.24em] text-white/78">Loading stage briefing...</p>
-      </Panel>
+      <SystemStatePage
+        eyebrow="Stage Briefing"
+        title="Loading"
+        description="Pulling the route preview, rewards, difficulty badge, and launch controls into place."
+      />
     );
   }
 
   if (!level) {
     return (
-      <Panel className="game-screen bg-transparent">
-        <p className="font-display text-sm tracking-[0.24em] text-white/78">Stage not found.</p>
-      </Panel>
+      <SystemStatePage
+        eyebrow="Stage Missing"
+        title="No Briefing"
+        description="That official stage is not available. Head back to level select and choose a live route."
+        primaryAction={{ label: 'Levels', to: '/levels' }}
+        secondaryAction={{ label: 'Home', to: '/' }}
+      />
     );
   }
 
@@ -130,7 +137,7 @@ export function LevelDetailPage() {
             <Panel className="game-screen bg-transparent">
               <div className="space-y-3">
                 <p className="arcade-eyebrow">Clear Rules</p>
-              <p className="text-sm leading-7 text-white/78">
+                <p className="text-sm leading-7 text-white/78">
                   Stars are granted only on the first successful official clear for signed-in pilots. Guest runs are great
                   for routing, timing, and learning the lane, but they do not enter the leaderboard.
                 </p>
@@ -172,10 +179,10 @@ export function LevelDetailPage() {
 
           <Panel className="game-screen bg-transparent">
             <div className="space-y-3">
-              <p className="arcade-eyebrow">Why This Screen Exists</p>
+              <p className="arcade-eyebrow">Run Tips</p>
               <p className="text-sm leading-7 text-white/78">
-                The goal is to make stage launch feel deliberate: one clean briefing card, a readable live preview, and a
-                strong launch button instead of raw metadata blocks.
+                Watch the preview, learn the first hazard cluster, then launch the official run when the rhythm feels
+                readable.
               </p>
             </div>
           </Panel>

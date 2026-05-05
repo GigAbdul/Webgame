@@ -73,8 +73,30 @@ function createApiClientError(statusCode: number, rawText: string) {
   );
 }
 
-function shouldClearStoredAuthOnUnauthorized(path: string, statusCode: number, hasAuthToken: boolean) {
-  if (statusCode !== 401 || !hasAuthToken) {
+function isEmailVerificationRequiredDetails(details: unknown) {
+  return (
+    typeof details === 'object' &&
+    details !== null &&
+    'requiresEmailVerification' in details &&
+    (details as { requiresEmailVerification?: unknown }).requiresEmailVerification === true
+  );
+}
+
+function shouldClearStoredAuthOnAuthFailure(
+  path: string,
+  statusCode: number,
+  hasAuthToken: boolean,
+  details?: unknown,
+) {
+  if (!hasAuthToken) {
+    return false;
+  }
+
+  if (statusCode === 403 && isEmailVerificationRequiredDetails(details)) {
+    return true;
+  }
+
+  if (statusCode !== 401) {
     return false;
   }
 
@@ -139,11 +161,13 @@ function requestViaXhrWithProgress<T>(path: string, init: ApiRequestInit, header
         return;
       }
 
-      if (shouldClearStoredAuthOnUnauthorized(path, request.status, hasAuthToken)) {
+      const error = createApiClientError(request.status, request.responseText ?? '');
+
+      if (shouldClearStoredAuthOnAuthFailure(path, request.status, hasAuthToken, error.details)) {
         useAuthStore.getState().clearAuth();
       }
 
-      reject(createApiClientError(request.status, request.responseText ?? ''));
+      reject(error);
     };
 
     request.send((init.body as XMLHttpRequestBodyInit | null | undefined) ?? null);
@@ -175,11 +199,13 @@ export async function apiRequest<T>(path: string, init: ApiRequestInit = {}) {
   const payload = parseApiPayload(rawText);
 
   if (!response.ok) {
-    if (shouldClearStoredAuthOnUnauthorized(path, response.status, Boolean(token))) {
+    const error = createApiClientError(response.status, rawText);
+
+    if (shouldClearStoredAuthOnAuthFailure(path, response.status, Boolean(token), error.details)) {
       useAuthStore.getState().clearAuth();
     }
 
-    throw createApiClientError(response.status, rawText);
+    throw error;
   }
 
   return payload as T;

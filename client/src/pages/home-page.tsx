@@ -1,22 +1,22 @@
 import { type CSSProperties, type FormEvent, useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { HomeMenuTraffic } from '../components/home-menu-traffic';
 import { PlayerModelCanvas } from '../features/game/player-model-canvas';
-import { getPlayerModeDescription, getPlayerModeLabel } from '../features/game/player-mode-config';
+import { getPlayerModeLabel } from '../features/game/player-mode-config';
 import {
   playerSkinModes,
   usePlayerSkinSelectionStore,
   useSelectedPlayerSkinRecord,
 } from '../features/game/player-skin-selection';
 import { usePlayerSkinsQuery } from '../features/game/player-skins';
-import { apiRequest } from '../services/api';
+import { ApiClientError, apiRequest } from '../services/api';
 import { cn } from '../utils/cn';
 import { useAuthStore } from '../store/auth-store';
 import type { PlayerMode, User } from '../types/models';
 import { z } from 'zod';
 
 type HomePanel = 'skins' | 'settings' | 'account' | 'admin-tools' | null;
-type HomeAuthDialog = 'login' | 'register' | null;
+type HomeAuthDialog = 'login' | 'register' | 'verify-email' | null;
 
 type HomeSettings = {
   musicVolume: number;
@@ -32,7 +32,7 @@ const adminToolOptions = [
     id: 'dashboard',
     name: 'Control Room',
     accent: 'Overview Hub',
-    flavor: 'Р“Р»Р°РІРЅР°СЏ Р°РґРјРёРЅ-РїР°РЅРµР»СЊ СЃРѕ СЃС‚Р°С‚СѓСЃРѕРј СЃРёСЃС‚РµРјС‹ Рё Р±С‹СЃС‚СЂС‹РјРё РїРµСЂРµС…РѕРґР°РјРё.',
+    flavor: 'System status, publishing shortcuts, and admin navigation in one compact hub.',
     route: '/admin',
     routeLabel: '/admin',
   },
@@ -40,7 +40,7 @@ const adminToolOptions = [
     id: 'queue',
     name: 'Review Queue',
     accent: 'Moderation Flow',
-    flavor: 'РџСЂРѕРІРµСЂРєР° РѕС‚РїСЂР°РІР»РµРЅРЅС‹С… СѓСЂРѕРІРЅРµР№, official-СЂРµС€РµРЅРёСЏ Рё publish control.',
+    flavor: 'Review submitted levels, adjust official status, and keep publish decisions traceable.',
     route: '/admin/levels',
     routeLabel: '/admin/levels',
   },
@@ -48,7 +48,7 @@ const adminToolOptions = [
     id: 'forge',
     name: 'Official Forge',
     accent: 'Create Stage',
-    flavor: 'РЎС‚Р°СЂС‚ РЅРѕРІРѕРіРѕ official-СѓСЂРѕРІРЅСЏ СЃ Р°РґРјРёРЅСЃРєРёРј РґСЂР°С„С‚РѕРј Рё СЂРµРґР°РєС‚РѕСЂРѕРј.',
+    flavor: 'Start a new official stage draft and jump straight into the editor flow.',
     route: '/admin/create-official',
     routeLabel: '/admin/create-official',
   },
@@ -56,7 +56,7 @@ const adminToolOptions = [
     id: 'skins',
     name: 'Skin Lab',
     accent: 'Pixel Workshop',
-    flavor: 'Р РµРґР°РєС‚РѕСЂ СЃРєРёРЅРѕРІ СЃ Р·Р°Р»РёРІРєРѕР№, СЃР»РѕСЏРјРё, undo/redo Рё РёРіСЂРѕРІС‹Рј preview.',
+    flavor: 'Tune player skins with layers, undo and redo, pixel tools, and a live gameplay preview.',
     route: '/admin/player-skins',
     routeLabel: '/admin/player-skins',
   },
@@ -64,7 +64,7 @@ const adminToolOptions = [
     id: 'users',
     name: 'Users',
     accent: 'Account Watch',
-    flavor: 'РЎРїРёСЃРѕРє РёРіСЂРѕРєРѕРІ, СЃС‚Р°С‚СѓСЃС‹ Р°РєРєР°СѓРЅС‚РѕРІ Рё Р±С‹СЃС‚СЂР°СЏ СЂСѓС‡РЅР°СЏ РїСЂРѕРІРµСЂРєР°.',
+    flavor: 'Inspect player accounts, roles, star totals, and moderation signals quickly.',
     route: '/admin/users',
     routeLabel: '/admin/users',
   },
@@ -77,9 +77,31 @@ const defaultSettings: HomeSettings = {
   showHitFlash: true,
 };
 
+const allowedRegistrationEmailDomains = ['apec.edu.kz', 'gmail.com', 'mail.ru', 'outlook.com'] as const;
+const allowedRegistrationEmailDomainMessage =
+  'Use an email from apec.edu.kz, gmail.com, mail.ru, or outlook.com';
+
+function hasAllowedRegistrationEmailDomain(email: string) {
+  const domain = email.trim().toLowerCase().split('@').pop() ?? '';
+
+  return allowedRegistrationEmailDomains.includes(
+    domain as (typeof allowedRegistrationEmailDomains)[number],
+  );
+}
+
+const homeRegistrationEmailSchema = z
+  .string()
+  .trim()
+  .max(254, 'Email must be 254 characters or fewer')
+  .email('Enter a valid email address')
+  .refine(hasAllowedRegistrationEmailDomain, allowedRegistrationEmailDomainMessage);
+
 const homeLoginSchema = z.object({
-  email: z.string().trim().email('Enter a valid email address'),
-  password: z.string().min(8, 'Password must be at least 8 characters'),
+  email: z.string().trim().max(254, 'Email must be 254 characters or fewer').email('Enter a valid email address'),
+  password: z
+    .string()
+    .min(10, 'Password must be at least 10 characters')
+    .max(128, 'Password must be 128 characters or fewer'),
 });
 
 const homeRegisterSchema = z.object({
@@ -89,14 +111,39 @@ const homeRegisterSchema = z.object({
     .min(3, 'Username must be at least 3 characters')
     .max(24, 'Username must be 24 characters or fewer')
     .regex(/^[a-zA-Z0-9_]+$/, 'Use only letters, numbers, and underscores'),
-  email: z.string().trim().email('Enter a valid email address'),
+  email: homeRegistrationEmailSchema,
   password: z
     .string()
-    .min(8, 'Password must be at least 8 characters')
+    .min(10, 'Password must be at least 10 characters')
+    .max(128, 'Password must be 128 characters or fewer')
     .regex(/[A-Z]/, 'Password must include an uppercase letter')
     .regex(/[a-z]/, 'Password must include a lowercase letter')
     .regex(/[0-9]/, 'Password must include a number'),
 });
+
+const homeEmailVerificationSchema = z.object({
+  email: z.string().trim().max(254, 'Email must be 254 characters or fewer').email('Enter a valid email address'),
+  code: z.string().trim().regex(/^\d{6}$/, 'Enter the 6 digit code from your email'),
+});
+
+type HomeAuthResponse = {
+  token: string;
+  user: User;
+};
+
+type EmailVerificationRequiredResponse = {
+  requiresEmailVerification: true;
+  email: string;
+  expiresAt: string | null;
+};
+
+type ResendVerificationResponse =
+  | (EmailVerificationRequiredResponse & { sent: true })
+  | {
+      email: string;
+      sent?: true;
+      alreadyVerified?: true;
+    };
 
 function getHomeAuthErrorMessage(error: unknown) {
   if (error instanceof z.ZodError) {
@@ -108,6 +155,27 @@ function getHomeAuthErrorMessage(error: unknown) {
   }
 
   return 'Something went wrong. Please try again.';
+}
+
+function getEmailVerificationDetails(error: unknown) {
+  if (!(error instanceof ApiClientError)) {
+    return null;
+  }
+
+  const details = error.details;
+
+  if (
+    typeof details !== 'object' ||
+    details === null ||
+    !('requiresEmailVerification' in details) ||
+    !('email' in details)
+  ) {
+    return null;
+  }
+
+  const maybeEmail = (details as { email?: unknown }).email;
+
+  return typeof maybeEmail === 'string' ? { email: maybeEmail } : null;
 }
 
 function clampPercentage(value: number) {
@@ -140,6 +208,8 @@ function readStoredSettings(): HomeSettings {
 }
 
 export function HomePage() {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const user = useAuthStore((state) => state.user);
   const setAuth = useAuthStore((state) => state.setAuth);
   const clearAuth = useAuthStore((state) => state.clearAuth);
@@ -149,7 +219,7 @@ export function HomePage() {
   const setPlayerSkinSelection = usePlayerSkinSelectionStore((state) => state.setSelection);
   const isAdmin = user?.role === 'ADMIN';
   const playRoute = '/levels';
-  const builderRoute = user ? '/my-levels' : '/register';
+  const builderRoute = user ? '/my-levels' : '/?auth=register';
   const homeScreenRef = useRef<HTMLDivElement | null>(null);
   const [activePanel, setActivePanel] = useState<HomePanel>(null);
   const [authDialog, setAuthDialog] = useState<HomeAuthDialog>(null);
@@ -157,6 +227,7 @@ export function HomePage() {
   const [isAccountHelpOpen, setIsAccountHelpOpen] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authInfo, setAuthInfo] = useState<string | null>(null);
+  const [authRedirectPath, setAuthRedirectPath] = useState<string | null>(null);
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
   const [loginForm, setLoginForm] = useState({
     email: '',
@@ -167,10 +238,31 @@ export function HomePage() {
     email: '',
     password: '',
   });
+  const [emailVerificationForm, setEmailVerificationForm] = useState({
+    email: '',
+    code: '',
+  });
   const publishedPlayerSkins = playerSkinsQuery.data?.skins ?? null;
   const publishedSkinCount = playerSkinModes.filter((mode) => Boolean(publishedPlayerSkins?.[mode])).length;
   const musicRangeStyle = { '--settings-range-fill': `${settings.musicVolume}%` } as CSSProperties;
   const sfxRangeStyle = { '--settings-range-fill': `${settings.sfxVolume}%` } as CSSProperties;
+
+  useEffect(() => {
+    const authTarget = searchParams.get('auth');
+
+    if (authTarget !== 'login' && authTarget !== 'register') {
+      return;
+    }
+
+    const fromPath = searchParams.get('from');
+    setAuthRedirectPath(fromPath?.startsWith('/') && !fromPath.startsWith('//') ? fromPath : null);
+    setActivePanel('account');
+    setAuthDialog(authTarget);
+    setAuthError(null);
+    setAuthInfo(null);
+    setIsAccountHelpOpen(false);
+    navigate('/', { replace: true });
+  }, [navigate, searchParams]);
 
   function getEquippedSkinSource(mode: PlayerMode) {
     return playerSkinSelection[mode] === 'published' && publishedPlayerSkins?.[mode] ? 'published' : 'default';
@@ -188,6 +280,8 @@ export function HomePage() {
     setAuthDialog(null);
     setAuthError(null);
     setAuthInfo(null);
+    setAuthRedirectPath(null);
+    setEmailVerificationForm({ email: '', code: '' });
   }
 
   function openAuthDialog(mode: Exclude<HomeAuthDialog, null>) {
@@ -197,34 +291,46 @@ export function HomePage() {
     setIsAccountHelpOpen(false);
   }
 
-  function fillDemoAdminCredentials() {
-    setLoginForm({
-      email: 'admin@example.com',
-      password: 'Admin123!',
-    });
+  function completeAuth(response: HomeAuthResponse) {
+    setAuth(response.token, response.user);
+    const nextRoute = authRedirectPath;
+    setAuthDialog(null);
     setAuthError(null);
-    setAuthInfo('Demo admin credentials are filled in.');
+    setAuthInfo(null);
+    setAuthRedirectPath(null);
+    setIsAccountHelpOpen(false);
+    setEmailVerificationForm({ email: '', code: '' });
+    if (nextRoute) {
+      navigate(nextRoute, { replace: true });
+    } else {
+      setActivePanel('account');
+    }
   }
 
-  async function submitAuthRequest<TValues extends Record<string, string>>(
-    schema: z.ZodSchema<TValues>,
-    values: TValues,
-    path: '/api/auth/login' | '/api/auth/register',
-  ) {
-    const payload = schema.parse(values);
-    const response = await apiRequest<{ token: string; user: User }>(path, {
+  async function submitLogin(values: typeof loginForm) {
+    const payload = homeLoginSchema.parse(values);
+    const response = await apiRequest<HomeAuthResponse>('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
 
-    setAuth(response.token, response.user);
-    setAuthDialog(null);
-    setAuthError(null);
-    setAuthInfo(null);
-    setIsAccountHelpOpen(false);
-    setActivePanel('account');
+    completeAuth(response);
+  }
 
-    return response;
+  async function submitRegister(values: typeof registerForm) {
+    const payload = homeRegisterSchema.parse(values);
+    const response = await apiRequest<EmailVerificationRequiredResponse>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+
+    setEmailVerificationForm({
+      email: response.email,
+      code: '',
+    });
+    setAuthDialog('verify-email');
+    setAuthError(null);
+    setAuthInfo(`Verification code sent to ${response.email}.`);
   }
 
   async function handleLoginSubmit(event: FormEvent<HTMLFormElement>) {
@@ -238,13 +344,22 @@ export function HomePage() {
     setIsAuthSubmitting(true);
 
     try {
-      await submitAuthRequest(homeLoginSchema, loginForm, '/api/auth/login');
+      await submitLogin(loginForm);
       setLoginForm({
         email: '',
         password: '',
       });
     } catch (error) {
-      setAuthError(getHomeAuthErrorMessage(error));
+      const verificationDetails = getEmailVerificationDetails(error);
+
+      if (verificationDetails) {
+        setEmailVerificationForm({ email: verificationDetails.email, code: '' });
+        setAuthDialog('verify-email');
+        setAuthError(null);
+        setAuthInfo('Email verification required. Enter your code or request a new one.');
+      } else {
+        setAuthError(getHomeAuthErrorMessage(error));
+      }
     } finally {
       setIsAuthSubmitting(false);
     }
@@ -261,12 +376,68 @@ export function HomePage() {
     setIsAuthSubmitting(true);
 
     try {
-      await submitAuthRequest(homeRegisterSchema, registerForm, '/api/auth/register');
+      await submitRegister(registerForm);
       setRegisterForm({
         username: '',
-        email: '',
+        email: registerForm.email,
         password: '',
       });
+    } catch (error) {
+      setAuthError(getHomeAuthErrorMessage(error));
+    } finally {
+      setIsAuthSubmitting(false);
+    }
+  }
+
+  async function handleVerifyEmailSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (isAuthSubmitting) {
+      return;
+    }
+
+    setAuthInfo(null);
+    setIsAuthSubmitting(true);
+
+    try {
+      const payload = homeEmailVerificationSchema.parse(emailVerificationForm);
+      const response = await apiRequest<HomeAuthResponse>('/api/auth/verify-email', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+
+      completeAuth(response);
+    } catch (error) {
+      setAuthError(getHomeAuthErrorMessage(error));
+    } finally {
+      setIsAuthSubmitting(false);
+    }
+  }
+
+  async function handleResendVerificationCode() {
+    if (isAuthSubmitting) {
+      return;
+    }
+
+    setAuthInfo(null);
+    setAuthError(null);
+    setIsAuthSubmitting(true);
+
+    try {
+      const email = homeEmailVerificationSchema.shape.email.parse(emailVerificationForm.email);
+      const response = await apiRequest<ResendVerificationResponse>('/api/auth/resend-verification', {
+        method: 'POST',
+        body: JSON.stringify({ email }),
+      });
+
+      if ('alreadyVerified' in response && response.alreadyVerified) {
+        setAuthDialog('login');
+        setAuthInfo('Email already verified. Log in to continue.');
+        return;
+      }
+
+      setEmailVerificationForm((current) => ({ ...current, email: response.email, code: '' }));
+      setAuthInfo(`New verification code sent to ${response.email}.`);
     } catch (error) {
       setAuthError(getHomeAuthErrorMessage(error));
     } finally {
@@ -317,6 +488,7 @@ export function HomePage() {
       setIsAccountHelpOpen(false);
       setAuthError(null);
       setAuthInfo(null);
+      setEmailVerificationForm({ email: '', code: '' });
     }
   }, [activePanel]);
 
@@ -427,105 +599,130 @@ export function HomePage() {
       {activePanel === 'skins' ? (
         <div className="game-home-overlay" role="presentation" onClick={() => setActivePanel(null)}>
           <div
-            className="game-home-panel"
+            className="game-home-panel game-home-panel--settings game-home-panel--character"
             role="dialog"
             aria-modal="true"
             aria-label="Character Select"
             onClick={(event) => event.stopPropagation()}
           >
-            <div className="game-home-panel-header">
-              <div>
-                <p className="game-home-panel-kicker">Garage</p>
-                <h2 className="game-home-panel-title">Character Select</h2>
+            <span className="game-home-settings-chain game-home-settings-chain--left" aria-hidden="true" />
+            <span className="game-home-settings-chain game-home-settings-chain--right" aria-hidden="true" />
+
+            <div className="game-home-settings-scaffold game-home-character-scaffold">
+              <div className="game-home-settings-topbar" aria-hidden="true">
+                <span className="game-home-settings-beam-cap game-home-settings-beam-cap--left" />
+                <div className="game-home-settings-topbar-core">
+                  <h2 className="game-home-settings-topbar-title">Character Select</h2>
+                </div>
+                <span className="game-home-settings-beam-cap game-home-settings-beam-cap--right" />
               </div>
-              <button type="button" className="game-home-close" onClick={() => setActivePanel(null)}>
-                Close
-              </button>
-            </div>
 
-            <div className="game-home-character-summary">
-              <div className="game-home-character-summary-copy">
-                <span className="game-home-character-summary-kicker">Published Skins</span>
-                <strong>{publishedSkinCount}/4 Modes Ready</strong>
+              <span className="game-home-settings-post game-home-settings-post--left" aria-hidden="true" />
+              <span className="game-home-settings-post game-home-settings-post--right" aria-hidden="true" />
+
+              <div className="game-home-character-body">
+                <div className="game-home-character-summary">
+                  <div className="game-home-character-summary-copy">
+                    <span className="game-home-character-summary-kicker">Custom Skins</span>
+                    <strong>{publishedSkinCount}/4</strong>
+                  </div>
+                  <span className="game-home-character-summary-pill">Default / Custom</span>
+                </div>
+
+                <div className="game-home-character-grid">
+                  {playerSkinModes.map((mode) => {
+                    const publishedSkin = publishedPlayerSkins?.[mode] ?? null;
+                    const hasPublishedSkin = Boolean(publishedSkin);
+                    const equippedSkinSource = getEquippedSkinSource(mode);
+
+                    return (
+                      <section
+                        key={mode}
+                        className={cn(
+                          'game-home-character-card',
+                          equippedSkinSource === 'published' ? 'is-custom-equipped' : 'is-default-equipped',
+                        )}
+                      >
+                        <button
+                          type="button"
+                          className="game-home-character-preview-button"
+                          onClick={() =>
+                            setPlayerSkinSelection(
+                              mode,
+                              hasPublishedSkin && equippedSkinSource === 'default' ? 'published' : 'default',
+                            )
+                          }
+                          aria-label={`${getPlayerModeLabel(mode)} skin`}
+                        >
+                          <PlayerModelCanvas
+                            mode={mode}
+                            width={132}
+                            height={132}
+                            skinSource={equippedSkinSource}
+                          />
+                        </button>
+
+                        <div className="game-home-character-card-header">
+                          <p className="game-home-character-card-title">{getPlayerModeLabel(mode)}</p>
+                          <span className="game-home-character-status">
+                            {equippedSkinSource === 'published' ? 'Custom' : 'Default'}
+                          </span>
+                        </div>
+
+                        <div
+                          className="game-home-character-switch"
+                          role="group"
+                          aria-label={`${getPlayerModeLabel(mode)} skin source`}
+                        >
+                          <button
+                            type="button"
+                            className={cn(
+                              'game-home-character-switch-button',
+                              equippedSkinSource === 'default' && 'is-active',
+                            )}
+                            onClick={() => setPlayerSkinSelection(mode, 'default')}
+                          >
+                            Default
+                          </button>
+
+                          <button
+                            type="button"
+                            className={cn(
+                              'game-home-character-switch-button',
+                              equippedSkinSource === 'published' && 'is-active',
+                            )}
+                            disabled={!hasPublishedSkin}
+                            onClick={() => setPlayerSkinSelection(mode, 'published')}
+                            title={publishedSkin?.name ?? 'Custom skin'}
+                          >
+                            Custom
+                          </button>
+                        </div>
+                      </section>
+                    );
+                  })}
+                </div>
+
+                {playerSkinsQuery.isError ? (
+                  <p className="game-home-character-feedback">
+                    Published skins are temporarily unavailable. You can still keep using the default set.
+                  </p>
+                ) : null}
               </div>
-              <p className="game-home-character-summary-text">
-                Choose a default or published skin for each mode. Your choice is used when the player switches between
-                cube, ball, ship, and arrow.
-              </p>
+
+              <div className="game-home-settings-bottombar">
+                <div className="game-home-settings-bottombar-segment" />
+                <button
+                  type="button"
+                  className="game-home-settings-close"
+                  onClick={() => setActivePanel(null)}
+                  aria-label="Close character select"
+                >
+                  <span className="game-home-settings-close-glyph" />
+                </button>
+                <div className="game-home-settings-bottombar-segment" />
+              </div>
             </div>
-
-            <div className="game-home-character-grid">
-              {playerSkinModes.map((mode) => {
-                const publishedSkin = publishedPlayerSkins?.[mode] ?? null;
-                const hasPublishedSkin = Boolean(publishedSkin);
-                const equippedSkinSource = getEquippedSkinSource(mode);
-
-                return (
-                  <section key={mode} className="game-home-character-card">
-                    <div className="game-home-character-card-header">
-                      <div>
-                        <p className="game-home-character-card-title">{getPlayerModeLabel(mode)}</p>
-                        <p className="game-home-character-card-description">{getPlayerModeDescription(mode)}</p>
-                      </div>
-                      <span
-                        className={cn(
-                          'game-home-character-status',
-                          hasPublishedSkin ? 'is-ready' : 'is-default-only',
-                        )}
-                      >
-                        {hasPublishedSkin ? 'Published Ready' : 'Default Only'}
-                      </span>
-                    </div>
-
-                    <div className="game-home-character-choice-grid">
-                      <button
-                        type="button"
-                        className={cn(
-                          'game-home-character-choice',
-                          equippedSkinSource === 'default' && 'is-active',
-                        )}
-                        onClick={() => setPlayerSkinSelection(mode, 'default')}
-                      >
-                        <span className="game-home-character-choice-preview">
-                          <PlayerModelCanvas mode={mode} width={96} height={96} skinSource="default" />
-                        </span>
-                        <span className="game-home-character-choice-name">{getPlayerModeLabel(mode)} Default</span>
-                        <span className="game-home-character-choice-copy">Classic built-in runner icon.</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        className={cn(
-                          'game-home-character-choice',
-                          'game-home-character-choice--published',
-                          equippedSkinSource === 'published' && 'is-active',
-                        )}
-                        disabled={!hasPublishedSkin}
-                        onClick={() => setPlayerSkinSelection(mode, 'published')}
-                      >
-                        <span className="game-home-character-choice-preview">
-                          <PlayerModelCanvas mode={mode} width={96} height={96} skinSource="published" />
-                        </span>
-                        <span className="game-home-character-choice-name">
-                          {publishedSkin?.name ?? 'Published'}
-                        </span>
-                        <span className="game-home-character-choice-copy">
-                          {hasPublishedSkin
-                            ? 'Skin Lab release ready to equip.'
-                            : 'No published skin for this mode yet.'}
-                        </span>
-                      </button>
-                    </div>
-                  </section>
-                );
-              })}
-            </div>
-
-            {playerSkinsQuery.isError ? (
-              <p className="game-home-character-feedback">
-                Published skins are temporarily unavailable. You can still keep using the default set.
-              </p>
-            ) : null}
           </div>
         </div>
       ) : null}
@@ -568,6 +765,17 @@ export function HomePage() {
                     {user ? `Signed in as ${user.username}` : 'Open account menu'}
                   </span>
                 </button>
+
+                <Link
+                  to="/editor-manual"
+                  className="game-home-settings-launch game-home-settings-launch--manual"
+                  onClick={() => setActivePanel(null)}
+                >
+                  <span className="game-home-settings-card-face">
+                    <span className="game-home-settings-card-title">Manual</span>
+                  </span>
+                  <span className="game-home-settings-account-status">Editor guide</span>
+                </Link>
 
                 <label className="game-home-settings-meter">
                   <div className="game-home-settings-meter-heading">
@@ -736,7 +944,7 @@ export function HomePage() {
                   <div className="game-home-account-help">
                     <p>
                       Log in with your email and password. Register creates a new pilot profile and stores your progress
-                      in the cloud.
+                      in the cloud after you confirm the 6 digit email code.
                     </p>
                   </div>
                 ) : null}
@@ -771,11 +979,19 @@ export function HomePage() {
             </button>
 
             <div className="game-home-auth-card">
-              <h3 className="game-home-auth-title">{authDialog === 'login' ? 'Login' : 'Register'}</h3>
+              <h3 className="game-home-auth-title">
+                {authDialog === 'login' ? 'Login' : authDialog === 'register' ? 'Register' : 'Verify Email'}
+              </h3>
 
               <form
                 className="game-home-auth-form"
-                onSubmit={authDialog === 'login' ? handleLoginSubmit : handleRegisterSubmit}
+                onSubmit={
+                  authDialog === 'login'
+                    ? handleLoginSubmit
+                    : authDialog === 'register'
+                      ? handleRegisterSubmit
+                      : handleVerifyEmailSubmit
+                }
               >
                 {authDialog === 'login' ? (
                   <>
@@ -786,7 +1002,7 @@ export function HomePage() {
                         autoComplete="email"
                         className="game-home-auth-input"
                         value={loginForm.email}
-                        placeholder="admin@example.com"
+                        placeholder="you@example.com"
                         onChange={(event) => setLoginForm((current) => ({ ...current, email: event.target.value }))}
                       />
                     </label>
@@ -804,9 +1020,6 @@ export function HomePage() {
                     </label>
 
                     <div className="game-home-auth-utility-stack">
-                      <button type="button" className="game-home-auth-utility-button" onClick={fillDemoAdminCredentials}>
-                        Use Demo Admin
-                      </button>
                       <button
                         type="button"
                         className="game-home-auth-utility-button"
@@ -816,7 +1029,7 @@ export function HomePage() {
                       </button>
                     </div>
                   </>
-                ) : (
+                ) : authDialog === 'register' ? (
                   <>
                     <label className="game-home-auth-field">
                       <span className="game-home-auth-label">Username:</span>
@@ -839,7 +1052,7 @@ export function HomePage() {
                         autoComplete="email"
                         className="game-home-auth-input"
                         value={registerForm.email}
-                        placeholder="nova@example.com"
+                        placeholder="you@example.com"
                         onChange={(event) => setRegisterForm((current) => ({ ...current, email: event.target.value }))}
                       />
                     </label>
@@ -851,7 +1064,7 @@ export function HomePage() {
                         autoComplete="new-password"
                         className="game-home-auth-input"
                         value={registerForm.password}
-                        placeholder="StrongPass1"
+                        placeholder="At least 8 characters"
                         onChange={(event) =>
                           setRegisterForm((current) => ({ ...current, password: event.target.value }))
                         }
@@ -868,6 +1081,59 @@ export function HomePage() {
                       </button>
                     </div>
                   </>
+                ) : (
+                  <>
+                    <label className="game-home-auth-field">
+                      <span className="game-home-auth-label">Email:</span>
+                      <input
+                        type="email"
+                        autoComplete="email"
+                        className="game-home-auth-input"
+                        value={emailVerificationForm.email}
+                        placeholder="you@example.com"
+                        onChange={(event) =>
+                          setEmailVerificationForm((current) => ({ ...current, email: event.target.value }))
+                        }
+                      />
+                    </label>
+
+                    <label className="game-home-auth-field">
+                      <span className="game-home-auth-label">Code:</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        className="game-home-auth-input"
+                        value={emailVerificationForm.code}
+                        placeholder="000000"
+                        maxLength={6}
+                        onChange={(event) =>
+                          setEmailVerificationForm((current) => ({
+                            ...current,
+                            code: event.target.value.replace(/\D/g, '').slice(0, 6),
+                          }))
+                        }
+                      />
+                    </label>
+
+                    <div className="game-home-auth-utility-stack">
+                      <button
+                        type="button"
+                        className="game-home-auth-utility-button"
+                        onClick={() => openAuthDialog('login')}
+                      >
+                        Back To Login
+                      </button>
+                      <button
+                        type="button"
+                        className="game-home-auth-utility-button"
+                        onClick={() => void handleResendVerificationCode()}
+                        disabled={isAuthSubmitting}
+                      >
+                        Resend Code
+                      </button>
+                    </div>
+                  </>
                 )}
 
                 {authInfo ? <p className="game-home-auth-note">{authInfo}</p> : null}
@@ -878,7 +1144,13 @@ export function HomePage() {
                     Cancel
                   </button>
                   <button type="submit" className="game-home-auth-submit" disabled={isAuthSubmitting}>
-                    {isAuthSubmitting ? 'Please Wait' : authDialog === 'login' ? 'Login' : 'Register'}
+                    {isAuthSubmitting
+                      ? 'Please Wait'
+                      : authDialog === 'login'
+                        ? 'Login'
+                        : authDialog === 'register'
+                          ? 'Register'
+                          : 'Verify'}
                   </button>
                 </div>
               </form>

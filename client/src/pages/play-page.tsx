@@ -7,6 +7,7 @@ import { apiRequest, ApiClientError } from '../services/api';
 import { useAuthStore } from '../store/auth-store';
 import type { Level } from '../types/models';
 import { ViewportFit } from '../components/viewport-fit';
+import { SystemStatePage } from './system-state-page';
 
 type CompletionOverlayState = {
   attemptNumber: number;
@@ -217,11 +218,13 @@ export function PlayPage() {
 
   if (!level) {
     return (
-      <ViewportFit className="viewport-fit-frame--play">
-        <div className="play-screen play-screen--fullscreen">
-          <div className="play-screen-state">Level not found.</div>
-        </div>
-      </ViewportFit>
+      <SystemStatePage
+        eyebrow="Stage Missing"
+        title="No Route"
+        description="That level is not available for an official run anymore. Pick another stage from the arcade list."
+        primaryAction={{ label: 'Levels', to: '/levels' }}
+        secondaryAction={{ label: 'Home', to: '/' }}
+      />
     );
   }
 

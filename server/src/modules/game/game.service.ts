@@ -4,6 +4,7 @@ import { ApiError } from '../../utils/api-error';
 import { canGrantReward, computeUserStatsFromRewards } from './reward-rules';
 
 const MIN_COMPLETION_TIME_MS = 3000;
+const MAX_CLIENT_CLOCK_DRIFT_MS = 10_000;
 
 async function syncUserStats(tx: Prisma.TransactionClient, userIds: string[]) {
   const uniqueIds = [...new Set(userIds)];
@@ -117,9 +118,21 @@ export const gameService = {
       throw new ApiError(400, 'Only official levels can be completed for rewards');
     }
 
+    if (progressPercent !== 100) {
+      throw new ApiError(400, 'Completion rejected by integrity rules');
+    }
+
+    if (completionTimeMs < MIN_COMPLETION_TIME_MS) {
+      throw new ApiError(400, 'Completion rejected by integrity rules');
+    }
+
     const elapsed = Date.now() - new Date(session.startedAt).getTime();
 
     if (elapsed < MIN_COMPLETION_TIME_MS) {
+      throw new ApiError(400, 'Completion rejected by integrity rules');
+    }
+
+    if (completionTimeMs > elapsed + MAX_CLIENT_CLOCK_DRIFT_MS) {
       throw new ApiError(400, 'Completion rejected by integrity rules');
     }
 
@@ -139,7 +152,7 @@ export const gameService = {
           levelId: session.level.id,
           gameSessionId: session.id,
           result: 'COMPLETED',
-          bestPercent: Math.max(100, Math.floor(progressPercent)),
+          bestPercent: 100,
           completionTimeMs,
         },
       });
@@ -168,7 +181,7 @@ export const gameService = {
         where: { id: session.id },
         data: {
           status: GameSessionStatus.COMPLETED,
-          progressPercent: Math.floor(progressPercent),
+          progressPercent: 100,
           completionTimeMs,
           rewardGranted: starsAwarded > 0,
           endedAt: new Date(),

@@ -8,6 +8,9 @@ async function getOfficialLevelCountMap() {
       isOfficial: true,
       status: 'OFFICIAL',
       isVisible: true,
+      starsReward: {
+        gt: 0,
+      },
     },
     _count: {
       _all: true,

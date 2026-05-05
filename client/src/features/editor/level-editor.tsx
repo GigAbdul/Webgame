@@ -2,7 +2,7 @@ import type { ChangeEvent, CSSProperties, PointerEvent as ReactPointerEvent } fr
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Level, LevelColorGroup, LevelData, LevelObject, LevelObjectType } from '../../types/models';
 import { Badge, Button, FieldLabel, Input, Panel, Select, Textarea } from '../../components/ui';
-import { BASE_HORIZONTAL_SPEED, GameCanvas, buildPreviewBootstrap } from '../game/game-canvas';
+import { GameCanvas } from '../game/game-canvas';
 import {
   FIXED_LEVEL_START_X,
   FIXED_LEVEL_START_Y,
@@ -25,6 +25,8 @@ import {
   isTriggerObjectType,
   levelObjectDefinitions,
 } from '../game/object-definitions';
+import { BASE_HORIZONTAL_SPEED } from '../game/player-physics';
+import { buildPreviewBootstrap } from '../game/preview-bootstrap';
 import { readStoredMusicVolume, resolveLevelMusic } from '../game/level-music';
 import { drawStageObjectSprite, getStageObjectPreviewSpriteImage } from '../game/object-renderer';
 import { DASH_ORB_SPEED, getPlayerHitboxLayout } from '../game/player-physics';
@@ -4073,7 +4075,7 @@ export function LevelEditor({
                               onClick={() =>
                                 updateSelectedTriggerBooleanProp(
                                   'lockToPlayerX',
-                                  !Boolean(selectedTriggerObject.props.lockToPlayerX),
+                                  !selectedTriggerObject.props.lockToPlayerX,
                                 )
                               }
                             >
@@ -4089,7 +4091,7 @@ export function LevelEditor({
                               onClick={() =>
                                 updateSelectedTriggerBooleanProp(
                                   'lockToPlayerY',
-                                  !Boolean(selectedTriggerObject.props.lockToPlayerY),
+                                  !selectedTriggerObject.props.lockToPlayerY,
                                 )
                               }
                             >
@@ -4214,7 +4216,7 @@ export function LevelEditor({
                               onClick={() =>
                                 updateSelectedTriggerBooleanProp(
                                   'lockObjectRotation',
-                                  !Boolean(selectedTriggerObject.props.lockObjectRotation),
+                                  !selectedTriggerObject.props.lockObjectRotation,
                                 )
                               }
                             >
@@ -5708,7 +5710,7 @@ export function LevelEditor({
                             onClick={() =>
                               updateSelectedTriggerBooleanProp(
                                 'lockToPlayerX',
-                                !Boolean(selectedTriggerObject.props.lockToPlayerX),
+                                !selectedTriggerObject.props.lockToPlayerX,
                               )
                             }
                           >
@@ -5724,7 +5726,7 @@ export function LevelEditor({
                             onClick={() =>
                               updateSelectedTriggerBooleanProp(
                                 'lockToPlayerY',
-                                !Boolean(selectedTriggerObject.props.lockToPlayerY),
+                                !selectedTriggerObject.props.lockToPlayerY,
                               )
                             }
                           >
@@ -5810,7 +5812,7 @@ export function LevelEditor({
                             onClick={() =>
                               updateSelectedTriggerBooleanProp(
                                 'lockObjectRotation',
-                                !Boolean(selectedTriggerObject.props.lockObjectRotation),
+                                !selectedTriggerObject.props.lockObjectRotation,
                               )
                             }
                           >

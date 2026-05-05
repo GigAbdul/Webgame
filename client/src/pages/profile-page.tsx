@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { EmptyState, Panel, StatCard } from '../components/ui';
 import { apiRequest } from '../services/api';
 import type { ProfileResponse } from '../types/models';
+import { SystemStatePage } from './system-state-page';
 
 export function ProfilePage() {
   const profileQuery = useQuery({
@@ -13,11 +14,25 @@ export function ProfilePage() {
   const profile = profileQuery.data;
 
   if (profileQuery.isLoading) {
-    return <p className="text-white/70">Loading profile...</p>;
+    return (
+      <SystemStatePage
+        eyebrow="Profile"
+        title="Loading"
+        description="Syncing stars, clears, workshop drafts, and recent rewards."
+      />
+    );
   }
 
-  if (!profile) {
-    return <p className="text-white/70">Profile unavailable.</p>;
+  if (profileQuery.isError || !profile) {
+    return (
+      <SystemStatePage
+        eyebrow="Profile"
+        title="Unavailable"
+        description="The profile service did not answer cleanly. Return home or try the workshop again."
+        primaryAction={{ label: 'Home', to: '/' }}
+        secondaryAction={{ label: 'Workshop', to: '/my-levels' }}
+      />
+    );
   }
 
   return (
@@ -30,8 +45,7 @@ export function ProfilePage() {
               {profile.user.username}
             </h2>
             <p className="max-w-2xl text-sm leading-8 text-white/82">
-              Здесь должен ощущаться профиль игрока, а не кабинет: звёзды, clear-ы, свои уровни и последние награды в
-              одном arcade dashboard.
+              Your player dashboard keeps stars, official clears, workshop drafts, and recent rewards in one readable place.
             </p>
           </div>
 
@@ -77,7 +91,7 @@ export function ProfilePage() {
                     </div>
                     <p className="mt-2 text-sm text-white/76">
                       Updated {new Date(level.updatedAt).toLocaleDateString()}
-                      {level.isOfficial ? ` • ${level.starsReward} stars` : ' • Draft Pipeline'}
+                      {level.isOfficial ? ` | ${level.starsReward} stars` : ' | Draft Pipeline'}
                     </p>
                   </div>
                 ))}
@@ -85,7 +99,7 @@ export function ProfilePage() {
             ) : (
               <EmptyState
                 title="No levels yet"
-                description="Открой forge и собери свой первый маршрут."
+                description="Open the forge and build your first route."
                 action={
                   <Link to="/my-levels" className="font-display text-[10px] tracking-[0.22em] text-[#ffd44a] hover:text-white">
                     Open Workshop

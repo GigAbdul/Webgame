@@ -9,28 +9,28 @@ const adminToolCards = [
   {
     title: 'Review Queue',
     eyebrow: 'Moderation',
-    description: 'Проверка сабмитов, official status, архивирование и publish controls.',
+    description: 'Review submissions, official status, archive state, and publish controls.',
     route: '/admin/levels',
     accent: 'Queue',
   },
   {
     title: 'Official Forge',
     eyebrow: 'Build',
-    description: 'Создание нового official-драфта и быстрый переход в редактор.',
+    description: 'Create a new official draft and move straight into the editor.',
     route: '/admin/create-official',
     accent: 'Create',
   },
   {
     title: 'Player Skin Lab',
     eyebrow: 'Cosmetics',
-    description: 'Редактор скинов с preview-run, слоями и быстрым сохранением.',
+    description: 'Edit player skins with preview runs, layers, and quick saving.',
     route: '/admin/player-skins',
     accent: 'Skins',
   },
   {
     title: 'Users',
     eyebrow: 'Accounts',
-    description: 'Просмотр пользователей, ролей и состояния аккаунтов.',
+    description: 'Inspect users, roles, account status, and player totals.',
     route: '/admin/users',
     accent: 'Users',
   },
@@ -84,8 +84,8 @@ export function AdminDashboardPage() {
               Room
             </h2>
             <p className="max-w-2xl text-sm leading-8 text-white/82">
-              Единая админ-панель в стиле skin lab: быстрые модули, сводка по очереди и прямой вход в рабочие
-              инструменты без лишних переходов.
+              A compact admin dashboard for moderation, publishing, account review, and direct access to the tools that
+              keep the arcade live.
             </p>
           </div>
 
@@ -173,10 +173,10 @@ export function AdminDashboardPage() {
 
             <div className="rounded-[24px] border-[4px] border-[#0f1b31] bg-[#101a30] px-5 py-5">
               <div className="space-y-3 text-sm leading-7 text-white/78">
-                <p>Review Queue ведёт к модерации пользовательских сабмитов и official-публикации.</p>
-                <p>Official Forge создаёт новый админский драфт и сразу открывает рабочий пайплайн уровня.</p>
-                <p>Player Skin Lab отвечает за визуалы cube, ball, ship и arrow с live test preview.</p>
-                <p>Users нужен для ручной проверки аккаунтов и общей диагностики активности.</p>
+                <p>Review Queue is for submitted levels, status checks, and official publishing decisions.</p>
+                <p>Official Forge starts a fresh admin-owned draft and sends it straight into the editor.</p>
+                <p>Player Skin Lab controls cube, ball, ship, and arrow visuals with a live test preview.</p>
+                <p>Users keeps account review, roles, and activity close to moderation tools.</p>
               </div>
             </div>
 

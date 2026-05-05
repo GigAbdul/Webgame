@@ -26,15 +26,19 @@ export function AppLayout() {
   const isHomeRoute = location.pathname === '/';
   const isWorkshopDetailRoute = location.pathname.startsWith('/my-levels/');
   const isSkinStudioRoute = location.pathname === '/admin/player-skins';
+  const isEditorManualRoute = location.pathname === '/editor-manual';
   const levelsViewportFitClassName = isSkinStudioRoute
     ? 'viewport-fit-frame--skin-studio'
-    : location.pathname === '/levels'
+    : isEditorManualRoute
+      ? 'viewport-fit-frame--home'
+      : location.pathname === '/levels'
       ? 'viewport-fit-frame--levels-classic'
       : 'viewport-fit-frame--arcade-blue';
   const isFullScreenArcadeRoute =
     location.pathname === '/levels' ||
     location.pathname === '/my-levels' ||
     location.pathname === '/leaderboard' ||
+    isEditorManualRoute ||
     isWorkshopDetailRoute ||
     isSkinStudioRoute;
 
@@ -94,10 +98,10 @@ export function AppLayout() {
                   </>
                 ) : showGuestUi ? (
                   <>
-                    <NavLink to="/login">
+                    <NavLink to="/?auth=login">
                       <Button variant="ghost">Login</Button>
                     </NavLink>
-                    <NavLink to="/register">
+                    <NavLink to="/?auth=register">
                       <Button>Register</Button>
                     </NavLink>
                   </>
@@ -144,10 +148,10 @@ export function AppLayout() {
                       </>
                     ) : showGuestUi ? (
                       <>
-                        <NavLink to="/login">
+                        <NavLink to="/?auth=login">
                           <Button variant="ghost">Login</Button>
                         </NavLink>
-                        <NavLink to="/register">
+                        <NavLink to="/?auth=register">
                           <Button>Register</Button>
                         </NavLink>
                       </>

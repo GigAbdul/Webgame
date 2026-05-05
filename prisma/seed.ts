@@ -43,12 +43,14 @@ async function main() {
       username: adminUsername,
       passwordHash: adminPasswordHash,
       role: 'ADMIN',
+      emailVerifiedAt: new Date(),
     },
     create: {
       email: adminEmail,
       username: adminUsername,
       passwordHash: adminPasswordHash,
       role: 'ADMIN',
+      emailVerifiedAt: new Date(),
     },
   });
 
@@ -58,12 +60,14 @@ async function main() {
       username: 'nova',
       passwordHash: demoPasswordHash,
       role: 'USER',
+      emailVerifiedAt: new Date(),
     },
     create: {
       email: 'nova@example.com',
       username: 'nova',
       passwordHash: demoPasswordHash,
       role: 'USER',
+      emailVerifiedAt: new Date(),
     },
   });
 
@@ -73,12 +77,14 @@ async function main() {
       username: 'pulse',
       passwordHash: demoPasswordHash,
       role: 'USER',
+      emailVerifiedAt: new Date(),
     },
     create: {
       email: 'pulse@example.com',
       username: 'pulse',
       passwordHash: demoPasswordHash,
       role: 'USER',
+      emailVerifiedAt: new Date(),
     },
   });
 

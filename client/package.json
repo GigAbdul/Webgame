@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit",
+    "build": "npm run typecheck && vite build",
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
     "preview": "vite preview"
   },
@@ -13,6 +14,7 @@
     "@hookform/resolvers": "^3.10.0",
     "@tanstack/react-query": "^5.74.4",
     "clsx": "^2.1.1",
+    "lucide-react": "^1.11.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-hook-form": "^7.54.2",
@@ -35,6 +37,6 @@
     "postcss": "^8.5.3",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.8.2",
-    "vite": "^5.4.14"
+    "vite": "^6.4.2"
   }
 }

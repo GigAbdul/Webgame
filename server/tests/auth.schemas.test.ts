@@ -5,7 +5,7 @@ describe('auth schemas', () => {
   it('accepts a valid registration payload', () => {
     const result = registerSchema.safeParse({
       username: 'player_one',
-      email: 'player@example.com',
+      email: 'player@gmail.com',
       password: 'StrongPass1',
     });
 
@@ -15,8 +15,18 @@ describe('auth schemas', () => {
   it('rejects a short password', () => {
     const result = registerSchema.safeParse({
       username: 'player_one',
-      email: 'player@example.com',
+      email: 'player@gmail.com',
       password: 'weak',
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects registration email domains outside the allow list', () => {
+    const result = registerSchema.safeParse({
+      username: 'player_one',
+      email: 'player@example.com',
+      password: 'StrongPass1',
     });
 
     expect(result.success).toBe(false);

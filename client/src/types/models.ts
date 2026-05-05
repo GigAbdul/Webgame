@@ -159,6 +159,7 @@ export type User = {
   role: Role;
   totalStars: number;
   completedOfficialLevels: number;
+  emailVerifiedAt?: string | null;
   createdAt?: string;
 };
 

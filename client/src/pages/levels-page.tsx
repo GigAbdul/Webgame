@@ -200,7 +200,16 @@ export function LevelsPage() {
         </div>
       ) : null}
 
-      {!levelsQuery.isLoading && !displayedLevel ? (
+      {levelsQuery.isError ? (
+        <div className="gd-classic-level-feedback gd-classic-level-feedback--action">
+          <p>Could not load official levels.</p>
+          <button type="button" onClick={() => void levelsQuery.refetch()}>
+            Retry
+          </button>
+        </div>
+      ) : null}
+
+      {!levelsQuery.isLoading && !levelsQuery.isError && !displayedLevel ? (
         <div className="gd-classic-level-feedback">
           <p>No official levels yet.</p>
         </div>
@@ -256,7 +265,7 @@ function LevelPanel({
           className="gd-classic-soundtrack-button"
           aria-label={`Open details for ${level.title}`}
         >
-          Download The Soundtracks
+          Stage Briefing
         </Link>
       </div>
     </div>

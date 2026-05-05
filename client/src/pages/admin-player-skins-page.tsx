@@ -25,6 +25,7 @@ import {
 import { apiRequest } from '../services/api';
 import type { LevelData, PlayerMode, PlayerSkinData, PlayerSkinLayer, PlayerSkinRecord } from '../types/models';
 import { cn } from '../utils/cn';
+import { SystemStatePage } from './system-state-page';
 
 type SkinTool = 'paint' | 'erase' | 'fill' | 'circle' | 'select' | 'pick';
 
@@ -1879,7 +1880,13 @@ export function AdminPlayerSkinsPage() {
   }, [activeColor, activeMode, currentDraft, currentLayer.id, currentSelection, isCanvasFullscreenOpen, saveMutation, tool]);
 
   if (playerSkinsQuery.isLoading && !initializedRef.current) {
-    return <p className="text-white/70">Loading skin studio...</p>;
+    return (
+      <SystemStatePage
+        eyebrow="Admin Garage"
+        title="Loading"
+        description="Preparing the skin studio canvas, modes, layers, palettes, and live preview controls."
+      />
+    );
   }
 
   return (

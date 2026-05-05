@@ -58,20 +58,24 @@ enum PlayerSkinMode {
 }
 
 model User {
-  id                      String         @id @default(cuid())
-  username                String         @unique
-  email                   String         @unique
-  passwordHash            String
-  role                    Role           @default(USER)
-  totalStars              Int            @default(0)
-  completedOfficialLevels Int            @default(0)
-  createdAt               DateTime       @default(now())
-  updatedAt               DateTime       @updatedAt
-  levels                  Level[]        @relation("AuthorLevels")
-  publishedLevels         Level[]        @relation("PublishedLevels")
-  sessions                GameSession[]
-  attempts                LevelAttempt[]
-  rewards                 LevelReward[]
+  id                         String         @id @default(cuid())
+  username                   String         @unique
+  email                      String         @unique
+  passwordHash               String
+  emailVerifiedAt            DateTime?
+  emailVerificationCodeHash  String?
+  emailVerificationExpiresAt DateTime?
+  emailVerificationSentAt    DateTime?
+  role                       Role           @default(USER)
+  totalStars                 Int            @default(0)
+  completedOfficialLevels    Int            @default(0)
+  createdAt                  DateTime       @default(now())
+  updatedAt                  DateTime       @updatedAt
+  levels                     Level[]        @relation("AuthorLevels")
+  publishedLevels            Level[]        @relation("PublishedLevels")
+  sessions                   GameSession[]
+  attempts                   LevelAttempt[]
+  rewards                    LevelReward[]
 }
 
 model Level {
@@ -142,15 +146,15 @@ model LevelAttempt {
 }
 
 model LevelReward {
-  id                  String       @id @default(cuid())
-  userId              String
-  levelId             String
-  starsAwarded        Int
-  awardedAt           DateTime     @default(now())
-  createdFromAttemptId String?      @unique
-  user                User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  level               Level        @relation(fields: [levelId], references: [id], onDelete: Cascade)
-  createdFromAttempt  LevelAttempt? @relation(fields: [createdFromAttemptId], references: [id], onDelete: SetNull)
+  id                   String        @id @default(cuid())
+  userId               String
+  levelId              String
+  starsAwarded         Int
+  awardedAt            DateTime      @default(now())
+  createdFromAttemptId String?       @unique
+  user                 User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  level                Level         @relation(fields: [levelId], references: [id], onDelete: Cascade)
+  createdFromAttempt   LevelAttempt? @relation(fields: [createdFromAttemptId], references: [id], onDelete: SetNull)
 
   @@unique([userId, levelId])
   @@index([levelId])
