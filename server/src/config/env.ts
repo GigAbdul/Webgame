@@ -27,6 +27,8 @@ const envSchema = z.object({
   ADMIN_EMAIL: z.string().email().default('admin@example.com'),
   ADMIN_PASSWORD: z.string().min(8).default('Admin123!'),
   ADMIN_USERNAME: z.string().min(3).default('admin'),
+  RESEND_API_KEY: z.string().default(''),
+  RESEND_FROM: z.string().default(''),
   SMTP_HOST: z.string().default(''),
   SMTP_PORT: z.coerce.number().int().positive().default(587),
   SMTP_SECURE: booleanStringSchema,
@@ -78,13 +80,18 @@ if (parsedEnv.NODE_ENV === 'production') {
     unsafeSettings.push('ADMIN_EMAIL must not use the demo admin email');
   }
 
-  if (
-    !process.env.SMTP_HOST ||
-    !process.env.SMTP_USER ||
-    !process.env.SMTP_PASS ||
-    !process.env.SMTP_FROM
-  ) {
-    unsafeSettings.push('SMTP_HOST, SMTP_USER, SMTP_PASS, and SMTP_FROM must be configured');
+  const hasResendConfig = Boolean(process.env.RESEND_API_KEY && process.env.RESEND_FROM);
+  const hasSmtpConfig = Boolean(
+    process.env.SMTP_HOST &&
+      process.env.SMTP_USER &&
+      process.env.SMTP_PASS &&
+      process.env.SMTP_FROM,
+  );
+
+  if (!hasResendConfig && !hasSmtpConfig) {
+    unsafeSettings.push(
+      'RESEND_API_KEY and RESEND_FROM, or SMTP_HOST, SMTP_USER, SMTP_PASS, and SMTP_FROM must be configured',
+    );
   }
 
   if (unsafeSettings.length) {

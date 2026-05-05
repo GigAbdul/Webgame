@@ -208,6 +208,7 @@ Required variables:
 - `ADMIN_EMAIL`
 - `ADMIN_PASSWORD`
 - `ADMIN_USERNAME`
+- `RESEND_API_KEY` and `RESEND_FROM` for email verification, or SMTP variables as a fallback
 
 ## Local Development
 
@@ -359,6 +360,8 @@ Recommended Railway setup:
    - `ADMIN_EMAIL`
    - `ADMIN_PASSWORD`
    - `ADMIN_USERNAME`
+   - `RESEND_API_KEY`
+   - `RESEND_FROM`
 5. Use the app service build command:
 
 ```bash
