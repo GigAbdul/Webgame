@@ -9993,8 +9993,10 @@ body.gd-draft-view-preview-open {
 }
 
 .game-home-panel--settings {
-  --settings-chain-top: -140px;
-  --settings-chain-height: 248px;
+  --settings-chain-drop: max(260px, 42dvh);
+  --settings-chain-attach: 108px;
+  --settings-chain-top: calc(0px - var(--settings-chain-drop));
+  --settings-chain-height: calc(var(--settings-chain-drop) + var(--settings-chain-attach));
   --settings-chain-x: 100px;
   position: relative;
   width: min(100%, 820px);
@@ -11342,7 +11344,8 @@ body.gd-draft-view-preview-open {
   }
 
   .game-home-panel--settings {
-    --settings-chain-height: 224px;
+    --settings-chain-drop: max(260px, 42dvh);
+    --settings-chain-attach: 84px;
     --settings-chain-x: 94px;
     padding: 76px 22px 58px;
   }
@@ -16223,8 +16226,8 @@ body.editor-route-active {
   }
 
   .game-home-panel--settings {
-    --settings-chain-top: -112px;
-    --settings-chain-height: 184px;
+    --settings-chain-drop: max(220px, 42dvh);
+    --settings-chain-attach: 76px;
     --settings-chain-x: 84px;
     width: min(100%, 760px);
     padding: 68px 28px 52px;
@@ -16389,8 +16392,8 @@ body.editor-route-active {
   }
 
   .game-home-panel--account.game-home-panel--settings {
-    --settings-chain-top: -78px;
-    --settings-chain-height: 142px;
+    --settings-chain-drop: max(220px, 42dvh);
+    --settings-chain-attach: 68px;
     --settings-chain-x: 76px;
     width: min(100%, 700px);
     padding: 60px 28px 46px;
@@ -16483,7 +16486,7 @@ body.editor-route-active {
   }
 
   .game-home-panel--character.game-home-panel--settings {
-    --settings-chain-height: 188px;
+    --settings-chain-attach: 80px;
     --settings-chain-x: 82px;
     width: min(100%, 740px);
     padding: 72px 28px 54px;
