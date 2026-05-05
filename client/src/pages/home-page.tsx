@@ -1064,7 +1064,7 @@ export function HomePage() {
                         autoComplete="new-password"
                         className="game-home-auth-input"
                         value={registerForm.password}
-                        placeholder="At least 8 characters"
+                        placeholder="At least 10 characters"
                         onChange={(event) =>
                           setRegisterForm((current) => ({ ...current, password: event.target.value }))
                         }
