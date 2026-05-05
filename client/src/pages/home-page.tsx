@@ -100,7 +100,7 @@ const homeLoginSchema = z.object({
   email: z.string().trim().max(254, 'Email must be 254 characters or fewer').email('Enter a valid email address'),
   password: z
     .string()
-    .min(10, 'Password must be at least 10 characters')
+    .min(1, 'Enter your password')
     .max(128, 'Password must be 128 characters or fewer'),
 });
 

@@ -34,7 +34,7 @@ export const registerSchema = z.object({
 
 export const loginSchema = z.object({
   email: z.string().trim().max(254).email(),
-  password: z.string().min(10).max(128),
+  password: z.string().min(1).max(128),
 });
 
 export const verifyEmailSchema = z.object({

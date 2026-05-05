@@ -40,5 +40,14 @@ describe('auth schemas', () => {
 
     expect(result.success).toBe(false);
   });
+
+  it('accepts existing shorter passwords on login', () => {
+    const result = loginSchema.safeParse({
+      email: 'player@gmail.com',
+      password: 'OldPass1',
+    });
+
+    expect(result.success).toBe(true);
+  });
 });
 
