@@ -9993,6 +9993,9 @@ body.gd-draft-view-preview-open {
 }
 
 .game-home-panel--settings {
+  --settings-chain-top: -140px;
+  --settings-chain-height: 248px;
+  --settings-chain-x: 100px;
   position: relative;
   width: min(100%, 820px);
   max-height: calc(100dvh - 18px);
@@ -10007,10 +10010,10 @@ body.gd-draft-view-preview-open {
 
 .game-home-settings-chain {
   position: absolute;
-  top: -140px;
+  top: var(--settings-chain-top);
   z-index: 2;
   width: 18px;
-  height: 192px;
+  height: var(--settings-chain-height);
   border: 3px solid #2a1812;
   border-radius: 999px;
   background:
@@ -10042,11 +10045,11 @@ body.gd-draft-view-preview-open {
 }
 
 .game-home-settings-chain--left {
-  left: 100px;
+  left: var(--settings-chain-x);
 }
 
 .game-home-settings-chain--right {
-  right: 100px;
+  right: var(--settings-chain-x);
 }
 
 .game-home-settings-scaffold {
@@ -11339,15 +11342,17 @@ body.gd-draft-view-preview-open {
   }
 
   .game-home-panel--settings {
+    --settings-chain-height: 224px;
+    --settings-chain-x: 94px;
     padding: 76px 22px 58px;
   }
 
   .game-home-settings-chain--left {
-    left: 94px;
+    left: var(--settings-chain-x);
   }
 
   .game-home-settings-chain--right {
-    right: 94px;
+    right: var(--settings-chain-x);
   }
 
   .game-home-settings-scaffold {
@@ -16218,14 +16223,17 @@ body.editor-route-active {
   }
 
   .game-home-panel--settings {
+    --settings-chain-top: -112px;
+    --settings-chain-height: 184px;
+    --settings-chain-x: 84px;
     width: min(100%, 760px);
     padding: 68px 28px 52px;
   }
 
   .game-home-settings-chain {
-    top: -112px;
+    top: var(--settings-chain-top);
     width: 16px;
-    height: 142px;
+    height: var(--settings-chain-height);
     border-width: 3px;
   }
 
@@ -16237,11 +16245,11 @@ body.editor-route-active {
   }
 
   .game-home-settings-chain--left {
-    left: 84px;
+    left: var(--settings-chain-x);
   }
 
   .game-home-settings-chain--right {
-    right: 84px;
+    right: var(--settings-chain-x);
   }
 
   .game-home-settings-scaffold {
@@ -16381,21 +16389,24 @@ body.editor-route-active {
   }
 
   .game-home-panel--account.game-home-panel--settings {
+    --settings-chain-top: -78px;
+    --settings-chain-height: 142px;
+    --settings-chain-x: 76px;
     width: min(100%, 700px);
     padding: 60px 28px 46px;
   }
 
   .game-home-panel--account .game-home-settings-chain {
-    top: -78px;
-    height: 108px;
+    top: var(--settings-chain-top);
+    height: var(--settings-chain-height);
   }
 
   .game-home-panel--account .game-home-settings-chain--left {
-    left: 76px;
+    left: var(--settings-chain-x);
   }
 
   .game-home-panel--account .game-home-settings-chain--right {
-    right: 76px;
+    right: var(--settings-chain-x);
   }
 
   .game-home-panel--account .game-home-settings-scaffold {
@@ -16472,16 +16483,18 @@ body.editor-route-active {
   }
 
   .game-home-panel--character.game-home-panel--settings {
+    --settings-chain-height: 188px;
+    --settings-chain-x: 82px;
     width: min(100%, 740px);
     padding: 72px 28px 54px;
   }
 
   .game-home-panel--character .game-home-settings-chain--left {
-    left: 82px;
+    left: var(--settings-chain-x);
   }
 
   .game-home-panel--character .game-home-settings-chain--right {
-    right: 82px;
+    right: var(--settings-chain-x);
   }
 
   .game-home-panel--character .game-home-character-scaffold {
