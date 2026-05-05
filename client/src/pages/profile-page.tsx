@@ -40,7 +40,7 @@ export function ProfilePage() {
       <Panel className="game-screen bg-transparent p-0">
         <div className="grid gap-6 px-5 py-6 lg:grid-cols-[1.1fr_0.9fr] lg:px-8 lg:py-8">
           <div className="space-y-4">
-            <p className="font-display text-[11px] tracking-[0.3em] text-[#ffd44a]">Pilot Profile</p>
+            <p className="font-display text-[11px] tracking-[0.3em] text-[#ffd44a]">Player Profile</p>
             <h2 className="font-display text-4xl leading-[0.9] text-[#caff45] drop-shadow-[0_4px_0_rgba(0,0,0,0.35)] md:text-6xl">
               {profile.user.username}
             </h2>

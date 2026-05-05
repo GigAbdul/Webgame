@@ -138,7 +138,7 @@ export function LevelDetailPage() {
               <div className="space-y-3">
                 <p className="arcade-eyebrow">Clear Rules</p>
                 <p className="text-sm leading-7 text-white/78">
-                  Stars are granted only on the first successful official clear for signed-in pilots. Guest runs are great
+                  Stars are granted only on the first successful official clear for signed-in players. Guest runs are great
                   for routing, timing, and learning the lane, but they do not enter the leaderboard.
                 </p>
               </div>

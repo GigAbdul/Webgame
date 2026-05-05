@@ -85,7 +85,7 @@ export function AppLayout() {
                 {showAuthenticatedUi ? (
                   <>
                     <NavLink to="/profile" className="app-user-card">
-                      <span className="app-user-label">Pilot</span>
+                      <span className="app-user-label">Player</span>
                       <span className="app-user-name">{user!.username}</span>
                     </NavLink>
                     <div className="app-star-card">
@@ -135,7 +135,7 @@ export function AppLayout() {
                     {showAuthenticatedUi ? (
                       <>
                         <NavLink to="/profile" className="app-user-card">
-                          <span className="app-user-label">Pilot</span>
+                          <span className="app-user-label">Player</span>
                           <span className="app-user-name">{user!.username}</span>
                         </NavLink>
                         <div className="app-star-card">

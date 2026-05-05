@@ -338,7 +338,7 @@ function drawBuiltInPlayerModel(
     const bodyHeight = height * 0.58;
     const halfLength = bodyLength / 2;
     const halfHeight = bodyHeight / 2;
-    const pilotSize = Math.min(width, height) * 0.24;
+    const cockpitSize = Math.min(width, height) * 0.24;
 
     context.fillStyle = '#132339';
     context.beginPath();
@@ -370,14 +370,14 @@ function drawBuiltInPlayerModel(
     context.fill();
 
     context.fillStyle = '#f4f7ff';
-    context.fillRect(-halfLength * 0.54, -pilotSize / 2, pilotSize, pilotSize);
+    context.fillRect(-halfLength * 0.54, -cockpitSize / 2, cockpitSize, cockpitSize);
     context.strokeStyle = '#182133';
     context.lineWidth = 2;
-    context.strokeRect(-halfLength * 0.54, -pilotSize / 2, pilotSize, pilotSize);
+    context.strokeRect(-halfLength * 0.54, -cockpitSize / 2, cockpitSize, cockpitSize);
     context.fillStyle = '#182133';
-    context.fillRect(-halfLength * 0.48, -pilotSize * 0.2, pilotSize * 0.1, pilotSize * 0.1);
-    context.fillRect(-halfLength * 0.36, -pilotSize * 0.2, pilotSize * 0.1, pilotSize * 0.1);
-    context.fillRect(-halfLength * 0.48, pilotSize * 0.12, pilotSize * 0.22, pilotSize * 0.07);
+    context.fillRect(-halfLength * 0.48, -cockpitSize * 0.2, cockpitSize * 0.1, cockpitSize * 0.1);
+    context.fillRect(-halfLength * 0.36, -cockpitSize * 0.2, cockpitSize * 0.1, cockpitSize * 0.1);
+    context.fillRect(-halfLength * 0.48, cockpitSize * 0.12, cockpitSize * 0.22, cockpitSize * 0.07);
     return;
   }
 

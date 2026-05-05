@@ -77,9 +77,11 @@ const defaultSettings: HomeSettings = {
   showHitFlash: true,
 };
 
+const registerPasswordMinLength = 10;
 const allowedRegistrationEmailDomains = ['apec.edu.kz', 'gmail.com', 'mail.ru', 'outlook.com'] as const;
 const allowedRegistrationEmailDomainMessage =
   'Use an email from apec.edu.kz, gmail.com, mail.ru, or outlook.com';
+const registrationEmailPlaceholder = 'you@gmail.com';
 
 function hasAllowedRegistrationEmailDomain(email: string) {
   const domain = email.trim().toLowerCase().split('@').pop() ?? '';
@@ -114,7 +116,7 @@ const homeRegisterSchema = z.object({
   email: homeRegistrationEmailSchema,
   password: z
     .string()
-    .min(10, 'Password must be at least 10 characters')
+    .min(registerPasswordMinLength, `Password must be at least ${registerPasswordMinLength} characters`)
     .max(128, 'Password must be 128 characters or fewer')
     .regex(/[A-Z]/, 'Password must include an uppercase letter')
     .regex(/[a-z]/, 'Password must include a lowercase letter')
@@ -123,7 +125,7 @@ const homeRegisterSchema = z.object({
 
 const homeEmailVerificationSchema = z.object({
   email: z.string().trim().max(254, 'Email must be 254 characters or fewer').email('Enter a valid email address'),
-  code: z.string().trim().regex(/^\d{6}$/, 'Enter the 6 digit code from your email'),
+  code: z.string().trim().regex(/^\d{6}$/, 'Enter the 6-digit code from your email'),
 });
 
 type HomeAuthResponse = {
@@ -943,8 +945,8 @@ export function HomePage() {
                 {isAccountHelpOpen ? (
                   <div className="game-home-account-help">
                     <p>
-                      Log in with your email and password. Register creates a new pilot profile and stores your progress
-                      in the cloud after you confirm the 6 digit email code.
+                      Log in with your email and password. Register creates a new player profile and stores your progress
+                      in the cloud after you confirm the 6-digit email code.
                     </p>
                   </div>
                 ) : null}
@@ -1002,7 +1004,7 @@ export function HomePage() {
                         autoComplete="email"
                         className="game-home-auth-input"
                         value={loginForm.email}
-                        placeholder="you@example.com"
+                        placeholder="email@domain.com"
                         onChange={(event) => setLoginForm((current) => ({ ...current, email: event.target.value }))}
                       />
                     </label>
@@ -1025,7 +1027,7 @@ export function HomePage() {
                         className="game-home-auth-utility-button"
                         onClick={() => openAuthDialog('register')}
                       >
-                        Need Account?
+                        Need An Account?
                       </button>
                     </div>
                   </>
@@ -1052,7 +1054,7 @@ export function HomePage() {
                         autoComplete="email"
                         className="game-home-auth-input"
                         value={registerForm.email}
-                        placeholder="you@example.com"
+                        placeholder={registrationEmailPlaceholder}
                         onChange={(event) => setRegisterForm((current) => ({ ...current, email: event.target.value }))}
                       />
                     </label>
@@ -1064,7 +1066,7 @@ export function HomePage() {
                         autoComplete="new-password"
                         className="game-home-auth-input"
                         value={registerForm.password}
-                        placeholder="At least 10 characters"
+                        placeholder={`At least ${registerPasswordMinLength} characters`}
                         onChange={(event) =>
                           setRegisterForm((current) => ({ ...current, password: event.target.value }))
                         }
@@ -1077,7 +1079,7 @@ export function HomePage() {
                         className="game-home-auth-utility-button"
                         onClick={() => openAuthDialog('login')}
                       >
-                        Already Have Account?
+                        Already Have An Account?
                       </button>
                     </div>
                   </>
@@ -1090,7 +1092,7 @@ export function HomePage() {
                         autoComplete="email"
                         className="game-home-auth-input"
                         value={emailVerificationForm.email}
-                        placeholder="you@example.com"
+                        placeholder={registrationEmailPlaceholder}
                         onChange={(event) =>
                           setEmailVerificationForm((current) => ({ ...current, email: event.target.value }))
                         }
