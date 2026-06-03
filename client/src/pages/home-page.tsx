@@ -321,18 +321,12 @@ export function HomePage() {
 
   async function submitRegister(values: typeof registerForm) {
     const payload = homeRegisterSchema.parse(values);
-    const response = await apiRequest<EmailVerificationRequiredResponse>('/api/auth/register', {
+    const response = await apiRequest<HomeAuthResponse>('/api/auth/register', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
 
-    setEmailVerificationForm({
-      email: response.email,
-      code: '',
-    });
-    setAuthDialog('verify-email');
-    setAuthError(null);
-    setAuthInfo(`Verification code sent to ${response.email}.`);
+    completeAuth(response);
   }
 
   async function handleLoginSubmit(event: FormEvent<HTMLFormElement>) {
@@ -381,7 +375,7 @@ export function HomePage() {
       await submitRegister(registerForm);
       setRegisterForm({
         username: '',
-        email: registerForm.email,
+        email: '',
         password: '',
       });
     } catch (error) {
@@ -946,7 +940,7 @@ export function HomePage() {
                   <div className="game-home-account-help">
                     <p>
                       Log in with your email and password. Register creates a new player profile and stores your progress
-                      in the cloud after you confirm the 6-digit email code.
+                      in the cloud right away.
                     </p>
                   </div>
                 ) : null}

@@ -92,17 +92,22 @@ export const authService = {
         username: input.username,
         email,
         passwordHash,
+        emailVerifiedAt: new Date(),
+        emailVerificationCodeHash: null,
+        emailVerificationExpiresAt: null,
+        emailVerificationSentAt: null,
       },
       select: {
         id: true,
         username: true,
         email: true,
+        role: true,
+        totalStars: true,
+        completedOfficialLevels: true,
       },
     });
 
-    const verification = await issueEmailVerificationCode(user.id, user.email);
-
-    return buildVerificationRequiredPayload(user.email, verification.expiresAt);
+    return buildAuthPayload(user);
   },
 
   async login(input: LoginInput) {
